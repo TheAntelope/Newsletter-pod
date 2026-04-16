@@ -1,0 +1,13 @@
+sources:
+  - id: stratechery
+    name: Stratechery Newsletter
+    rss_url: https://stratechery.passport.online/feed/rss/CTsTJksPfQd54smc4zBJx
+    enabled: true
+  - id: geekwire-startups
+    name: GeekWire Startups
+    rss_url: https://www.geekwire.com/startups/feed/
+    enabled: true
+  - id: wired-business
+    name: WIRED Business
+    rss_url: https://www.wired.com/feed/category/business/latest/rss
+    enabled: true

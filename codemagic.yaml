@@ -1,0 +1,57 @@
+workflows:
+  ios-testflight:
+    name: iOS TestFlight
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: codemagic
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.newsletterpod.app
+      vars:
+        XCODE_PROJECT: "ios/NewsletterPod.xcodeproj"
+        XCODE_SCHEME: "NewsletterPod"
+        # Optional. Set this in Codemagic once the App Store Connect app record exists
+        # if you want builds numbered from the latest TestFlight/App Store build.
+        APP_STORE_APPLE_ID: ""
+      xcode: latest
+    scripts:
+      - name: Generate Xcode project
+        script: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          cd "$CM_BUILD_DIR/ios"
+          xcodegen generate --spec project.yml
+      - name: Set up provisioning profiles
+        script: |
+          xcode-project use-profiles \
+            --project "$CM_BUILD_DIR/$XCODE_PROJECT"
+      - name: Increment build number
+        script: |
+          cd "$CM_BUILD_DIR/ios"
+          if [ -n "$APP_STORE_APPLE_ID" ]; then
+            LATEST_BUILD_NUMBER=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APPLE_ID")
+            if [ -z "$LATEST_BUILD_NUMBER" ]; then
+              LATEST_BUILD_NUMBER=0
+            fi
+            NEXT_BUILD_NUMBER=$(($LATEST_BUILD_NUMBER + 1))
+          else
+            NEXT_BUILD_NUMBER="${BUILD_NUMBER:-1}"
+          fi
+          agvtool new-version -all "$NEXT_BUILD_NUMBER"
+      - name: Build IPA for TestFlight
+        script: |
+          xcode-project build-ipa \
+            --project "$CM_BUILD_DIR/$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        beta_groups:
+          - Internal Testers
