@@ -1,8 +1,12 @@
 import Foundation
 import StoreKit
 
+private struct VerificationError: Error {}
+
 @MainActor
 final class PurchaseManager: ObservableObject {
+
+    nonisolated init() {}
     @Published var products: [Product] = []
     @Published var isLoading = false
     @Published var lastPurchaseMessage: String?
@@ -46,7 +50,7 @@ final class PurchaseManager: ObservableObject {
     private func checkVerified<T>(_ result: VerificationResult<T>) throws -> T {
         switch result {
         case .unverified:
-            throw StoreKitError.failedVerification
+            throw VerificationError()
         case .verified(let safe):
             return safe
         }

@@ -120,7 +120,7 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private func load(_ operation: @escaping () async throws -> Void) async {
+    private func load(_ operation: () async throws -> Void) async {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
