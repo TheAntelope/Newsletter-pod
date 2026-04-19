@@ -12,7 +12,7 @@ workflows:
       vars:
         XCODE_PROJECT: "ios/NewsletterPod.xcodeproj"
         XCODE_SCHEME: "NewsletterPod"
-        # Optional. Set APP_STORE_APPLE_ID here once the App Store Connect app record exists.
+        APP_STORE_APPLE_ID: "6762568729"
       xcode: latest
     scripts:
       - name: Generate Xcode project
