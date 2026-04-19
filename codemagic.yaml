@@ -12,9 +12,7 @@ workflows:
       vars:
         XCODE_PROJECT: "ios/NewsletterPod.xcodeproj"
         XCODE_SCHEME: "NewsletterPod"
-        # Optional. Set this in Codemagic once the App Store Connect app record exists
-        # if you want builds numbered from the latest TestFlight/App Store build.
-        APP_STORE_APPLE_ID: ""
+        # Optional. Set APP_STORE_APPLE_ID here once the App Store Connect app record exists.
       xcode: latest
     scripts:
       - name: Generate Xcode project
