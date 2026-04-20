@@ -37,6 +37,18 @@ workflows:
             NEXT_BUILD_NUMBER="${BUILD_NUMBER:-1}"
           fi
           agvtool new-version -all "$NEXT_BUILD_NUMBER"
+      - name: Patch Info.plist for App Store validation
+        script: |
+          PLIST="$CM_BUILD_DIR/ios/NewsletterPodApp/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :UILaunchScreen dict" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Delete :UISupportedInterfaceOrientations" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:1 string UIInterfaceOrientationPortraitUpsideDown" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:2 string UIInterfaceOrientationLandscapeLeft" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:3 string UIInterfaceOrientationLandscapeRight" "$PLIST"
+          echo "=== Info.plist after patching ==="
+          /usr/libexec/PlistBuddy -c "Print" "$PLIST"
       - name: Build IPA for TestFlight
         script: |
           xcode-project build-ipa \
