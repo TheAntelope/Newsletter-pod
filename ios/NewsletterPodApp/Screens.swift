@@ -53,12 +53,12 @@ struct SignInView: View {
 
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 Spacer()
-                MetaLabel(text: "Newsletter Pod")
-                Text("Your weekly\nbriefing, on tap.")
+                MetaLabel(text: "mycast")
+                Text("Your daily\nbriefing, on tap.")
                     .font(Theme.Typography.display(40))
                     .foregroundStyle(Theme.Palette.ink)
                     .lineSpacing(2)
-                Text("Pick your sources, format, and delivery days. We turn them into a private podcast you listen to in Apple Podcasts.")
+                Text("Pick your sources and format. We turn them into a private podcast you listen to in Apple Podcasts.")
                     .font(Theme.Typography.body(17))
                     .foregroundStyle(Theme.Palette.muted)
 
