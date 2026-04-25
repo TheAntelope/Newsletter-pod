@@ -50,6 +50,8 @@ def _build_app():
     settings.job_trigger_token = None
     settings.app_base_url = "http://testserver"
     settings.publish_summary_email_enabled = False
+    settings.free_max_delivery_days = 1
+    settings.paid_max_delivery_days = 3
     container = _build_container(settings)
     return container, TestClient(create_app(container=container))
 

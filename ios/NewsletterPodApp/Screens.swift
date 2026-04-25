@@ -19,14 +19,27 @@ struct RootView: View {
         }
         .tint(Theme.Palette.amberDeep)
         .overlay(alignment: .top) {
-            if let errorMessage = viewModel.errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(Theme.Palette.amberDeep.opacity(0.95), in: Capsule())
-                    .padding(.top, 12)
+            VStack(spacing: 8) {
+                if let errorMessage = viewModel.errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.white)
+                        .padding(10)
+                        .background(Theme.Palette.amberDeep.opacity(0.95), in: Capsule())
+                }
+                if let savedMessage = viewModel.savedMessage {
+                    Label(savedMessage, systemImage: "checkmark.circle.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Theme.Palette.amber, in: Capsule())
+                        .shadow(color: Theme.Palette.cardShadow, radius: 6, y: 2)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
+            .padding(.top, 12)
+            .animation(.spring(duration: 0.3), value: viewModel.savedMessage)
         }
     }
 }
@@ -174,6 +187,21 @@ private struct HeroEpisodeCard: View {
                 }
                 .buttonStyle(.amberOutlined)
                 .disabled(viewModel.feed?.feedURL == nil)
+
+                Button {
+                    Task { await viewModel.generateNow() }
+                } label: {
+                    if viewModel.isLoading {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(Theme.Palette.amberDeep)
+                            Text("Generating…")
+                        }
+                    } else {
+                        Label("Generate episode now", systemImage: "wand.and.stars")
+                    }
+                }
+                .buttonStyle(.amberOutlined)
+                .disabled(viewModel.isLoading || viewModel.selectedSources.isEmpty)
             }
         }
     }
@@ -213,7 +241,7 @@ private struct AboutPodcastCard: View {
     var body: some View {
         EditorialCard {
             MetaLabel(text: "About this podcast")
-            Text(viewModel.profile?.title ?? "Your Weekly Briefing")
+            Text(viewModel.profile?.title ?? "mycast")
                 .font(Theme.Typography.title(20))
                 .foregroundStyle(Theme.Palette.ink)
 
@@ -411,7 +439,7 @@ struct PodcastSetupView: View {
     @State private var primaryHost = "Elena"
     @State private var secondaryHost = "Marcus"
     @State private var guestNames = "Alex, Sam"
-    @State private var durationMinutes = 8.0
+    @State private var durationMinutes = 3.0
 
     var body: some View {
         NavigationStack {
@@ -435,7 +463,7 @@ struct PodcastSetupView: View {
                 Section("Duration") {
                     Slider(
                         value: $durationMinutes,
-                        in: Double(viewModel.entitlements?.minDurationMinutes ?? 5)...Double(viewModel.entitlements?.maxDurationMinutes ?? 20),
+                        in: Double(viewModel.entitlements?.minDurationMinutes ?? 3)...Double(viewModel.entitlements?.maxDurationMinutes ?? 8),
                         step: 1
                     )
                     Text("\(Int(durationMinutes)) minutes")
@@ -469,12 +497,12 @@ struct PodcastSetupView: View {
             .navigationTitle("Podcast Setup")
             .editorialBackground()
             .onAppear {
-                title = viewModel.profile?.title ?? "My Weekly Briefing"
+                title = viewModel.profile?.title ?? "mycast"
                 formatPreset = viewModel.profile?.formatPreset ?? "two_hosts"
                 primaryHost = viewModel.profile?.hostPrimaryName ?? "Elena"
                 secondaryHost = viewModel.profile?.hostSecondaryName ?? "Marcus"
                 guestNames = viewModel.profile?.guestNames.joined(separator: ", ") ?? "Alex, Sam"
-                durationMinutes = Double(viewModel.profile?.desiredDurationMinutes ?? 8)
+                durationMinutes = Double(viewModel.profile?.desiredDurationMinutes ?? 3)
             }
         }
     }

@@ -113,6 +113,26 @@ final class APIClient {
         try await request(path: "/v1/me/feed", method: "GET", body: Optional<Int>.none, token: token)
     }
 
+    func generateNow(token: String) async throws {
+        guard let url = URL(string: "/v1/me/generate", relativeTo: baseURL) else {
+            throw APIError.invalidResponse
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 180
+
+        let (data, response) = try await session.data(for: req)
+        guard let httpResponse = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            if let message = try? decoder.decode(ServerErrorEnvelope.self, from: data) {
+                throw APIError.server(message.detail)
+            }
+            throw APIError.server("Request failed with status \(httpResponse.statusCode)")
+        }
+    }
+
     private func request<T: Decodable, Body: Encodable>(
         path: String,
         method: String,

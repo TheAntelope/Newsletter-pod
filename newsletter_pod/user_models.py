@@ -20,12 +20,12 @@ class UserRecord(BaseModel):
 
 class PodcastProfileRecord(BaseModel):
     user_id: str
-    title: str = "My Weekly Briefing"
+    title: str = "mycast"
     format_preset: str = "two_hosts"
     host_primary_name: str = "Elena"
     host_secondary_name: Optional[str] = "Marcus"
     guest_names: list[str] = Field(default_factory=list)
-    desired_duration_minutes: int = 8
+    desired_duration_minutes: int = 3
     created_at: datetime
     updated_at: datetime
 
@@ -63,7 +63,12 @@ class SubscriptionRecord(BaseModel):
 class DeliveryScheduleRecord(BaseModel):
     user_id: str
     timezone: str = "UTC"
-    weekdays: list[str] = Field(default_factory=lambda: ["monday"])
+    weekdays: list[str] = Field(
+        default_factory=lambda: [
+            "monday", "tuesday", "wednesday", "thursday",
+            "friday", "saturday", "sunday",
+        ]
+    )
     local_time: str = "07:00"
     cutoff_time: str = "11:00"
     enabled: bool = True

@@ -1,8 +1,4 @@
 sources:
-  - id: stratechery
-    name: Stratechery Newsletter
-    rss_url: https://stratechery.passport.online/feed/rss/CTsTJksPfQd54smc4zBJx
-    enabled: true
   - id: geekwire-startups
     name: GeekWire Startups
     rss_url: https://www.geekwire.com/startups/feed/

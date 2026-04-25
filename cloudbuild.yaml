@@ -1,0 +1,36 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    id: build
+    args:
+      - build
+      - -t
+      - europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/newsletter-pod:$COMMIT_SHA
+      - -t
+      - europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/newsletter-pod:latest
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    id: push
+    args:
+      - push
+      - --all-tags
+      - europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/newsletter-pod
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - newsletter-pod
+      - --image=europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/newsletter-pod:$COMMIT_SHA
+      - --region=europe-west1
+      - --platform=managed
+      - --quiet
+
+images:
+  - europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/newsletter-pod:$COMMIT_SHA
+  - europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/newsletter-pod:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY

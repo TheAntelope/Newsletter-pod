@@ -573,12 +573,12 @@ class ControlPlaneService:
         self.repository.save_profile(
             PodcastProfileRecord(
                 user_id=user.id,
-                title="My Weekly Briefing",
+                title="mycast",
                 format_preset="two_hosts",
                 host_primary_name="Elena",
                 host_secondary_name="Marcus",
                 guest_names=[],
-                desired_duration_minutes=self.settings.free_max_duration_minutes,
+                desired_duration_minutes=self.settings.free_default_duration_minutes,
                 created_at=now,
                 updated_at=now,
             )
@@ -587,7 +587,10 @@ class ControlPlaneService:
             DeliveryScheduleRecord(
                 user_id=user.id,
                 timezone=user.timezone,
-                weekdays=["monday"],
+                weekdays=[
+                    "monday", "tuesday", "wednesday", "thursday",
+                    "friday", "saturday", "sunday",
+                ],
                 local_time=self.settings.weekly_target_local,
                 cutoff_time=self.settings.weekly_cutoff_local,
                 enabled=True,
@@ -661,8 +664,8 @@ class ControlPlaneService:
             now = utc_now()
             profile = PodcastProfileRecord(
                 user_id=user_id,
-                title="My Weekly Briefing",
-                desired_duration_minutes=self.settings.free_max_duration_minutes,
+                title="mycast",
+                desired_duration_minutes=self.settings.free_default_duration_minutes,
                 created_at=now,
                 updated_at=now,
             )

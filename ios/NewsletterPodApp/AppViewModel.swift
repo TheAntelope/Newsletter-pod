@@ -13,6 +13,7 @@ final class AppViewModel: ObservableObject {
     @Published var feed: FeedEnvelope?
     @Published var isLoading = false
     @Published var errorMessage: String?
+    @Published var savedMessage: String?
 
     let apiClient: APIClient
     let purchaseManager: PurchaseManager
@@ -84,6 +85,7 @@ final class AppViewModel: ObservableObject {
             selectedSources = response.sources
             entitlements = response.entitlements
             feed = try await apiClient.fetchFeed(token: sessionToken)
+            flashSaved("Sources saved")
         }
     }
 
@@ -108,6 +110,16 @@ final class AppViewModel: ObservableObject {
             )
             profile = response.profile
             entitlements = response.entitlements
+            flashSaved("Podcast settings saved")
+        }
+    }
+
+    func generateNow() async {
+        guard let sessionToken else { return }
+        await load {
+            try await apiClient.generateNow(token: sessionToken)
+            try await refresh()
+            flashSaved("Episode generated")
         }
     }
 
@@ -117,6 +129,7 @@ final class AppViewModel: ObservableObject {
             let response = try await apiClient.updateSchedule(token: sessionToken, timezone: timezone, weekdays: weekdays)
             schedule = response.schedule
             entitlements = response.entitlements
+            flashSaved("Schedule saved")
         }
     }
 
@@ -128,6 +141,14 @@ final class AppViewModel: ObservableObject {
             try await operation()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func flashSaved(_ message: String) {
+        savedMessage = message
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            if savedMessage == message { savedMessage = nil }
         }
     }
 }

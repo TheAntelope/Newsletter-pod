@@ -271,6 +271,12 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         assert container.control_plane is not None
         return container.control_plane.get_feed_details(user.id)
 
+    @app.post("/v1/me/generate")
+    def generate_episode_now(authorization: str | None = Header(default=None)) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        return container.control_plane.process_user_generation(user_id=user.id, force=True)
+
     @app.post("/v1/billing/app-store/notifications")
     def receive_billing_notification(request_payload: BillingNotificationRequest) -> dict:
         assert container.control_plane is not None
