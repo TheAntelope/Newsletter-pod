@@ -5,6 +5,13 @@ workflows:
     instance_type: mac_mini_m2
     integrations:
       app_store_connect: codemagic
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
     environment:
       ios_signing:
         distribution_type: app_store
