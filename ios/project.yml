@@ -26,8 +26,10 @@ targets:
       - path: NewsletterPodApp
         excludes:
           - Assets.xcassets/**/Contents.json
+          - Configuration.storekit
     resources:
       - path: NewsletterPodApp/Assets.xcassets
+      - path: NewsletterPodApp/Configuration.storekit
     settings:
       base:
         PRODUCT_MODULE_NAME: NewsletterPod
@@ -45,5 +47,6 @@ schemes:
         NewsletterPod: all
     run:
       config: Debug
+      storeKitConfiguration: NewsletterPodApp/Configuration.storekit
     archive:
       config: Release

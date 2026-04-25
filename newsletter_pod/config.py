@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     )
     podcast_author: str = Field(default="Newsletter Pod", alias="PODCAST_AUTHOR")
     podcast_language: str = Field(default="en-us", alias="PODCAST_LANGUAGE")
+    podcast_owner_email: str = Field(default="vincemartin1991@gmail.com", alias="PODCAST_OWNER_EMAIL")
+    podcast_image_url: Optional[str] = Field(
+        default="https://newsletter-pod-497154432194.europe-west1.run.app/static/cover.png",
+        alias="PODCAST_IMAGE_URL",
+    )
+    podcast_category: str = Field(default="News", alias="PODCAST_CATEGORY")
 
     podcast_provider: str = Field(default="openai", alias="PODCAST_PROVIDER")
     podcast_api_enabled: bool = Field(default=False, alias="PODCAST_API_ENABLED")

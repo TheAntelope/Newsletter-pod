@@ -17,13 +17,14 @@ struct RootView: View {
                 SignInView()
             }
         }
+        .tint(Theme.Palette.amberDeep)
         .overlay(alignment: .top) {
             if let errorMessage = viewModel.errorMessage {
                 Text(errorMessage)
                     .font(.caption)
                     .foregroundStyle(.white)
                     .padding(10)
-                    .background(Color.red.opacity(0.85), in: Capsule())
+                    .background(Theme.Palette.amberDeep.opacity(0.95), in: Capsule())
                     .padding(.top, 12)
             }
         }
@@ -34,24 +35,33 @@ struct SignInView: View {
     @EnvironmentObject private var viewModel: AppViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Spacer()
-            Text("Build your weekly podcast feed")
-                .font(.largeTitle.bold())
-            Text("Choose your sources, format, duration, and delivery days. Playback happens in Apple Podcasts through your private feed.")
-                .foregroundStyle(.secondary)
+        ZStack {
+            Theme.Palette.cream.ignoresSafeArea()
 
-            SignInWithAppleButton(.signIn) { request in
-                request.requestedScopes = [.email]
-            } onCompletion: { result in
-                Task { await handleAppleSignIn(result: result) }
+            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                Spacer()
+                MetaLabel(text: "Newsletter Pod")
+                Text("Your weekly\nbriefing, on tap.")
+                    .font(Theme.Typography.display(40))
+                    .foregroundStyle(Theme.Palette.ink)
+                    .lineSpacing(2)
+                Text("Pick your sources, format, and delivery days. We turn them into a private podcast you listen to in Apple Podcasts.")
+                    .font(Theme.Typography.body(17))
+                    .foregroundStyle(Theme.Palette.muted)
+
+                SignInWithAppleButton(.signIn) { request in
+                    request.requestedScopes = [.email]
+                } onCompletion: { result in
+                    Task { await handleAppleSignIn(result: result) }
+                }
+                .signInWithAppleButtonStyle(.black)
+                .frame(height: 52)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                Spacer()
             }
-            .signInWithAppleButtonStyle(.black)
-            .frame(height: 52)
-
-            Spacer()
+            .padding(28)
         }
-        .padding(24)
     }
 
     private func handleAppleSignIn(result: Result<ASAuthorization, Error>) async {
@@ -67,70 +77,263 @@ struct SignInView: View {
 }
 
 struct DashboardTabView: View {
+    init() {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = UIColor(Theme.Palette.cream)
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
+
     var body: some View {
         TabView {
-            DashboardView()
-                .tabItem { Label("Home", systemImage: "house") }
+            HomeView()
+                .tabItem { Label("Home", systemImage: "house.fill") }
             SourcesView()
-                .tabItem { Label("Sources", systemImage: "dot.radiowaves.left.and.right") }
+                .tabItem { Label("Sources", systemImage: "tray.full") }
             PodcastSetupView()
-                .tabItem { Label("Podcast", systemImage: "mic") }
+                .tabItem { Label("Podcast", systemImage: "mic.fill") }
             FeedAccessView()
-                .tabItem { Label("Feed", systemImage: "dot.radiowaves.forward") }
+                .tabItem { Label("Feed", systemImage: "antenna.radiowaves.left.and.right") }
             PaywallView()
-                .tabItem { Label("Upgrade", systemImage: "star") }
+                .tabItem { Label("Upgrade", systemImage: "sparkles") }
         }
     }
 }
 
-struct DashboardView: View {
+// MARK: - Home
+
+struct HomeView: View {
     @EnvironmentObject private var viewModel: AppViewModel
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("Profile") {
-                    LabeledContent("Name", value: viewModel.user?.displayName ?? "Not set")
-                    LabeledContent("Timezone", value: viewModel.user?.timezone ?? "UTC")
-                    LabeledContent("Tier", value: viewModel.subscription?.tier.capitalized ?? "Free")
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                    HeroEpisodeCard()
+                    AboutPodcastCard()
+                    SourcesSummaryCard()
+                    SetupChecklistCard()
                 }
-
-                Section("Delivery") {
-                    LabeledContent(
-                        "Days",
-                        value: viewModel.schedule?.weekdays.map(\.capitalized).joined(separator: ", ") ?? "Monday"
-                    )
-                    LabeledContent("Window", value: "\(viewModel.schedule?.localTime ?? "07:00") to \(viewModel.schedule?.cutoffTime ?? "11:00")")
-                }
-
-                Section("Latest Episode") {
-                    if let latestEpisode = viewModel.feed?.latestEpisode {
-                        Text(latestEpisode.title).font(.headline)
-                        Text(latestEpisode.description).lineLimit(6)
-                        if latestEpisode.capHit {
-                            Text("This episode hit the per-episode source cap.")
-                                .foregroundStyle(.orange)
-                                .font(.caption)
-                        }
-                    } else {
-                        Text("No published episode yet.")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Limits") {
-                    LabeledContent("Sources", value: "\(viewModel.selectedSources.count) / \(viewModel.entitlements?.maxSources ?? 0)")
-                    LabeledContent("Weekly delivery days", value: "\(viewModel.entitlements?.maxDeliveryDays ?? 1)")
-                    LabeledContent(
-                        "Duration",
-                        value: "\(viewModel.entitlements?.minDurationMinutes ?? 5)-\(viewModel.entitlements?.maxDurationMinutes ?? 8) min"
-                    )
-                }
+                .padding(.horizontal, Theme.Spacing.l)
+                .padding(.top, Theme.Spacing.s)
+                .padding(.bottom, Theme.Spacing.xl)
             }
-            .navigationTitle("Weekly Briefing")
+            .navigationTitle("Your Briefing")
+            .editorialBackground()
         }
     }
 }
+
+private struct HeroEpisodeCard: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        EditorialCard {
+            MetaLabel(text: episodeBadge)
+            Text(episodeTitle)
+                .font(Theme.Typography.title(26))
+                .foregroundStyle(Theme.Palette.ink)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let latest = viewModel.feed?.latestEpisode {
+                Text(latest.description)
+                    .font(Theme.Typography.body(15))
+                    .foregroundStyle(Theme.Palette.inkSoft)
+                    .lineLimit(4)
+
+                HStack(spacing: Theme.Spacing.m) {
+                    if let duration = latest.durationSeconds {
+                        Label(formatDuration(duration), systemImage: "clock")
+                    }
+                    Label("\(latest.processedItemCount) items", systemImage: "doc.text")
+                }
+                .font(Theme.Typography.body(13))
+                .foregroundStyle(Theme.Palette.muted)
+            } else {
+                Text("Once your first episode is ready, it will appear here. Configure your sources and delivery schedule to get started.")
+                    .font(Theme.Typography.body(15))
+                    .foregroundStyle(Theme.Palette.inkSoft)
+            }
+
+            EditorialDivider()
+
+            VStack(spacing: Theme.Spacing.s) {
+                Button {
+                    openInApplePodcasts()
+                } label: {
+                    Label("Open in Apple Podcasts", systemImage: "play.fill")
+                }
+                .buttonStyle(.amberFilled)
+                .disabled(viewModel.feed?.feedURL == nil)
+
+                Button {
+                    UIPasteboard.general.string = viewModel.feed?.feedURL
+                } label: {
+                    Label("Copy feed link", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.amberOutlined)
+                .disabled(viewModel.feed?.feedURL == nil)
+            }
+        }
+    }
+
+    private var episodeBadge: String {
+        viewModel.feed?.latestEpisode == nil ? "Coming Soon" : "Latest Episode"
+    }
+
+    private var episodeTitle: String {
+        viewModel.feed?.latestEpisode?.title ?? "No episode yet"
+    }
+
+    private func formatDuration(_ seconds: Int) -> String {
+        let minutes = max(1, Int((Double(seconds) / 60.0).rounded()))
+        return "\(minutes) min"
+    }
+
+    private func openInApplePodcasts() {
+        guard let urlString = viewModel.feed?.feedURL,
+              let url = URL(string: urlString),
+              let host = url.host else { return }
+        var components = URLComponents()
+        components.scheme = "podcast"
+        components.host = host
+        components.path = url.path
+        if let podcastURL = components.url {
+            UIApplication.shared.open(podcastURL) { ok in
+                if !ok { UIApplication.shared.open(url) }
+            }
+        }
+    }
+}
+
+private struct AboutPodcastCard: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        EditorialCard {
+            MetaLabel(text: "About this podcast")
+            Text(viewModel.profile?.title ?? "Your Weekly Briefing")
+                .font(Theme.Typography.title(20))
+                .foregroundStyle(Theme.Palette.ink)
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                infoRow(label: "Format", value: formatLabel)
+                infoRow(label: "Hosts", value: hostsLabel)
+                infoRow(label: "Length", value: "\(viewModel.profile?.desiredDurationMinutes ?? 8) min")
+                infoRow(label: "Delivery", value: deliveryLabel)
+            }
+        }
+    }
+
+    private var formatLabel: String {
+        switch viewModel.profile?.formatPreset {
+        case "solo_host": return "Solo host"
+        case "two_hosts": return "Two hosts"
+        case "rotating_guest": return "Rotating guest"
+        default: return "Two hosts"
+        }
+    }
+
+    private var hostsLabel: String {
+        let primary = viewModel.profile?.hostPrimaryName ?? "—"
+        if let secondary = viewModel.profile?.hostSecondaryName, !secondary.isEmpty,
+           viewModel.profile?.formatPreset == "two_hosts" {
+            return "\(primary) & \(secondary)"
+        }
+        return primary
+    }
+
+    private var deliveryLabel: String {
+        let days = viewModel.schedule?.weekdays.map { $0.prefix(3).capitalized }.joined(separator: ", ")
+        return days?.isEmpty == false ? days! : "Not set"
+    }
+
+    private func infoRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(Theme.Typography.body(14))
+                .foregroundStyle(Theme.Palette.muted)
+            Spacer()
+            Text(value)
+                .font(Theme.Typography.body(14).weight(.medium))
+                .foregroundStyle(Theme.Palette.ink)
+        }
+    }
+}
+
+private struct SourcesSummaryCard: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        EditorialCard {
+            HStack {
+                MetaLabel(text: "Your sources")
+                Spacer()
+                Text("\(viewModel.selectedSources.count) / \(viewModel.entitlements?.maxSources ?? 0)")
+                    .font(Theme.Typography.meta())
+                    .foregroundStyle(Theme.Palette.muted)
+            }
+
+            if viewModel.selectedSources.isEmpty {
+                Text("Pick at least one source on the Sources tab to start receiving episodes.")
+                    .font(Theme.Typography.body(15))
+                    .foregroundStyle(Theme.Palette.inkSoft)
+            } else {
+                VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                    ForEach(viewModel.selectedSources.prefix(4)) { source in
+                        HStack(spacing: Theme.Spacing.s) {
+                            Circle()
+                                .fill(Theme.Palette.amber)
+                                .frame(width: 6, height: 6)
+                            Text(source.name)
+                                .font(Theme.Typography.body(15))
+                                .foregroundStyle(Theme.Palette.ink)
+                                .lineLimit(1)
+                            Spacer()
+                            if source.isCustom {
+                                Text("Custom")
+                                    .font(Theme.Typography.meta(10))
+                                    .foregroundStyle(Theme.Palette.muted)
+                            }
+                        }
+                    }
+                    if viewModel.selectedSources.count > 4 {
+                        Text("+\(viewModel.selectedSources.count - 4) more")
+                            .font(Theme.Typography.body(13))
+                            .foregroundStyle(Theme.Palette.muted)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct SetupChecklistCard: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        if allComplete { EmptyView() } else {
+            EditorialCard {
+                MetaLabel(text: "Setup checklist")
+                VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                    ChecklistRow(label: "Pick at least one source", isComplete: hasSources)
+                    ChecklistRow(label: "Configure your show", isComplete: hasShowConfigured)
+                    ChecklistRow(label: "Set a delivery schedule", isComplete: hasSchedule)
+                    ChecklistRow(label: "First episode ready", isComplete: hasEpisode)
+                }
+            }
+        }
+    }
+
+    private var hasSources: Bool { !viewModel.selectedSources.isEmpty }
+    private var hasShowConfigured: Bool { (viewModel.profile?.title.isEmpty == false) }
+    private var hasSchedule: Bool { (viewModel.schedule?.weekdays.isEmpty == false) }
+    private var hasEpisode: Bool { viewModel.feed?.latestEpisode != nil }
+    private var allComplete: Bool { hasSources && hasShowConfigured && hasSchedule && hasEpisode }
+}
+
+// MARK: - Sources
 
 struct SourcesView: View {
     @EnvironmentObject private var viewModel: AppViewModel
@@ -177,9 +380,13 @@ struct SourcesView: View {
                             )
                         }
                     }
+                    .buttonStyle(.amberFilled)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
                 }
             }
             .navigationTitle("Sources")
+            .editorialBackground()
             .onAppear {
                 selectedCatalogIDs = Set(
                     viewModel.selectedSources
@@ -194,6 +401,8 @@ struct SourcesView: View {
         }
     }
 }
+
+// MARK: - Podcast setup
 
 struct PodcastSetupView: View {
     @EnvironmentObject private var viewModel: AppViewModel
@@ -230,6 +439,7 @@ struct PodcastSetupView: View {
                         step: 1
                     )
                     Text("\(Int(durationMinutes)) minutes")
+                        .foregroundStyle(Theme.Palette.muted)
                 }
 
                 Section {
@@ -249,11 +459,15 @@ struct PodcastSetupView: View {
                             )
                         }
                     }
+                    .buttonStyle(.amberFilled)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
                 }
 
                 ScheduleSection()
             }
             .navigationTitle("Podcast Setup")
+            .editorialBackground()
             .onAppear {
                 title = viewModel.profile?.title ?? "My Weekly Briefing"
                 formatPreset = viewModel.profile?.formatPreset ?? "two_hosts"
@@ -298,10 +512,13 @@ struct ScheduleSection: View {
                     )
                 }
             }
+            .buttonStyle(.amberOutlined)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
 
-            Text("Episodes are targeted for 7:00 AM local time with retries through 11:00 AM.")
+            Text("Episodes target 7:00 AM local time with retries through 11:00 AM.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Palette.muted)
         }
         .onAppear {
             timezone = viewModel.schedule?.timezone ?? TimeZone.current.identifier
@@ -310,77 +527,286 @@ struct ScheduleSection: View {
     }
 }
 
+// MARK: - Feed access
+
 struct FeedAccessView: View {
     @EnvironmentObject private var viewModel: AppViewModel
+    @State private var copied = false
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("Private Feed") {
-                    Text(viewModel.feed?.feedURL ?? "No feed URL yet")
-                        .textSelection(.enabled)
-                    Button("Copy feed URL") {
-                        UIPasteboard.general.string = viewModel.feed?.feedURL
-                    }
-                }
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                    EditorialCard {
+                        MetaLabel(text: "Step 1")
+                        Text("Add to Apple Podcasts")
+                            .font(Theme.Typography.title(22))
+                            .foregroundStyle(Theme.Palette.ink)
+                        Text("Tap below to open Apple Podcasts with your private feed pre-loaded.")
+                            .font(Theme.Typography.body(15))
+                            .foregroundStyle(Theme.Palette.inkSoft)
 
-                Section("Apple Podcasts") {
-                    Text("In Apple Podcasts, go to Library, tap the menu, and choose Follow a Show by URL.")
-                    if let latestEpisode = viewModel.feed?.latestEpisode {
-                        Text("Latest episode: \(latestEpisode.title)")
+                        Button {
+                            openInApplePodcasts()
+                        } label: {
+                            Label("Open in Apple Podcasts", systemImage: "play.fill")
+                        }
+                        .buttonStyle(.amberFilled)
+                        .disabled(viewModel.feed?.feedURL == nil)
                     }
-                }
 
-                if let latestRun = viewModel.feed?.latestRun {
-                    Section("Latest Run") {
-                        LabeledContent("Status", value: latestRun.status)
-                        Text(latestRun.message)
-                        if latestRun.capHit {
-                            Text("This run hit the visible item cap.")
-                                .foregroundStyle(.orange)
+                    EditorialCard {
+                        MetaLabel(text: "Step 2 · Manual")
+                        Text("Or add by URL")
+                            .font(Theme.Typography.title(20))
+                            .foregroundStyle(Theme.Palette.ink)
+
+                        Text(viewModel.feed?.feedURL ?? "Sign in to generate your private feed.")
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                            .padding(Theme.Spacing.s)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Theme.Palette.creamDeep, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .textSelection(.enabled)
+
+                        Button {
+                            UIPasteboard.general.string = viewModel.feed?.feedURL
+                            copied = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                        } label: {
+                            Label(copied ? "Copied" : "Copy feed link", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        }
+                        .buttonStyle(.amberOutlined)
+                        .disabled(viewModel.feed?.feedURL == nil)
+
+                        Text("In Apple Podcasts: Library → … menu → Follow a Show by URL → paste.")
+                            .font(.caption)
+                            .foregroundStyle(Theme.Palette.muted)
+                    }
+
+                    if let latestRun = viewModel.feed?.latestRun {
+                        EditorialCard {
+                            MetaLabel(text: "Latest run")
+                            HStack {
+                                Text(latestRun.status.capitalized)
+                                    .font(Theme.Typography.title(18))
+                                    .foregroundStyle(Theme.Palette.ink)
+                                Spacer()
+                                if latestRun.capHit {
+                                    Text("Cap hit")
+                                        .font(Theme.Typography.meta(10))
+                                        .foregroundStyle(Theme.Palette.amberDeep)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Theme.Palette.amber.opacity(0.15), in: Capsule())
+                                }
+                            }
+                            Text(latestRun.message)
+                                .font(Theme.Typography.body(14))
+                                .foregroundStyle(Theme.Palette.inkSoft)
                         }
                     }
                 }
+                .padding(.horizontal, Theme.Spacing.l)
+                .padding(.top, Theme.Spacing.s)
+                .padding(.bottom, Theme.Spacing.xl)
             }
             .navigationTitle("Feed Access")
+            .editorialBackground()
+        }
+    }
+
+    private func openInApplePodcasts() {
+        guard let urlString = viewModel.feed?.feedURL,
+              let url = URL(string: urlString),
+              let host = url.host else { return }
+        var components = URLComponents()
+        components.scheme = "podcast"
+        components.host = host
+        components.path = url.path
+        if let podcastURL = components.url {
+            UIApplication.shared.open(podcastURL) { ok in
+                if !ok { UIApplication.shared.open(url) }
+            }
         }
     }
 }
+
+// MARK: - Paywall
 
 struct PaywallView: View {
     @EnvironmentObject private var viewModel: AppViewModel
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("Why upgrade") {
-                    Text("Free: up to 5 sources, 1 delivery day, 5-8 minute episodes.")
-                    Text("Paid: up to 15 sources, up to 3 delivery days, and up to 20 minute episodes.")
-                }
-
-                Section("Plans") {
-                    ForEach(viewModel.purchaseManager.products, id: \.id) { product in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(product.displayName).font(.headline)
-                            Text(product.displayPrice).foregroundStyle(.secondary)
-                            Button("Purchase \(product.displayName)") {
-                                guard let userID = viewModel.user?.id else { return }
-                                Task {
-                                    await viewModel.purchaseManager.purchase(product: product, userID: userID)
-                                    try? await viewModel.refresh()
-                                }
-                            }
-                        }
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                    headerCard
+                    comparisonCard
+                    plansSection
+                    if let message = viewModel.purchaseManager.lastPurchaseMessage {
+                        statusCard(message: message)
                     }
+                    legalFooter
                 }
+                .padding(.horizontal, Theme.Spacing.l)
+                .padding(.top, Theme.Spacing.s)
+                .padding(.bottom, Theme.Spacing.xl)
+            }
+            .navigationTitle("Upgrade")
+            .editorialBackground()
+        }
+    }
 
-                if let message = viewModel.purchaseManager.lastPurchaseMessage {
-                    Section("Purchase Status") {
-                        Text(message)
+    private var headerCard: some View {
+        EditorialCard {
+            MetaLabel(text: viewModel.isPaid ? "You're on Paid" : "Go further")
+            Text(viewModel.isPaid ? "You're all set" : "Unlock the full briefing")
+                .font(Theme.Typography.title(26))
+                .foregroundStyle(Theme.Palette.ink)
+            Text(viewModel.isPaid
+                 ? "Your subscription is active. Manage it in Settings → Apple ID → Subscriptions."
+                 : "More sources, more delivery days, longer episodes. Cancel anytime.")
+                .font(Theme.Typography.body(15))
+                .foregroundStyle(Theme.Palette.inkSoft)
+        }
+    }
+
+    private var comparisonCard: some View {
+        EditorialCard {
+            MetaLabel(text: "What you get")
+            VStack(spacing: Theme.Spacing.s) {
+                comparisonRow(label: "Sources", free: "5", paid: "15")
+                EditorialDivider()
+                comparisonRow(label: "Delivery days / week", free: "1", paid: "3")
+                EditorialDivider()
+                comparisonRow(label: "Episode length", free: "5–8 min", paid: "up to 20 min")
+            }
+        }
+    }
+
+    private func comparisonRow(label: String, free: String, paid: String) -> some View {
+        HStack {
+            Text(label)
+                .font(Theme.Typography.body(15))
+                .foregroundStyle(Theme.Palette.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(spacing: 2) {
+                Text("Free").font(Theme.Typography.meta(10)).foregroundStyle(Theme.Palette.muted)
+                Text(free).font(Theme.Typography.body(14)).foregroundStyle(Theme.Palette.inkSoft)
+            }
+            .frame(width: 80)
+            VStack(spacing: 2) {
+                Text("Paid").font(Theme.Typography.meta(10)).foregroundStyle(Theme.Palette.amberDeep)
+                Text(paid).font(Theme.Typography.body(14).weight(.semibold)).foregroundStyle(Theme.Palette.ink)
+            }
+            .frame(width: 100)
+        }
+    }
+
+    @ViewBuilder
+    private var plansSection: some View {
+        if viewModel.purchaseManager.isLoading {
+            EditorialCard {
+                ProgressView("Loading plans…")
+                    .frame(maxWidth: .infinity)
+            }
+        } else if viewModel.purchaseManager.products.isEmpty {
+            EditorialCard {
+                MetaLabel(text: "Plans unavailable")
+                Text("We couldn't load subscription plans from the App Store.")
+                    .font(Theme.Typography.body(15))
+                    .foregroundStyle(Theme.Palette.ink)
+                Text("Make sure these product IDs are configured in App Store Connect:")
+                    .font(Theme.Typography.body(13))
+                    .foregroundStyle(Theme.Palette.muted)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("• \(AppConfiguration.monthlyProductID)")
+                    Text("• \(AppConfiguration.annualProductID)")
+                }
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(Theme.Palette.inkSoft)
+
+                Button("Retry") {
+                    Task { await viewModel.purchaseManager.loadProducts() }
+                }
+                .buttonStyle(.amberOutlined)
+            }
+        } else {
+            ForEach(viewModel.purchaseManager.products, id: \.id) { product in
+                PlanCard(product: product)
+            }
+        }
+    }
+
+    private func statusCard(message: String) -> some View {
+        EditorialCard {
+            MetaLabel(text: "Purchase status")
+            Text(message)
+                .font(Theme.Typography.body(14))
+                .foregroundStyle(Theme.Palette.inkSoft)
+        }
+    }
+
+    private var legalFooter: some View {
+        VStack(spacing: 6) {
+            Text("Subscriptions auto-renew until cancelled. Manage or cancel in Settings → Apple ID → Subscriptions.")
+                .font(.caption)
+                .foregroundStyle(Theme.Palette.muted)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 16) {
+                Link("Terms of Use", destination: AppConfiguration.termsURL)
+                Text("·").foregroundStyle(Theme.Palette.muted)
+                Link("Privacy Policy", destination: AppConfiguration.privacyURL)
+                Text("·").foregroundStyle(Theme.Palette.muted)
+                Button("Restore") {
+                    Task {
+                        try? await AppStore.sync()
+                        try? await viewModel.refresh()
                     }
                 }
             }
-            .navigationTitle("Upgrade")
+            .font(.caption)
+            .tint(Theme.Palette.amberDeep)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, Theme.Spacing.s)
+    }
+}
+
+private struct PlanCard: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    let product: Product
+
+    var body: some View {
+        EditorialCard {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(product.displayName)
+                        .font(Theme.Typography.title(20))
+                        .foregroundStyle(Theme.Palette.ink)
+                    if !product.description.isEmpty {
+                        Text(product.description)
+                            .font(Theme.Typography.body(13))
+                            .foregroundStyle(Theme.Palette.muted)
+                    }
+                }
+                Spacer()
+                Text(product.displayPrice)
+                    .font(Theme.Typography.title(18))
+                    .foregroundStyle(Theme.Palette.amberDeep)
+            }
+
+            Button {
+                guard let userID = viewModel.user?.id else { return }
+                Task {
+                    await viewModel.purchaseManager.purchase(product: product, userID: userID)
+                    try? await viewModel.refresh()
+                }
+            } label: {
+                Text("Subscribe")
+            }
+            .buttonStyle(.amberFilled)
         }
     }
 }

@@ -1,0 +1,123 @@
+{
+  "identifier" : "B5A8D3E1-4F2C-4A1D-9E6B-NEWSLETTERPOD",
+  "nonRenewingSubscriptions" : [],
+  "products" : [],
+  "settings" : {
+    "_applicationInternalID" : "0000000000",
+    "_developerTeamID" : "R7HS2T53Z8",
+    "_failTransactionsEnabled" : false,
+    "_lastSynchronizedDate" : 766857600,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Load Products"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Purchase"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Verification"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Store Sync"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Subscription Status"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Transaction"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Manage Subscriptions Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Refund Request Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Offer Code Redeem Sheet"
+      }
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21525461",
+      "localizations" : [
+        {
+          "description" : "Newsletter Pod paid plans",
+          "displayName" : "Paid",
+          "locale" : "en_US"
+        }
+      ],
+      "name" : "Paid",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "4.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "60000000",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Up to 15 sources, 3 delivery days, 20-min episodes",
+              "displayName" : "Newsletter Pod Paid · Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.newsletterpod.paid.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Paid Monthly",
+          "subscriptionGroupID" : "21525461",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : []
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "39.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "60000001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Up to 15 sources, 3 delivery days, 20-min episodes. Save 33%.",
+              "displayName" : "Newsletter Pod Paid · Annual",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.newsletterpod.paid.annual",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Paid Annual",
+          "subscriptionGroupID" : "21525461",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : []
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

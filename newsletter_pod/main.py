@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 import secrets
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .auth import AppleIdentityVerifier, AuthError, SessionManager
@@ -13,6 +15,7 @@ from .config import Settings, load_sources
 from .control_plane import ControlPlaneError, ControlPlaneService, build_task_enqueuer
 from .feed import build_feed_xml
 from .ingestion import RSSIngestionService
+from .legal import PRIVACY_HTML, TERMS_HTML
 from .mailer import NoopMailer, SMTPMailer
 from .pipeline import DigestPipeline
 from .podcast_api import PodcastApiClient
@@ -100,6 +103,10 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
     app = FastAPI(title="Newsletter Pod", version="0.1.0")
     app.state.container = container
 
+    static_dir = Path(__file__).resolve().parent / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
@@ -107,6 +114,14 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/legal/terms", response_class=Response)
+    def legal_terms() -> Response:
+        return Response(content=TERMS_HTML, media_type="text/html; charset=utf-8")
+
+    @app.get("/legal/privacy", response_class=Response)
+    def legal_privacy() -> Response:
+        return Response(content=PRIVACY_HTML, media_type="text/html; charset=utf-8")
 
     @app.post("/jobs/run-digest")
     def run_digest(
@@ -275,11 +290,13 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             author=container.settings.podcast_author,
             language=container.settings.podcast_language,
             feed_url=feed_url,
-            image_url=None,
+            image_url=container.settings.podcast_image_url,
             episodes=episodes,
             media_url_builder=lambda episode: (
                 f"{base_url}/media/{secret_token}/{episode.id}.mp3"
             ),
+            owner_email=container.settings.podcast_owner_email,
+            category=container.settings.podcast_category,
         )
         return _build_xml_response(xml_content, request)
 
@@ -334,11 +351,13 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             author=container.settings.podcast_author,
             language=container.settings.podcast_language,
             feed_url=f"{container.settings.app_base_url.rstrip('/')}/feeds/{feed_token}.xml",
-            image_url=None,
+            image_url=container.settings.podcast_image_url,
             episodes=episodes,
             media_url_builder=lambda episode: (
                 f"{container.settings.app_base_url.rstrip('/')}/media/{feed_token}/{episode.id}.mp3"
             ),
+            owner_email=container.settings.podcast_owner_email,
+            category=container.settings.podcast_category,
         )
         return _build_xml_response(xml_content, request)
 
