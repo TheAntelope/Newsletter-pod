@@ -123,6 +123,7 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                    GreetingHeader()
                     HeroEpisodeCard()
                     AboutPodcastCard()
                     SourcesSummaryCard()
@@ -134,6 +135,46 @@ struct HomeView: View {
             }
             .navigationTitle("Your Briefing")
             .editorialBackground()
+        }
+    }
+}
+
+private struct GreetingHeader: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        Text(greeting)
+            .font(Theme.Typography.display(28))
+            .foregroundStyle(Theme.Palette.ink)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private var greeting: String {
+        let trimmedName = (viewModel.user?.displayName ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstName = trimmedName
+            .split(separator: " ")
+            .first
+            .map(String.init) ?? trimmedName
+        if firstName.isEmpty {
+            return "good \(timeOfDay)."
+        }
+        return "good \(timeOfDay), \(firstName)."
+    }
+
+    private var timeOfDay: String {
+        var calendar = Calendar.current
+        if let identifier = viewModel.user?.timezone,
+           let timeZone = TimeZone(identifier: identifier) {
+            calendar.timeZone = timeZone
+        }
+        let hour = calendar.component(.hour, from: Date())
+        switch hour {
+        case 5..<12: return "morning"
+        case 12..<17: return "afternoon"
+        case 17..<22: return "evening"
+        default: return "night"
         }
     }
 }
