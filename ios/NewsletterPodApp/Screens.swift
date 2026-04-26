@@ -63,7 +63,7 @@ struct SignInView: View {
                     .foregroundStyle(Theme.Palette.muted)
 
                 SignInWithAppleButton(.signIn) { request in
-                    request.requestedScopes = [.email]
+                    request.requestedScopes = [.email, .fullName]
                 } onCompletion: { result in
                     Task { await handleAppleSignIn(result: result) }
                 }
@@ -85,7 +85,12 @@ struct SignInView: View {
             viewModel.errorMessage = "Unable to read Apple identity token."
             return
         }
-        await viewModel.signIn(identityToken: token)
+        let givenName = credential.fullName?.givenName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        await viewModel.signIn(
+            identityToken: token,
+            givenName: (givenName?.isEmpty == false) ? givenName : nil
+        )
     }
 }
 
@@ -475,6 +480,7 @@ struct SourcesView: View {
 
 struct PodcastSetupView: View {
     @EnvironmentObject private var viewModel: AppViewModel
+    @State private var displayName = ""
     @State private var title = ""
     @State private var formatPreset = "two_hosts"
     @State private var primaryHost = "Elena"
@@ -485,6 +491,26 @@ struct PodcastSetupView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("You") {
+                    TextField("First name", text: $displayName)
+                        .textContentType(.givenName)
+                        .autocorrectionDisabled()
+                    Button("Save name") {
+                        Task {
+                            let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty else { return }
+                            await viewModel.updateProfile(
+                                displayName: trimmed,
+                                timezone: viewModel.user?.timezone ?? TimeZone.current.identifier
+                            )
+                        }
+                    }
+                    .buttonStyle(.amberOutlined)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .disabled(displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
                 Section("Show") {
                     TextField("Podcast title", text: $title)
                     Picker("Format", selection: $formatPreset) {
@@ -538,6 +564,7 @@ struct PodcastSetupView: View {
             .navigationTitle("Podcast Setup")
             .editorialBackground()
             .onAppear {
+                displayName = viewModel.user?.displayName ?? ""
                 title = viewModel.profile?.title ?? "mycast"
                 formatPreset = viewModel.profile?.formatPreset ?? "two_hosts"
                 primaryHost = viewModel.profile?.hostPrimaryName ?? "Elena"

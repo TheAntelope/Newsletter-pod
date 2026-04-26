@@ -29,11 +29,11 @@ final class APIClient {
         self.encoder.dateEncodingStrategy = .iso8601
     }
 
-    func signInWithApple(identityToken: String) async throws -> SessionEnvelope {
+    func signInWithApple(identityToken: String, givenName: String? = nil) async throws -> SessionEnvelope {
         try await request(
             path: "/v1/auth/apple",
             method: "POST",
-            body: AppleAuthBody(identityToken: identityToken),
+            body: AppleAuthBody(identityToken: identityToken, givenName: givenName),
             token: nil
         )
     }
@@ -174,9 +174,11 @@ private struct ServerErrorEnvelope: Decodable {
 
 private struct AppleAuthBody: Encodable {
     let identityToken: String
+    let givenName: String?
 
     private enum CodingKeys: String, CodingKey {
         case identityToken = "identity_token"
+        case givenName = "given_name"
     }
 }
 

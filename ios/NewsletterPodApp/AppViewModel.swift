@@ -26,9 +26,12 @@ final class AppViewModel: ObservableObject {
     var isAuthenticated: Bool { sessionToken != nil }
     var isPaid: Bool { subscription?.tier == "paid" }
 
-    func signIn(identityToken: String) async {
+    func signIn(identityToken: String, givenName: String? = nil) async {
         await load {
-            let session = try await apiClient.signInWithApple(identityToken: identityToken)
+            let session = try await apiClient.signInWithApple(
+                identityToken: identityToken,
+                givenName: givenName
+            )
             sessionToken = session.sessionToken
             user = session.user
             subscription = session.subscription
@@ -66,6 +69,7 @@ final class AppViewModel: ObservableObject {
             schedule = me.schedule
             subscription = me.subscription
             entitlements = me.entitlements
+            flashSaved("Name saved")
         }
     }
 

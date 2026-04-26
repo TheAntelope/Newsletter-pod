@@ -127,11 +127,17 @@ class ControlPlaneService:
     def __post_init__(self) -> None:
         self._catalog = {source.id: source for source in load_sources(self.settings.sources_file)}
 
-    def authenticate_with_apple(self, identity_token: str) -> dict[str, Any]:
+    def authenticate_with_apple(
+        self,
+        identity_token: str,
+        given_name: Optional[str] = None,
+    ) -> dict[str, Any]:
         identity = self.apple_identity_verifier.verify(identity_token)
         existing_user = self.repository.get_user_by_apple_subject(identity.subject)
         is_new = existing_user is None
-        user = existing_user or self._create_default_user(identity.subject, identity.email)
+        user = existing_user or self._create_default_user(
+            identity.subject, identity.email, given_name=given_name
+        )
         if existing_user is None:
             self._persist_default_records(user)
 
@@ -554,9 +560,20 @@ class ControlPlaneService:
             "user": user.model_dump(mode="json"),
         }
 
-    def _create_default_user(self, subject: str, email: Optional[str]) -> UserRecord:
+    def _create_default_user(
+        self,
+        subject: str,
+        email: Optional[str],
+        given_name: Optional[str] = None,
+    ) -> UserRecord:
         now = utc_now()
-        display_name = email.split("@", maxsplit=1)[0] if email else "Listener"
+        cleaned_given = (given_name or "").strip()
+        if cleaned_given:
+            display_name = cleaned_given
+        elif email:
+            display_name = email.split("@", maxsplit=1)[0]
+        else:
+            display_name = "Listener"
         return UserRecord(
             id=uuid4().hex,
             apple_subject=subject,

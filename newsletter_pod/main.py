@@ -34,6 +34,7 @@ class RunDigestRequest(BaseModel):
 
 class AppleAuthRequest(BaseModel):
     identity_token: str
+    given_name: Optional[str] = None
 
 
 class UpdateMeRequest(BaseModel):
@@ -159,7 +160,10 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
     def auth_with_apple(request_payload: AppleAuthRequest) -> dict:
         assert container.control_plane is not None
         try:
-            return container.control_plane.authenticate_with_apple(request_payload.identity_token)
+            return container.control_plane.authenticate_with_apple(
+                request_payload.identity_token,
+                given_name=request_payload.given_name,
+            )
         except (ControlPlaneError, AuthError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
