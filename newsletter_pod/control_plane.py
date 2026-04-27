@@ -385,8 +385,7 @@ class ControlPlaneService:
 
     def dispatch_due_users(self, now_utc: Optional[datetime] = None) -> dict[str, Any]:
         now_utc = now_utc or utc_now()
-        due_users: list[str] = []
-        enqueued: list[dict[str, Any]] = []
+        processed: list[dict[str, Any]] = []
         for schedule in self.repository.list_schedules():
             if not schedule.enabled:
                 continue
@@ -394,14 +393,17 @@ class ControlPlaneService:
                 continue
             if not self._should_attempt_user(schedule.user_id, schedule, now_utc):
                 continue
-            due_users.append(schedule.user_id)
-            enqueued.append(self.task_enqueuer.enqueue_user_generation(schedule.user_id, force=False))
+            try:
+                result = self.process_user_generation(schedule.user_id, now_utc=now_utc)
+                run_status = (result.get("run") or {}).get("status") or result.get("status")
+                processed.append({"user_id": schedule.user_id, "status": run_status})
+            except Exception as exc:
+                processed.append({"user_id": schedule.user_id, "status": "error", "error": str(exc)})
 
         return {
             "status": "ok",
-            "due_user_ids": due_users,
-            "enqueued_count": len(enqueued),
-            "enqueued": enqueued,
+            "processed_count": len(processed),
+            "processed": processed,
         }
 
     def process_user_generation(
