@@ -487,7 +487,13 @@ class ControlPlaneService:
         prompt = build_digest_prompt(items, run_date=local_date, ux=ux)
         title_hint = f"{local_date.isoformat()} weekly briefing"
         voice_id = profile.voice_id or self.settings.elevenlabs_voice_primary_id
-        generated = self.podcast_client.generate(prompt=prompt, title=title_hint, voice_id=voice_id)
+        speaker_voice_map = self._build_speaker_voice_map(ux, voice_id)
+        generated = self.podcast_client.generate(
+            prompt=prompt,
+            title=title_hint,
+            voice_id=voice_id,
+            speaker_voice_map=speaker_voice_map,
+        )
 
         episode_id = f"{user_id[:8]}-{local_date.isoformat()}-{uuid4().hex[:8]}"
         object_name, size_bytes = self.storage.upload_audio(
@@ -769,6 +775,19 @@ class ControlPlaneService:
             max_minutes=duration,
             thin_day_minutes=min(5, duration),
         )
+
+    def _build_speaker_voice_map(self, ux: PodcastUxConfig, primary_voice_id: str) -> dict[str, str]:
+        secondary_voice_id = self.settings.elevenlabs_voice_secondary_id
+        if primary_voice_id == secondary_voice_id:
+            secondary_voice_id = self.settings.elevenlabs_voice_primary_id
+        mapping: dict[str, str] = {}
+        primary_name = (ux.host_primary_name or "").strip()
+        if primary_name:
+            mapping[primary_name] = primary_voice_id
+        secondary_name = (ux.host_secondary_name or "").strip()
+        if ux.format != "solo_host" and secondary_name and secondary_voice_id:
+            mapping[secondary_name] = secondary_voice_id
+        return mapping
 
     def _current_guest_name(self, profile: PodcastProfileRecord, user_id: str) -> Optional[str]:
         if profile.format_preset != "rotating_guest" or not profile.guest_names:

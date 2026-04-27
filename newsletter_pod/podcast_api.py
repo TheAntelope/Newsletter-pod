@@ -45,13 +45,19 @@ class PodcastApiClient:
         prompt: str,
         title: str,
         voice_id: Optional[str] = None,
+        speaker_voice_map: Optional[dict[str, str]] = None,
     ) -> GeneratedEpisode:
         if not self.enabled:
             raise PodcastApiUnavailable("Podcast API is disabled")
 
         provider = self.provider.strip().lower()
         if provider == "openai":
-            return self._generate_with_openai(prompt=prompt, title=title, voice_id=voice_id)
+            return self._generate_with_openai(
+                prompt=prompt,
+                title=title,
+                voice_id=voice_id,
+                speaker_voice_map=speaker_voice_map,
+            )
         if provider == "generic":
             return self._generate_with_generic(prompt=prompt, title=title)
         raise PodcastApiError(f"Unsupported podcast provider: {self.provider}")
@@ -61,6 +67,7 @@ class PodcastApiClient:
         prompt: str,
         title: str,
         voice_id: Optional[str] = None,
+        speaker_voice_map: Optional[dict[str, str]] = None,
     ) -> GeneratedEpisode:
         if not self.api_key:
             raise PodcastApiUnavailable("OpenAI API key is not configured")
@@ -79,7 +86,18 @@ class PodcastApiClient:
                     f"Audio segment exceeds speech input limit ({speech_max_chars} chars)"
                 )
 
-        audio_chunks = [self._synthesize_speech(segment.text, voice_id) for segment in audio_segments]
+        voice_lookup = {
+            key.casefold(): value
+            for key, value in (speaker_voice_map or {}).items()
+            if key and value
+        }
+        audio_chunks = [
+            self._synthesize_speech(
+                segment.text,
+                voice_lookup.get(segment.speaker.casefold(), voice_id),
+            )
+            for segment in audio_segments
+        ]
         transcript = "\n\n".join(f"{segment.speaker}: {segment.text}" for segment in audio_segments)
 
         return GeneratedEpisode(

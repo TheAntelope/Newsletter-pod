@@ -24,7 +24,17 @@ class FakeAppleVerifier:
 
 
 class FakePodcastClient:
-    def generate(self, prompt: str, title: str, voice_id: str | None = None) -> GeneratedEpisode:
+    def __init__(self) -> None:
+        self.last_speaker_voice_map: dict[str, str] | None = None
+
+    def generate(
+        self,
+        prompt: str,
+        title: str,
+        voice_id: str | None = None,
+        speaker_voice_map: dict[str, str] | None = None,
+    ) -> GeneratedEpisode:
+        self.last_speaker_voice_map = speaker_voice_map
         return GeneratedEpisode(
             episode_title="Weekly AI Briefing",
             audio_bytes=b"mp3-bytes",
@@ -201,7 +211,8 @@ def test_process_user_generation_records_visible_cap(monkeypatch):
     )
 
     container.settings.free_max_items_per_episode = 1
-    container.control_plane.podcast_client = FakePodcastClient()
+    fake_podcast_client = FakePodcastClient()
+    container.control_plane.podcast_client = fake_podcast_client
 
     def fake_fetch(self, sources):
         return IngestionResult(
@@ -238,3 +249,8 @@ def test_process_user_generation_records_visible_cap(monkeypatch):
     assert payload["run"]["cap_hit"] is True
     assert payload["run"]["dropped_item_count"] == 1
     assert "item cap" in payload["episode"]["description"]
+    voice_map = fake_podcast_client.last_speaker_voice_map
+    assert voice_map is not None
+    assert voice_map["Elena"] == container.settings.elevenlabs_voice_primary_id
+    assert voice_map["Marcus"] == container.settings.elevenlabs_voice_secondary_id
+    assert voice_map["Elena"] != voice_map["Marcus"]

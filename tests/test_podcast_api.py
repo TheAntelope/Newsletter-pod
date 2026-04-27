@@ -137,6 +137,128 @@ def test_elevenlabs_tts_uses_user_voice_id(monkeypatch):
     assert tts_call[2]["xi-api-key"] == "el-key"
 
 
+def test_elevenlabs_dual_voice_routes_speakers_to_distinct_voices(monkeypatch):
+    calls: list[tuple[str, dict, dict]] = []
+
+    def fake_post(url, json, headers, timeout):
+        calls.append((url, json, headers))
+        if url.endswith("/v1/responses"):
+            return FakeResponse(
+                json_data={
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": (
+                                        '{"episode_title":"2026-04-27: Dual Voice",'
+                                        '"show_notes":"- Source A",'
+                                        '"audio_segments":['
+                                        '{"speaker":"Elena","text":"Anchor here."},'
+                                        '{"speaker":"Marcus","text":"Reaction here."},'
+                                        '{"speaker":"elena","text":"Wrap up."}'
+                                        "]}"
+                                    ),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        if "/v1/text-to-speech/" in url:
+            return FakeResponse(content=url.rsplit("/", 1)[-1].encode("utf-8"))
+        raise AssertionError(url)
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="ignored",
+        tts_voice="ignored",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key="el-key",
+        elevenlabs_model="eleven_multilingual_v2",
+    )
+
+    generated = client.generate(
+        prompt="Source content",
+        title="Daily Briefing",
+        voice_id="primary-voice",
+        speaker_voice_map={"Elena": "primary-voice", "Marcus": "secondary-voice"},
+    )
+
+    tts_urls = [call[0] for call in calls if "/v1/text-to-speech/" in call[0]]
+    assert tts_urls == [
+        "https://api.elevenlabs.io/v1/text-to-speech/primary-voice",
+        "https://api.elevenlabs.io/v1/text-to-speech/secondary-voice",
+        "https://api.elevenlabs.io/v1/text-to-speech/primary-voice",
+    ]
+    assert generated.audio_bytes == b"primary-voicesecondary-voiceprimary-voice"
+
+
+def test_speaker_voice_map_falls_back_to_voice_id_for_unknown_speaker(monkeypatch):
+    calls: list[str] = []
+
+    def fake_post(url, json, headers, timeout):
+        calls.append(url)
+        if url.endswith("/v1/responses"):
+            return FakeResponse(
+                json_data={
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": (
+                                        '{"episode_title":"t","show_notes":"n",'
+                                        '"audio_segments":['
+                                        '{"speaker":"Stranger","text":"hi"}'
+                                        "]}"
+                                    ),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        if "/v1/text-to-speech/" in url:
+            return FakeResponse(content=b"x")
+        raise AssertionError(url)
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="ignored",
+        tts_voice="ignored",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key="el-key",
+        elevenlabs_model="eleven_multilingual_v2",
+    )
+
+    client.generate(
+        prompt="p",
+        title="t",
+        voice_id="primary-voice",
+        speaker_voice_map={"Elena": "primary-voice", "Marcus": "secondary-voice"},
+    )
+
+    tts_urls = [url for url in calls if "/v1/text-to-speech/" in url]
+    assert tts_urls == ["https://api.elevenlabs.io/v1/text-to-speech/primary-voice"]
+
+
 def test_openai_endpoint_builder_accepts_base_url_with_v1():
     client = PodcastApiClient(
         enabled=True,
