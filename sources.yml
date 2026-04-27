@@ -1,9 +1,54 @@
 sources:
+  # Fully free, ad-supported.
   - id: geekwire-startups
     name: GeekWire Startups
     rss_url: https://www.geekwire.com/startups/feed/
     enabled: true
+
+  # Has a paid Wired subscription; RSS delivers article excerpts/summaries.
   - id: wired-business
     name: WIRED Business
     rss_url: https://www.wired.com/feed/category/business/latest/rss
+    enabled: true
+
+  # Fully free, ad-supported.
+  - id: techcrunch
+    name: TechCrunch
+    rss_url: https://techcrunch.com/feed/
+    enabled: true
+
+  # Has a paid Verge subscription ($7/mo) for some content; RSS gives the free articles.
+  - id: the-verge
+    name: The Verge
+    rss_url: https://www.theverge.com/rss/index.xml
+    enabled: true
+
+  # Has a paid Ars Premier tier ($25/yr) for ad-free reading; article content is free.
+  - id: ars-technica
+    name: Ars Technica
+    rss_url: https://feeds.arstechnica.com/arstechnica/index
+    enabled: true
+
+  # Fully free, user-submitted links aggregator.
+  - id: hacker-news
+    name: Hacker News (Front Page)
+    rss_url: https://hnrss.org/frontpage
+    enabled: true
+
+  # Fully free, ad-supported.
+  - id: venturebeat
+    name: VentureBeat
+    rss_url: https://venturebeat.com/feed/
+    enabled: true
+
+  # Has a paid MIT Tech Review subscription with a metered free-article limit per month.
+  - id: mit-technology-review
+    name: MIT Technology Review
+    rss_url: https://www.technologyreview.com/feed/
+    enabled: true
+
+  # Paid newsletter ($12/mo, $120/yr); free RSS only carries the weekly free article — daily Updates are subscriber-only.
+  - id: stratechery
+    name: Stratechery (Ben Thompson)
+    rss_url: https://stratechery.com/feed/
     enabled: true
