@@ -41,10 +41,10 @@ class FakePodcastClient:
             mime_type="audio/mpeg",
             show_notes="Generated notes",
             audio_segments=[
-                AudioSegment(speaker="Elena", text="Welcome."),
-                AudioSegment(speaker="Marcus", text="Here is the update."),
+                AudioSegment(speaker="Demi", text="Welcome."),
+                AudioSegment(speaker="Vinnie", text="Here is the update."),
             ],
-            transcript="Elena: Welcome.\nMarcus: Here is the update.",
+            transcript="Demi: Welcome.\nVinnie: Here is the update.",
             duration_seconds=120,
         )
 
@@ -251,6 +251,6 @@ def test_process_user_generation_records_visible_cap(monkeypatch):
     assert "item cap" in payload["episode"]["description"]
     voice_map = fake_podcast_client.last_speaker_voice_map
     assert voice_map is not None
-    assert voice_map["Elena"] == container.settings.elevenlabs_voice_primary_id
-    assert voice_map["Marcus"] == container.settings.elevenlabs_voice_secondary_id
-    assert voice_map["Elena"] != voice_map["Marcus"]
+    assert voice_map["Demi"] == container.settings.elevenlabs_voice_primary_id
+    assert voice_map["Vinnie"] == container.settings.elevenlabs_voice_secondary_id
+    assert voice_map["Demi"] != voice_map["Vinnie"]

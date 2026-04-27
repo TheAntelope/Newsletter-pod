@@ -67,8 +67,8 @@ class Settings(BaseSettings):
     elevenlabs_voice_secondary_name: str = Field(
         default="Vinnie Chase", alias="ELEVENLABS_VOICE_SECONDARY_NAME"
     )
-    podcast_host_primary_name: str = Field(default="Elena", alias="PODCAST_HOST_PRIMARY_NAME")
-    podcast_host_secondary_name: str = Field(default="Marcus", alias="PODCAST_HOST_SECONDARY_NAME")
+    podcast_host_primary_name: str = Field(default="Demi", alias="PODCAST_HOST_PRIMARY_NAME")
+    podcast_host_secondary_name: str = Field(default="Vinnie", alias="PODCAST_HOST_SECONDARY_NAME")
     podcast_format: str = Field(default="anchor_guest", alias="PODCAST_FORMAT")
     podcast_tone: str = Field(default="calm_analyst", alias="PODCAST_TONE")
     podcast_target_minutes: int = Field(default=6, alias="PODCAST_TARGET_MINUTES")

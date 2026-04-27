@@ -495,8 +495,8 @@ struct PodcastSetupView: View {
     @State private var displayName = ""
     @State private var title = ""
     @State private var formatPreset = "two_hosts"
-    @State private var primaryHost = "Elena"
-    @State private var secondaryHost = "Marcus"
+    @State private var primaryHost = "Demi"
+    @State private var secondaryHost = "Vinnie"
     @State private var guestNames = "Alex, Sam"
     @State private var durationMinutes = 3.0
     @State private var voiceID: String = PodcastSetupView.voiceOptions[0].id
@@ -590,8 +590,8 @@ struct PodcastSetupView: View {
                 displayName = viewModel.user?.displayName ?? ""
                 title = viewModel.profile?.title ?? "mycast"
                 formatPreset = viewModel.profile?.formatPreset ?? "two_hosts"
-                primaryHost = viewModel.profile?.hostPrimaryName ?? "Elena"
-                secondaryHost = viewModel.profile?.hostSecondaryName ?? "Marcus"
+                primaryHost = viewModel.profile?.hostPrimaryName ?? "Demi"
+                secondaryHost = viewModel.profile?.hostSecondaryName ?? "Vinnie"
                 guestNames = viewModel.profile?.guestNames.joined(separator: ", ") ?? "Alex, Sam"
                 durationMinutes = Double(viewModel.profile?.desiredDurationMinutes ?? 3)
                 if let stored = viewModel.profile?.voiceID,

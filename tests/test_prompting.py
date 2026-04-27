@@ -47,8 +47,8 @@ def test_prompt_enforces_calm_daily_briefing_with_named_hosts():
     )
 
     assert "Episode date: 2026-03-09" in prompt
-    assert "Primary host: Elena" in prompt
-    assert "Secondary host: Marcus" in prompt
+    assert "Primary host: Demi" in prompt
+    assert "Secondary host: Vinnie" in prompt
     assert "Open as a dated daily edition." in prompt
     assert "top 3 takeaways" in prompt
     assert "spoken attribution light and natural" in prompt

@@ -34,8 +34,8 @@ def test_openai_provider_generates_structured_script_and_chunked_speech(monkeypa
                                         '{"episode_title":"2026-03-09: AI and Markets",'
                                         '"show_notes":"- Source A: https://example.com/a",'
                                         '"audio_segments":['
-                                        '{"speaker":"Elena","text":"Hello there."},'
-                                        '{"speaker":"Marcus","text":"More detail here."}'
+                                        '{"speaker":"Demi","text":"Hello there."},'
+                                        '{"speaker":"Vinnie","text":"More detail here."}'
                                         "]}"
                                     ),
                                 }
@@ -67,10 +67,10 @@ def test_openai_provider_generates_structured_script_and_chunked_speech(monkeypa
     assert generated.episode_title == "2026-03-09: AI and Markets"
     assert generated.mime_type == "audio/mpeg"
     assert generated.show_notes == "- Source A: https://example.com/a"
-    assert generated.transcript == "Elena: Hello there.\n\nMarcus: More detail here."
+    assert generated.transcript == "Demi: Hello there.\n\nVinnie: More detail here."
     assert generated.audio_bytes == b"Hello there.More detail here."
-    assert generated.audio_segments[0].speaker == "Elena"
-    assert generated.audio_segments[1].speaker == "Marcus"
+    assert generated.audio_segments[0].speaker == "Demi"
+    assert generated.audio_segments[1].speaker == "Vinnie"
     assert len(calls) == 3
     assert calls[0][0].endswith("/v1/responses")
     assert calls[1][0].endswith("/v1/audio/speech")
@@ -154,9 +154,9 @@ def test_elevenlabs_dual_voice_routes_speakers_to_distinct_voices(monkeypatch):
                                         '{"episode_title":"2026-04-27: Dual Voice",'
                                         '"show_notes":"- Source A",'
                                         '"audio_segments":['
-                                        '{"speaker":"Elena","text":"Anchor here."},'
-                                        '{"speaker":"Marcus","text":"Reaction here."},'
-                                        '{"speaker":"elena","text":"Wrap up."}'
+                                        '{"speaker":"Demi","text":"Anchor here."},'
+                                        '{"speaker":"Vinnie","text":"Reaction here."},'
+                                        '{"speaker":"demi","text":"Wrap up."}'
                                         "]}"
                                     ),
                                 }
@@ -190,7 +190,7 @@ def test_elevenlabs_dual_voice_routes_speakers_to_distinct_voices(monkeypatch):
         prompt="Source content",
         title="Daily Briefing",
         voice_id="primary-voice",
-        speaker_voice_map={"Elena": "primary-voice", "Marcus": "secondary-voice"},
+        speaker_voice_map={"Demi": "primary-voice", "Vinnie": "secondary-voice"},
     )
 
     tts_urls = [call[0] for call in calls if "/v1/text-to-speech/" in call[0]]
@@ -252,7 +252,7 @@ def test_speaker_voice_map_falls_back_to_voice_id_for_unknown_speaker(monkeypatc
         prompt="p",
         title="t",
         voice_id="primary-voice",
-        speaker_voice_map={"Elena": "primary-voice", "Marcus": "secondary-voice"},
+        speaker_voice_map={"Demi": "primary-voice", "Vinnie": "secondary-voice"},
     )
 
     tts_urls = [url for url in calls if "/v1/text-to-speech/" in url]
