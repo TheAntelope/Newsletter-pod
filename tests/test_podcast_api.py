@@ -202,6 +202,67 @@ def test_elevenlabs_dual_voice_routes_speakers_to_distinct_voices(monkeypatch):
     assert generated.audio_bytes == b"primary-voicesecondary-voiceprimary-voice"
 
 
+def test_many_turn_dialogue_alternates_voices(monkeypatch):
+    turns = [("Demi" if i % 2 == 0 else "Vinnie", f"line {i}") for i in range(20)]
+    segments_json = ",".join(
+        f'{{"speaker":"{speaker}","text":"{text}"}}' for speaker, text in turns
+    )
+
+    def fake_post(url, json, headers, timeout):
+        if url.endswith("/v1/responses"):
+            return FakeResponse(
+                json_data={
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": (
+                                        '{"episode_title":"t","show_notes":"n",'
+                                        f'"audio_segments":[{segments_json}]'
+                                        "}"
+                                    ),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        if "/v1/text-to-speech/" in url:
+            return FakeResponse(content=url.rsplit("/", 1)[-1].encode("utf-8"))
+        raise AssertionError(url)
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="ignored",
+        tts_voice="ignored",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key="el-key",
+        elevenlabs_model="eleven_multilingual_v2",
+    )
+
+    generated = client.generate(
+        prompt="p",
+        title="t",
+        voice_id="primary-voice",
+        speaker_voice_map={"Demi": "primary-voice", "Vinnie": "secondary-voice"},
+    )
+
+    assert len(generated.audio_segments) == 20
+    expected = b"".join(
+        b"primary-voice" if i % 2 == 0 else b"secondary-voice" for i in range(20)
+    )
+    assert generated.audio_bytes == expected
+
+
 def test_speaker_voice_map_falls_back_to_voice_id_for_unknown_speaker(monkeypatch):
     calls: list[str] = []
 

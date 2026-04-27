@@ -49,6 +49,8 @@ def test_prompt_enforces_calm_daily_briefing_with_named_hosts():
     assert "Episode date: 2026-03-09" in prompt
     assert "Primary host: Demi" in prompt
     assert "Secondary host: Vinnie" in prompt
+    assert "Start a new audio_segment every time the speaker changes" in prompt
+    assert "Never prefix a line with a speaker name inside the text field" in prompt
     assert "Open as a dated daily edition." in prompt
     assert "top 3 takeaways" in prompt
     assert "spoken attribution light and natural" in prompt

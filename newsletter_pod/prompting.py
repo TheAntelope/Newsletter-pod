@@ -69,6 +69,8 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
         "- Return a dynamic `episode_title` in date-plus-main-theme style.",
         "- Return `show_notes` as markdown with source links.",
         "- Return `audio_segments` as ordered speaker-tagged segments.",
+        "- Start a new audio_segment every time the speaker changes; never combine multiple speakers' lines in one segment.",
+        "- Never prefix a line with a speaker name inside the text field; the speaker is set by the `speaker` field only.",
         f"- Allowed speakers are only: {', '.join(allowed_speakers)}.",
         "- Do not include stage directions.",
         "",

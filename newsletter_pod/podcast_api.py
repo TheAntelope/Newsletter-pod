@@ -122,8 +122,10 @@ class PodcastApiClient:
                             "text": (
                                 "You write concise spoken-word daily business and technology digests. "
                                 "Return valid JSON only. "
-                                f"Split the narration into 1-6 audio_segments, each at most {OPENAI_SPEECH_MAX_CHARS} "
-                                "characters because they will be sent separately to a text-to-speech endpoint. "
+                                f"Each audio_segment must contain a single speaker's continuous lines and at most "
+                                f"{OPENAI_SPEECH_MAX_CHARS} characters; start a new audio_segment every time the "
+                                "speaker changes. Never include another speaker's lines inside a segment, and never "
+                                "prefix a line with a speaker name inside the text field. "
                                 "Preserve natural transitions across segments. "
                                 "Keep the total script compact enough for a short daily episode, and write show_notes "
                                 "as markdown with source attributions and links."
@@ -155,7 +157,7 @@ class PodcastApiClient:
                             "audio_segments": {
                                 "type": "array",
                                 "minItems": 1,
-                                "maxItems": 6,
+                                "maxItems": 60,
                                 "items": {
                                     "type": "object",
                                     "additionalProperties": False,
