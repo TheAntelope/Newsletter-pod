@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Optional
 
 from newsletter_pod.ingestion import RSSIngestionService
 from newsletter_pod.models import SourceDefinition
-from newsletter_pod.repository import InMemoryRepository
+
+
+class StubCursorRepository:
+    def __init__(self, cursors: Optional[dict[str, datetime]] = None) -> None:
+        self._cursors = dict(cursors or {})
+
+    def get_source_cursor(self, source_id: str) -> Optional[datetime]:
+        return self._cursors.get(source_id)
 
 
 def test_ingestion_dedupes_by_guid_then_link_hash(monkeypatch):
-    repository = InMemoryRepository()
-    repository.update_source_cursors(
+    repository = StubCursorRepository(
         {
             "source-a": datetime(2026, 3, 8, 0, 0, tzinfo=timezone.utc),
             "source-b": datetime(2026, 3, 8, 0, 0, tzinfo=timezone.utc),
@@ -65,7 +72,7 @@ def test_ingestion_dedupes_by_guid_then_link_hash(monkeypatch):
 
 
 def test_first_run_bootstraps_latest_items_per_source_and_sets_cursor(monkeypatch):
-    repository = InMemoryRepository()
+    repository = StubCursorRepository()
     sources = [
         SourceDefinition(
             id="source-a",

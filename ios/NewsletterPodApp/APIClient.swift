@@ -79,7 +79,8 @@ final class APIClient {
         hostPrimaryName: String,
         hostSecondaryName: String?,
         guestNames: [String],
-        desiredDurationMinutes: Int
+        desiredDurationMinutes: Int,
+        voiceID: String?
     ) async throws -> PodcastConfigEnvelope {
         try await request(
             path: "/v1/me/podcast-config",
@@ -90,7 +91,8 @@ final class APIClient {
                 hostPrimaryName: hostPrimaryName,
                 hostSecondaryName: hostSecondaryName,
                 guestNames: guestNames,
-                desiredDurationMinutes: desiredDurationMinutes
+                desiredDurationMinutes: desiredDurationMinutes,
+                voiceID: voiceID
             ),
             token: token
         )
@@ -215,6 +217,7 @@ private struct UpdatePodcastConfigBody: Encodable {
     let hostSecondaryName: String?
     let guestNames: [String]
     let desiredDurationMinutes: Int
+    let voiceID: String?
 
     private enum CodingKeys: String, CodingKey {
         case title
@@ -223,6 +226,7 @@ private struct UpdatePodcastConfigBody: Encodable {
         case hostSecondaryName = "host_secondary_name"
         case guestNames = "guest_names"
         case desiredDurationMinutes = "desired_duration_minutes"
+        case voiceID = "voice_id"
     }
 }
 

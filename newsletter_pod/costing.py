@@ -7,6 +7,7 @@ SCRIPT_INPUT_PRICE_PER_MILLION = 0.75
 SCRIPT_OUTPUT_PRICE_PER_MILLION = 4.50
 TTS_INPUT_PRICE_PER_MILLION = 0.60
 TTS_PRICE_PER_MINUTE = 0.015
+ELEVENLABS_PRICE_PER_MILLION_CHARS = 180.0
 DEFAULT_INFRA_RESERVE_USD = 0.01
 
 
@@ -27,6 +28,7 @@ def estimate_generation_cost(
     show_notes_text: str,
     duration_seconds: int | None,
     infra_reserve_usd: float = DEFAULT_INFRA_RESERVE_USD,
+    tts_provider: str = "openai",
 ) -> CostEstimate:
     text_input_tokens = estimate_text_tokens(prompt_text)
     text_output_tokens = estimate_text_tokens(transcript_text) + estimate_text_tokens(show_notes_text)
@@ -37,10 +39,13 @@ def estimate_generation_cost(
         (text_input_tokens / 1_000_000) * SCRIPT_INPUT_PRICE_PER_MILLION
         + (text_output_tokens / 1_000_000) * SCRIPT_OUTPUT_PRICE_PER_MILLION
     )
-    tts_cost = (
-        (tts_input_tokens / 1_000_000) * TTS_INPUT_PRICE_PER_MILLION
-        + (tts_minutes * TTS_PRICE_PER_MINUTE)
-    )
+    if tts_provider.strip().lower() == "elevenlabs":
+        tts_cost = (len(transcript_text) / 1_000_000) * ELEVENLABS_PRICE_PER_MILLION_CHARS
+    else:
+        tts_cost = (
+            (tts_input_tokens / 1_000_000) * TTS_INPUT_PRICE_PER_MILLION
+            + (tts_minutes * TTS_PRICE_PER_MINUTE)
+        )
     openai_cost = round(script_cost + tts_cost, 6)
     total_cost = round(openai_cost + infra_reserve_usd, 6)
 

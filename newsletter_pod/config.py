@@ -26,7 +26,6 @@ class Settings(BaseSettings):
     session_ttl_hours: int = Field(default=720, alias="SESSION_TTL_HOURS")
     apple_client_id: Optional[str] = Field(default=None, alias="APPLE_CLIENT_ID")
 
-    feed_token: str = Field(default="change-me", alias="FEED_TOKEN")
     sources_file: str = Field(default="sources.yml", alias="SOURCES_FILE")
 
     podcast_title: str = Field(default="Daily Newsletter Digest", alias="PODCAST_TITLE")
@@ -50,9 +49,24 @@ class Settings(BaseSettings):
     podcast_api_timeout_seconds: int = Field(default=600, alias="PODCAST_API_TIMEOUT_SECONDS")
     podcast_api_poll_seconds: int = Field(default=10, alias="PODCAST_API_POLL_SECONDS")
     podcast_text_model: str = Field(default="gpt-5.4-mini", alias="PODCAST_TEXT_MODEL")
+    podcast_tts_provider: str = Field(default="elevenlabs", alias="PODCAST_TTS_PROVIDER")
     podcast_tts_model: str = Field(default="gpt-4o-mini-tts", alias="PODCAST_TTS_MODEL")
     podcast_tts_voice: str = Field(default="alloy", alias="PODCAST_TTS_VOICE")
     podcast_tts_instructions: Optional[str] = Field(default=None, alias="PODCAST_TTS_INSTRUCTIONS")
+    elevenlabs_api_key: Optional[str] = Field(default=None, alias="ELEVENLABS_API_KEY")
+    elevenlabs_model: str = Field(default="eleven_multilingual_v2", alias="ELEVENLABS_MODEL")
+    elevenlabs_voice_primary_id: str = Field(
+        default="suMMgpGbVcnihP1CcgFS", alias="ELEVENLABS_VOICE_PRIMARY_ID"
+    )
+    elevenlabs_voice_primary_name: str = Field(
+        default="Demi Dreams", alias="ELEVENLABS_VOICE_PRIMARY_NAME"
+    )
+    elevenlabs_voice_secondary_id: str = Field(
+        default="hYjzO0gkYN6FIXTHyEpi", alias="ELEVENLABS_VOICE_SECONDARY_ID"
+    )
+    elevenlabs_voice_secondary_name: str = Field(
+        default="Vinnie Chase", alias="ELEVENLABS_VOICE_SECONDARY_NAME"
+    )
     podcast_host_primary_name: str = Field(default="Elena", alias="PODCAST_HOST_PRIMARY_NAME")
     podcast_host_secondary_name: str = Field(default="Marcus", alias="PODCAST_HOST_SECONDARY_NAME")
     podcast_format: str = Field(default="anchor_guest", alias="PODCAST_FORMAT")
@@ -111,8 +125,10 @@ class Settings(BaseSettings):
     @classmethod
     def from_env(cls) -> "Settings":
         settings = cls()
-        settings.feed_token = _normalize_secret_value(_resolve_secret_reference(settings.feed_token))
         settings.podcast_api_key = _normalize_secret_value(_resolve_secret_reference(settings.podcast_api_key))
+        settings.elevenlabs_api_key = _normalize_secret_value(
+            _resolve_secret_reference(settings.elevenlabs_api_key)
+        )
         settings.smtp_password = _normalize_secret_value(_resolve_secret_reference(settings.smtp_password))
         settings.job_trigger_token = _normalize_secret_value(_resolve_secret_reference(settings.job_trigger_token))
         settings.session_signing_secret = _normalize_secret_value(

@@ -42,7 +42,7 @@
 
 1. Complete real Apple identity token verification for `POST /v1/auth/apple`.
 2. Complete App Store Server Notification signed-payload verification for `POST /v1/billing/app-store/notifications`.
-3. Configure the weekly dispatcher in Cloud Scheduler to call `POST /jobs/dispatch-weekly-podcasts` every 15 minutes.
+3. Configure the dispatcher in Cloud Scheduler to call `POST /jobs/dispatch-due-users` every 15 minutes.
 4. Configure Cloud Tasks for per-user podcast generation if dispatch should enqueue work instead of processing inline.
 5. Run an end-to-end test with one real user account:
    - Sign in with Apple

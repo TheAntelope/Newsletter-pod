@@ -4,13 +4,18 @@ import html
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Optional, Protocol
 
 import feedparser
 import requests
 
 from .models import SourceDefinition, SourceItem
-from .repository import Repository
 from .utils import guid_or_link_hash, parse_datetime, utc_now
+
+
+class CursorRepository(Protocol):
+    def get_source_cursor(self, source_id: str) -> Optional[datetime]:
+        ...
 
 HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 
@@ -24,7 +29,7 @@ class IngestionResult:
 class RSSIngestionService:
     def __init__(
         self,
-        repository: Repository,
+        repository: CursorRepository,
         timeout_seconds: int = 20,
         bootstrap_max_items_per_source: int = 3,
     ) -> None:

@@ -21,4 +21,5 @@ def test_build_container_uses_smtp_mailer_for_publish_summaries_only():
 
     container = _build_container(settings)
 
-    assert isinstance(container.pipeline.mailer, SMTPMailer)
+    assert container.control_plane is not None
+    assert isinstance(container.control_plane.mailer, SMTPMailer)

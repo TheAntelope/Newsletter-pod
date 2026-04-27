@@ -12,6 +12,8 @@ from .models import AudioSegment, GeneratedEpisode
 
 OPENAI_DEFAULT_BASE_URL = "https://api.openai.com"
 OPENAI_SPEECH_MAX_CHARS = 4096
+ELEVENLABS_BASE_URL = "https://api.elevenlabs.io"
+ELEVENLABS_SPEECH_MAX_CHARS = 4096
 
 
 class PodcastApiError(RuntimeError):
@@ -34,19 +36,32 @@ class PodcastApiClient:
     tts_model: str
     tts_voice: str
     tts_instructions: Optional[str] = None
+    tts_provider: str = "openai"
+    elevenlabs_api_key: Optional[str] = None
+    elevenlabs_model: str = "eleven_multilingual_v2"
 
-    def generate(self, prompt: str, title: str) -> GeneratedEpisode:
+    def generate(
+        self,
+        prompt: str,
+        title: str,
+        voice_id: Optional[str] = None,
+    ) -> GeneratedEpisode:
         if not self.enabled:
             raise PodcastApiUnavailable("Podcast API is disabled")
 
         provider = self.provider.strip().lower()
         if provider == "openai":
-            return self._generate_with_openai(prompt=prompt, title=title)
+            return self._generate_with_openai(prompt=prompt, title=title, voice_id=voice_id)
         if provider == "generic":
             return self._generate_with_generic(prompt=prompt, title=title)
         raise PodcastApiError(f"Unsupported podcast provider: {self.provider}")
 
-    def _generate_with_openai(self, prompt: str, title: str) -> GeneratedEpisode:
+    def _generate_with_openai(
+        self,
+        prompt: str,
+        title: str,
+        voice_id: Optional[str] = None,
+    ) -> GeneratedEpisode:
         if not self.api_key:
             raise PodcastApiUnavailable("OpenAI API key is not configured")
 
@@ -57,13 +72,14 @@ class PodcastApiClient:
         if not audio_segments:
             raise PodcastApiError("Structured response missing audio segments")
 
+        speech_max_chars = self._speech_max_chars()
         for segment in audio_segments:
-            if len(segment.text) > OPENAI_SPEECH_MAX_CHARS:
+            if len(segment.text) > speech_max_chars:
                 raise PodcastApiError(
-                    f"Audio segment exceeds OpenAI speech input limit ({OPENAI_SPEECH_MAX_CHARS} chars)"
+                    f"Audio segment exceeds speech input limit ({speech_max_chars} chars)"
                 )
 
-        audio_chunks = [self._generate_openai_speech(segment.text) for segment in audio_segments]
+        audio_chunks = [self._synthesize_speech(segment.text, voice_id) for segment in audio_segments]
         transcript = "\n\n".join(f"{segment.speaker}: {segment.text}" for segment in audio_segments)
 
         return GeneratedEpisode(
@@ -161,10 +177,22 @@ class PodcastApiClient:
             raise PodcastApiError("OpenAI structured response was not an object")
         return data
 
-    def _generate_openai_speech(self, script: str) -> bytes:
+    def _synthesize_speech(self, script: str, voice_id: Optional[str]) -> bytes:
+        provider = (self.tts_provider or "openai").strip().lower()
+        if provider == "elevenlabs":
+            return self._generate_elevenlabs_speech(script, voice_id)
+        return self._generate_openai_speech(script, voice_id)
+
+    def _speech_max_chars(self) -> int:
+        provider = (self.tts_provider or "openai").strip().lower()
+        if provider == "elevenlabs":
+            return ELEVENLABS_SPEECH_MAX_CHARS
+        return OPENAI_SPEECH_MAX_CHARS
+
+    def _generate_openai_speech(self, script: str, voice_id: Optional[str] = None) -> bytes:
         payload: dict[str, Any] = {
             "model": self.tts_model,
-            "voice": self.tts_voice,
+            "voice": voice_id or self.tts_voice,
             "input": script,
             "response_format": "mp3",
         }
@@ -176,6 +204,33 @@ class PodcastApiClient:
             json=payload,
             headers=self._build_openai_headers(),
             timeout=60,
+        )
+        self._raise_for_availability(response)
+        response.raise_for_status()
+        return response.content
+
+    def _generate_elevenlabs_speech(self, script: str, voice_id: Optional[str]) -> bytes:
+        if not self.elevenlabs_api_key:
+            raise PodcastApiUnavailable("ElevenLabs API key is not configured")
+        if not voice_id:
+            raise PodcastApiError("ElevenLabs voice_id is required")
+
+        url = f"{ELEVENLABS_BASE_URL}/v1/text-to-speech/{voice_id}"
+        headers = {
+            "xi-api-key": self.elevenlabs_api_key,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+        }
+        payload: dict[str, Any] = {
+            "text": script,
+            "model_id": self.elevenlabs_model,
+        }
+
+        response = requests.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=120,
         )
         self._raise_for_availability(response)
         response.raise_for_status()

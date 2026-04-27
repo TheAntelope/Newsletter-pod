@@ -99,7 +99,8 @@ final class AppViewModel: ObservableObject {
         primaryHost: String,
         secondaryHost: String?,
         guestNames: [String],
-        desiredDurationMinutes: Int
+        desiredDurationMinutes: Int,
+        voiceID: String?
     ) async {
         guard let sessionToken else { return }
         await load {
@@ -110,7 +111,8 @@ final class AppViewModel: ObservableObject {
                 hostPrimaryName: primaryHost,
                 hostSecondaryName: secondaryHost,
                 guestNames: guestNames,
-                desiredDurationMinutes: desiredDurationMinutes
+                desiredDurationMinutes: desiredDurationMinutes,
+                voiceID: voiceID
             )
             profile = response.profile
             entitlements = response.entitlements

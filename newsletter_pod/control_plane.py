@@ -269,6 +269,7 @@ class ControlPlaneService:
         host_secondary_name: Optional[str],
         guest_names: Optional[list[str]],
         desired_duration_minutes: Optional[int],
+        voice_id: Optional[str] = None,
     ) -> dict[str, Any]:
         profile = self._get_profile(user_id)
         entitlements = self._entitlements_for(self._get_subscription(user_id))
@@ -291,6 +292,14 @@ class ControlPlaneService:
                     f"{entitlements.max_duration_minutes} minutes"
                 )
             profile.desired_duration_minutes = desired_duration_minutes
+        if voice_id is not None:
+            allowed = {
+                self.settings.elevenlabs_voice_primary_id,
+                self.settings.elevenlabs_voice_secondary_id,
+            }
+            if voice_id not in allowed:
+                raise ControlPlaneError("Unsupported voice selection")
+            profile.voice_id = voice_id
 
         self._validate_profile(profile)
         profile.updated_at = utc_now()
@@ -475,7 +484,8 @@ class ControlPlaneService:
         ux = self._build_user_ux(profile, guest_name)
         prompt = build_digest_prompt(items, run_date=local_date, ux=ux)
         title_hint = f"{local_date.isoformat()} weekly briefing"
-        generated = self.podcast_client.generate(prompt=prompt, title=title_hint)
+        voice_id = profile.voice_id or self.settings.elevenlabs_voice_primary_id
+        generated = self.podcast_client.generate(prompt=prompt, title=title_hint, voice_id=voice_id)
 
         episode_id = f"{user_id[:8]}-{local_date.isoformat()}-{uuid4().hex[:8]}"
         object_name, size_bytes = self.storage.upload_audio(
@@ -520,6 +530,7 @@ class ControlPlaneService:
             transcript_text=transcript_text,
             show_notes_text=generated.show_notes,
             duration_seconds=generated.duration_seconds,
+            tts_provider=self.settings.podcast_tts_provider,
         )
         self.repository.save_cost_record(
             CostRecord(
@@ -596,6 +607,7 @@ class ControlPlaneService:
                 host_secondary_name="Marcus",
                 guest_names=[],
                 desired_duration_minutes=self.settings.free_default_duration_minutes,
+                voice_id=self.settings.elevenlabs_voice_primary_id,
                 created_at=now,
                 updated_at=now,
             )
@@ -683,6 +695,7 @@ class ControlPlaneService:
                 user_id=user_id,
                 title="mycast",
                 desired_duration_minutes=self.settings.free_default_duration_minutes,
+                voice_id=self.settings.elevenlabs_voice_primary_id,
                 created_at=now,
                 updated_at=now,
             )

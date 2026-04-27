@@ -11,25 +11,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .auth import AppleIdentityVerifier, AuthError, SessionManager
-from .config import Settings, load_sources
+from .config import Settings
 from .control_plane import ControlPlaneError, ControlPlaneService, build_task_enqueuer
 from .feed import build_feed_xml
-from .ingestion import RSSIngestionService
 from .legal import PRIVACY_HTML, TERMS_HTML
 from .mailer import NoopMailer, SMTPMailer
-from .pipeline import DigestPipeline
 from .podcast_api import PodcastApiClient
-from .repository import FirestoreRepository, InMemoryRepository, Repository
-from .retry_policy import RetryPolicy
 from .storage import AudioStorage, GCSAudioStorage, InMemoryAudioStorage
 from .user_repository import ControlPlaneRepository, FirestoreControlPlaneRepository, InMemoryControlPlaneRepository
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-
-
-class RunDigestRequest(BaseModel):
-    force: bool = False
 
 
 class AppleAuthRequest(BaseModel):
@@ -57,6 +49,7 @@ class UpdatePodcastConfigRequest(BaseModel):
     host_secondary_name: Optional[str] = None
     guest_names: Optional[list[str]] = None
     desired_duration_minutes: Optional[int] = None
+    voice_id: Optional[str] = None
 
 
 class UpdateScheduleRequest(BaseModel):
@@ -85,9 +78,7 @@ class ProcessUserRequest(BaseModel):
 @dataclass
 class ServiceContainer:
     settings: Settings
-    repository: Repository
     storage: AudioStorage
-    pipeline: DigestPipeline
     control_repository: ControlPlaneRepository | None = None
     control_plane: ControlPlaneService | None = None
 
@@ -124,18 +115,8 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
     def legal_privacy() -> Response:
         return Response(content=PRIVACY_HTML, media_type="text/html; charset=utf-8")
 
-    @app.post("/jobs/run-digest")
-    def run_digest(
-        request_payload: RunDigestRequest,
-        authorization: str | None = Header(default=None),
-        x_job_trigger_token: str | None = Header(default=None),
-    ) -> dict:
-        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
-        result = container.pipeline.run_daily_digest(force=request_payload.force)
-        return result.model_dump(mode="json")
-
-    @app.post("/jobs/dispatch-weekly-podcasts")
-    def dispatch_weekly_podcasts(
+    @app.post("/jobs/dispatch-due-users")
+    def dispatch_due_users(
         authorization: str | None = Header(default=None),
         x_job_trigger_token: str | None = Header(default=None),
     ) -> dict:
@@ -243,6 +224,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 host_secondary_name=request_payload.host_secondary_name,
                 guest_names=request_payload.guest_names,
                 desired_duration_minutes=request_payload.desired_duration_minutes,
+                voice_id=request_payload.voice_id,
             )
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -286,30 +268,6 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         assert container.control_plane is not None
         return container.control_plane.apply_app_store_notification(request_payload.model_dump(exclude_none=True))
 
-    @app.api_route("/feed/{secret_token}.xml", methods=["GET", "HEAD"], response_class=Response)
-    def get_private_feed(secret_token: str, request: Request) -> Response:
-        _validate_feed_token_or_404(container.settings.feed_token, secret_token)
-
-        episodes = container.repository.list_recent_episodes(container.settings.max_feed_episodes)
-        base_url = container.settings.app_base_url.rstrip("/")
-        feed_url = f"{base_url}/feed/{secret_token}.xml"
-
-        xml_content = build_feed_xml(
-            title=container.settings.podcast_title,
-            description=container.settings.podcast_description,
-            author=container.settings.podcast_author,
-            language=container.settings.podcast_language,
-            feed_url=feed_url,
-            image_url=container.settings.podcast_image_url,
-            episodes=episodes,
-            media_url_builder=lambda episode: (
-                f"{base_url}/media/{secret_token}/{episode.id}.mp3"
-            ),
-            owner_email=container.settings.podcast_owner_email,
-            category=container.settings.podcast_category,
-        )
-        return _build_xml_response(xml_content, request)
-
     @app.api_route("/media/{secret_token}/{episode_id}.mp3", methods=["GET", "HEAD"])
     def get_private_media(
         secret_token: str,
@@ -317,16 +275,13 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         request: Request,
         range_header: str | None = Header(default=None, alias="Range"),
     ) -> Response:
+        assert container.control_repository is not None
         episode = None
-        if secrets.compare_digest(container.settings.feed_token, secret_token):
-            episode = container.repository.get_episode(episode_id)
-        else:
-            assert container.control_repository is not None
-            token_record = container.control_repository.get_feed_token_record(secret_token)
-            if token_record:
-                user_episode = container.control_repository.get_user_episode(episode_id)
-                if user_episode and user_episode.user_id == token_record.user_id:
-                    episode = user_episode
+        token_record = container.control_repository.get_feed_token_record(secret_token)
+        if token_record:
+            user_episode = container.control_repository.get_user_episode(episode_id)
+            if user_episode and user_episode.user_id == token_record.user_id:
+                episode = user_episode
 
         if not episode:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -376,19 +331,12 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
 
 def _build_container(settings: Settings) -> ServiceContainer:
     if settings.use_inmemory_adapters:
-        repository = InMemoryRepository()
         storage: AudioStorage = InMemoryAudioStorage()
     else:
-        repository = FirestoreRepository(settings.firestore_collection_prefix)
         if not settings.gcs_bucket_name:
             raise RuntimeError("GCS_BUCKET_NAME is required when USE_INMEMORY_ADAPTERS=false")
         storage = GCSAudioStorage(settings.gcs_bucket_name, prefix=settings.gcs_prefix)
 
-    sources = load_sources(settings.sources_file)
-    ingestion = RSSIngestionService(
-        repository=repository,
-        bootstrap_max_items_per_source=settings.podcast_bootstrap_max_items_per_source,
-    )
     podcast_client = PodcastApiClient(
         enabled=settings.podcast_api_enabled,
         provider=settings.podcast_provider,
@@ -400,6 +348,9 @@ def _build_container(settings: Settings) -> ServiceContainer:
         tts_model=settings.podcast_tts_model,
         tts_voice=settings.podcast_tts_voice,
         tts_instructions=settings.podcast_tts_instructions,
+        tts_provider=settings.podcast_tts_provider,
+        elevenlabs_api_key=settings.elevenlabs_api_key,
+        elevenlabs_model=settings.elevenlabs_model,
     )
 
     mailer_required = settings.alert_email_enabled or settings.publish_summary_email_enabled
@@ -423,29 +374,6 @@ def _build_container(settings: Settings) -> ServiceContainer:
     else:
         mailer = NoopMailer()
 
-    retry_policy = RetryPolicy(
-        timezone_name=settings.app_timezone,
-        start_local=settings.schedule_start_local,
-        target_local=settings.schedule_target_local,
-        cutoff_local=settings.schedule_cutoff_local,
-        rapid_retry_minutes=settings.rapid_retry_minutes,
-        periodic_retry_minutes=settings.periodic_retry_minutes,
-    )
-
-    pipeline = DigestPipeline(
-        sources=sources,
-        repository=repository,
-        ingestion_service=ingestion,
-        podcast_client=podcast_client,
-        storage=storage,
-        mailer=mailer,
-        retry_policy=retry_policy,
-        podcast_ux=settings.podcast_ux_config(),
-        app_base_url=settings.app_base_url,
-        feed_token=settings.feed_token,
-        publish_summary_email_enabled=settings.publish_summary_email_enabled,
-    )
-
     control_repository, control_plane = _build_control_plane(
         settings=settings,
         storage=storage,
@@ -455,9 +383,7 @@ def _build_container(settings: Settings) -> ServiceContainer:
 
     return ServiceContainer(
         settings=settings,
-        repository=repository,
         storage=storage,
-        pipeline=pipeline,
         control_repository=control_repository,
         control_plane=control_plane,
     )
@@ -485,6 +411,9 @@ def _build_control_plane(
         tts_model=settings.podcast_tts_model,
         tts_voice=settings.podcast_tts_voice,
         tts_instructions=settings.podcast_tts_instructions,
+        tts_provider=settings.podcast_tts_provider,
+        elevenlabs_api_key=settings.elevenlabs_api_key,
+        elevenlabs_model=settings.elevenlabs_model,
     )
     session_manager = SessionManager(
         signing_secret=settings.session_signing_secret,
@@ -503,11 +432,6 @@ def _build_control_plane(
         task_enqueuer=task_enqueuer,
     )
     return control_repository, control_plane
-
-
-def _validate_feed_token_or_404(expected: str, provided: str) -> None:
-    if not secrets.compare_digest(expected, provided):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
 def _validate_job_auth(

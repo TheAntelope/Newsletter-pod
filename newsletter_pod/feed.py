@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from xml.etree import ElementTree as ET
 
-from .models import EpisodeRecord
+from .user_models import UserEpisodeRecord
 from .utils import format_rfc2822
 
 ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
@@ -19,7 +19,7 @@ def build_feed_xml(
     language: str,
     feed_url: str,
     image_url: str | None,
-    episodes: list[EpisodeRecord],
+    episodes: list[UserEpisodeRecord],
     media_url_builder,
     owner_email: str = "vincemartin1991@gmail.com",
     category: str = "News",

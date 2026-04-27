@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from enum import Enum
 from typing import Optional
 
@@ -33,11 +33,6 @@ class SourceItem(BaseModel):
     dedupe_key: str
 
 
-class DigestCandidateSet(BaseModel):
-    run_date: date
-    items: list[SourceItem]
-
-
 class SourceItemRef(BaseModel):
     source_id: str
     source_name: str
@@ -61,38 +56,6 @@ class PodcastUxConfig(BaseModel):
     thin_day_minutes: int = 2
 
 
-class EpisodeRecord(BaseModel):
-    id: str
-    title: str
-    description: str
-    published_at: datetime
-    audio_object_name: str
-    audio_mime_type: str = "audio/mpeg"
-    audio_size_bytes: int = 0
-    source_item_refs: list[SourceItemRef] = Field(default_factory=list)
-    duration_seconds: Optional[int] = None
-
-
-class RunRecord(BaseModel):
-    id: str
-    run_date: date
-    started_at: datetime
-    completed_at: datetime
-    status: PublishStatus
-    message: str
-    candidate_count: int = 0
-    published_episode_id: Optional[str] = None
-    alert_sent: bool = False
-
-
-class DayState(BaseModel):
-    run_date: date
-    has_published_episode: bool = False
-    has_completed_run: bool = False
-    has_alert_sent: bool = False
-    last_attempt_at: Optional[datetime] = None
-
-
 class GeneratedEpisode(BaseModel):
     episode_title: str = "Daily Newsletter Digest"
     audio_bytes: bytes
@@ -101,11 +64,3 @@ class GeneratedEpisode(BaseModel):
     audio_segments: list[AudioSegment] = Field(default_factory=list)
     transcript: Optional[str] = None
     duration_seconds: Optional[int] = None
-
-
-class RunResult(BaseModel):
-    run_id: str
-    status: PublishStatus
-    message: str
-    episode_id: Optional[str] = None
-    candidate_count: int = 0

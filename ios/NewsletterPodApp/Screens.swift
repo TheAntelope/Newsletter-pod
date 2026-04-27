@@ -294,6 +294,7 @@ private struct AboutPodcastCard: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.s) {
                 infoRow(label: "Format", value: formatLabel)
                 infoRow(label: "Hosts", value: hostsLabel)
+                infoRow(label: "Voice", value: voiceLabel)
                 infoRow(label: "Length", value: "\(viewModel.profile?.desiredDurationMinutes ?? 8) min")
                 infoRow(label: "Delivery", value: deliveryLabel)
             }
@@ -321,6 +322,12 @@ private struct AboutPodcastCard: View {
     private var deliveryLabel: String {
         let days = viewModel.schedule?.weekdays.map { $0.prefix(3).capitalized }.joined(separator: ", ")
         return days?.isEmpty == false ? days! : "Not set"
+    }
+
+    private var voiceLabel: String {
+        let stored = viewModel.profile?.voiceID
+        let match = PodcastSetupView.voiceOptions.first { $0.id == stored }
+        return match?.name ?? PodcastSetupView.voiceOptions[0].name
     }
 
     private func infoRow(label: String, value: String) -> some View {
@@ -479,6 +486,11 @@ struct SourcesView: View {
 // MARK: - Podcast setup
 
 struct PodcastSetupView: View {
+    static let voiceOptions: [(id: String, name: String)] = [
+        ("suMMgpGbVcnihP1CcgFS", "Demi Dreams"),
+        ("hYjzO0gkYN6FIXTHyEpi", "Vinnie Chase"),
+    ]
+
     @EnvironmentObject private var viewModel: AppViewModel
     @State private var displayName = ""
     @State private var title = ""
@@ -487,6 +499,7 @@ struct PodcastSetupView: View {
     @State private var secondaryHost = "Marcus"
     @State private var guestNames = "Alex, Sam"
     @State private var durationMinutes = 3.0
+    @State private var voiceID: String = PodcastSetupView.voiceOptions[0].id
 
     var body: some View {
         NavigationStack {
@@ -527,6 +540,15 @@ struct PodcastSetupView: View {
                     }
                 }
 
+                Section("Voice") {
+                    Picker("Narrator voice", selection: $voiceID) {
+                        ForEach(PodcastSetupView.voiceOptions, id: \.id) { option in
+                            Text(option.name).tag(option.id)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
                 Section("Duration") {
                     Slider(
                         value: $durationMinutes,
@@ -550,7 +572,8 @@ struct PodcastSetupView: View {
                                 primaryHost: primaryHost,
                                 secondaryHost: formatPreset == "two_hosts" ? secondaryHost : nil,
                                 guestNames: guests,
-                                desiredDurationMinutes: Int(durationMinutes)
+                                desiredDurationMinutes: Int(durationMinutes),
+                                voiceID: voiceID
                             )
                         }
                     }
@@ -571,6 +594,10 @@ struct PodcastSetupView: View {
                 secondaryHost = viewModel.profile?.hostSecondaryName ?? "Marcus"
                 guestNames = viewModel.profile?.guestNames.joined(separator: ", ") ?? "Alex, Sam"
                 durationMinutes = Double(viewModel.profile?.desiredDurationMinutes ?? 3)
+                if let stored = viewModel.profile?.voiceID,
+                   PodcastSetupView.voiceOptions.contains(where: { $0.id == stored }) {
+                    voiceID = stored
+                }
             }
         }
     }

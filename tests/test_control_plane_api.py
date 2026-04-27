@@ -24,7 +24,7 @@ class FakeAppleVerifier:
 
 
 class FakePodcastClient:
-    def generate(self, prompt: str, title: str) -> GeneratedEpisode:
+    def generate(self, prompt: str, title: str, voice_id: str | None = None) -> GeneratedEpisode:
         return GeneratedEpisode(
             episode_title="Weekly AI Briefing",
             audio_bytes=b"mp3-bytes",
