@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
+import requests
+
 from newsletter_pod.ingestion import RSSIngestionService
 from newsletter_pod.models import SourceDefinition
 
@@ -128,3 +130,39 @@ def test_first_run_bootstraps_latest_items_per_source_and_sets_cursor(monkeypatc
     ]
     assert "source-a" in result.cursor_updates
     assert result.cursor_updates["source-a"].tzinfo is not None
+
+
+def test_one_failing_source_does_not_block_other_sources(monkeypatch):
+    repository = StubCursorRepository(
+        {
+            "good": datetime(2026, 3, 8, 0, 0, tzinfo=timezone.utc),
+            "bad": datetime(2026, 3, 8, 0, 0, tzinfo=timezone.utc),
+        }
+    )
+    sources = [
+        SourceDefinition(id="bad", name="Broken", rss_url="bad-url", enabled=True),
+        SourceDefinition(id="good", name="Working", rss_url="good-url", enabled=True),
+    ]
+
+    service = RSSIngestionService(repository=repository)
+
+    def fake_fetch(url: str):
+        if url == "bad-url":
+            raise requests.HTTPError("403 Client Error: Forbidden")
+        return [
+            {
+                "id": "guid-1",
+                "link": "https://example.com/item-1",
+                "title": "Working item",
+                "summary": "Body",
+                "published": "Mon, 09 Mar 2026 05:00:00 GMT",
+            }
+        ]
+
+    monkeypatch.setattr(service, "_fetch_entries", fake_fetch)
+
+    result = service.fetch_new_items(sources)
+
+    assert [item.title for item in result.items] == ["Working item"]
+    assert "good" in result.cursor_updates
+    assert "bad" not in result.cursor_updates

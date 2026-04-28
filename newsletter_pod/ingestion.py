@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -12,12 +13,17 @@ import requests
 from .models import SourceDefinition, SourceItem
 from .utils import guid_or_link_hash, parse_datetime, utc_now
 
+logger = logging.getLogger(__name__)
+
 
 class CursorRepository(Protocol):
     def get_source_cursor(self, source_id: str) -> Optional[datetime]:
         ...
 
 HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+RSS_USER_AGENT = (
+    "Mozilla/5.0 (compatible; NewsletterPod/1.0; +https://newsletter-pod.app)"
+)
 
 
 @dataclass
@@ -43,7 +49,16 @@ class RSSIngestionService:
         cursor_updates: dict[str, datetime] = {}
 
         for source in sources:
-            entries = self._fetch_entries(source.rss_url)
+            try:
+                entries = self._fetch_entries(source.rss_url)
+            except requests.RequestException as exc:
+                logger.warning(
+                    "Skipping source %s (%s): fetch failed: %s",
+                    source.id,
+                    source.rss_url,
+                    exc,
+                )
+                continue
             if not entries:
                 continue
 
@@ -80,7 +95,11 @@ class RSSIngestionService:
         return selected
 
     def _fetch_entries(self, rss_url: str) -> list[dict]:
-        response = requests.get(rss_url, timeout=self._timeout_seconds)
+        response = requests.get(
+            rss_url,
+            timeout=self._timeout_seconds,
+            headers={"User-Agent": RSS_USER_AGENT, "Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8"},
+        )
         response.raise_for_status()
         parsed = feedparser.parse(response.text)
         return list(parsed.entries)
