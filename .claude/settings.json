@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{ cd \"$CLAUDE_PROJECT_DIR\" && git fetch origin --quiet 2>&1; printf '\\n'; git status -sb 2>&1; } | jq -Rs '{hookSpecificOutput: {hookEventName: \"SessionStart\", additionalContext: (\"Repo sync on session start:\\n\" + .)}}'",
+            "timeout": 30,
+            "statusMessage": "Syncing with origin"
+          }
+        ]
+      }
+    ]
+  }
+}
