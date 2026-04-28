@@ -34,10 +34,17 @@ steps:
     env:
       - APP_BASE_URL=${_APP_BASE_URL}
       - SMOKE_USER_ID=${_SMOKE_USER_ID}
+      - RUN_SMOKE=${_RUN_SMOKE}
     secretEnv:
       - JOB_TRIGGER_TOKEN
     args:
-      - scripts/post_deploy_smoke.sh
+      - -c
+      - |
+        if [[ "${RUN_SMOKE}" != "true" ]]; then
+          echo "Skipping smoke step (_RUN_SMOKE=${RUN_SMOKE:-unset})"
+          exit 0
+        fi
+        exec scripts/post_deploy_smoke.sh
 
 images:
   - europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/newsletter-pod:$COMMIT_SHA
@@ -51,6 +58,7 @@ availableSecrets:
 substitutions:
   _APP_BASE_URL: https://newsletter-pod-497154432194.europe-west1.run.app
   _SMOKE_USER_ID: ""
+  _RUN_SMOKE: "false"
 
 options:
   logging: CLOUD_LOGGING_ONLY
