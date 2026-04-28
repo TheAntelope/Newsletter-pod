@@ -17,12 +17,6 @@ sources:
     rss_url: https://techcrunch.com/feed/
     enabled: true
 
-  # Has a paid Verge subscription ($7/mo) for some content; RSS gives the free articles.
-  - id: the-verge
-    name: The Verge
-    rss_url: https://www.theverge.com/rss/index.xml
-    enabled: true
-
   # Has a paid Ars Premier tier ($25/yr) for ad-free reading; article content is free.
   - id: ars-technica
     name: Ars Technica
