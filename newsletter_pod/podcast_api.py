@@ -45,13 +45,21 @@ class PodcastApiClient:
         prompt: str,
         title: str,
         voice_id: Optional[str] = None,
+        secondary_voice_id: Optional[str] = None,
+        primary_speaker_name: Optional[str] = None,
     ) -> GeneratedEpisode:
         if not self.enabled:
             raise PodcastApiUnavailable("Podcast API is disabled")
 
         provider = self.provider.strip().lower()
         if provider == "openai":
-            return self._generate_with_openai(prompt=prompt, title=title, voice_id=voice_id)
+            return self._generate_with_openai(
+                prompt=prompt,
+                title=title,
+                voice_id=voice_id,
+                secondary_voice_id=secondary_voice_id,
+                primary_speaker_name=primary_speaker_name,
+            )
         if provider == "generic":
             return self._generate_with_generic(prompt=prompt, title=title)
         raise PodcastApiError(f"Unsupported podcast provider: {self.provider}")
@@ -61,6 +69,8 @@ class PodcastApiClient:
         prompt: str,
         title: str,
         voice_id: Optional[str] = None,
+        secondary_voice_id: Optional[str] = None,
+        primary_speaker_name: Optional[str] = None,
     ) -> GeneratedEpisode:
         if not self.api_key:
             raise PodcastApiUnavailable("OpenAI API key is not configured")
@@ -79,7 +89,16 @@ class PodcastApiClient:
                     f"Audio segment exceeds speech input limit ({speech_max_chars} chars)"
                 )
 
-        audio_chunks = [self._synthesize_speech(segment.text, voice_id) for segment in audio_segments]
+        primary_key = (primary_speaker_name or "").strip().casefold()
+
+        def _voice_for(segment: AudioSegment) -> Optional[str]:
+            if not secondary_voice_id or not primary_key:
+                return voice_id
+            if segment.speaker.strip().casefold() == primary_key:
+                return voice_id
+            return secondary_voice_id
+
+        audio_chunks = [self._synthesize_speech(segment.text, _voice_for(segment)) for segment in audio_segments]
         transcript = "\n\n".join(f"{segment.speaker}: {segment.text}" for segment in audio_segments)
 
         return GeneratedEpisode(

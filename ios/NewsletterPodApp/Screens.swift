@@ -487,19 +487,27 @@ struct SourcesView: View {
 
 struct PodcastSetupView: View {
     static let voiceOptions: [(id: String, name: String)] = [
-        ("suMMgpGbVcnihP1CcgFS", "Demi Dreams"),
         ("hYjzO0gkYN6FIXTHyEpi", "Vinnie Chase"),
+        ("suMMgpGbVcnihP1CcgFS", "Demi Dreams"),
     ]
 
     @EnvironmentObject private var viewModel: AppViewModel
     @State private var displayName = ""
     @State private var title = ""
     @State private var formatPreset = "two_hosts"
-    @State private var primaryHost = "Elena"
-    @State private var secondaryHost = "Marcus"
+    @State private var primaryHost = "Vinnie"
+    @State private var secondaryHost = "Demi"
     @State private var guestNames = "Alex, Sam"
     @State private var durationMinutes = 3.0
     @State private var voiceID: String = PodcastSetupView.voiceOptions[0].id
+
+    private var hostOption: (id: String, name: String) {
+        PodcastSetupView.voiceOptions.first(where: { $0.id == voiceID }) ?? PodcastSetupView.voiceOptions[0]
+    }
+
+    private var commentatorOption: (id: String, name: String) {
+        PodcastSetupView.voiceOptions.first(where: { $0.id != voiceID }) ?? PodcastSetupView.voiceOptions[1]
+    }
 
     var body: some View {
         NavigationStack {
@@ -540,13 +548,27 @@ struct PodcastSetupView: View {
                     }
                 }
 
-                Section("Voice") {
-                    Picker("Narrator voice", selection: $voiceID) {
-                        ForEach(PodcastSetupView.voiceOptions, id: \.id) { option in
-                            Text(option.name).tag(option.id)
-                        }
+                Section("Voices") {
+                    HStack {
+                        Text(formatPreset == "solo_host" ? "Narrator" : "Host")
+                        Spacer()
+                        Text(hostOption.name)
+                            .foregroundStyle(Theme.Palette.muted)
                     }
-                    .pickerStyle(.segmented)
+                    if formatPreset != "solo_host" {
+                        HStack {
+                            Text("Commentator")
+                            Spacer()
+                            Text(commentatorOption.name)
+                                .foregroundStyle(Theme.Palette.muted)
+                        }
+                        Button("Swap voices") {
+                            voiceID = commentatorOption.id
+                        }
+                        .buttonStyle(.amberOutlined)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                    }
                 }
 
                 Section("Duration") {
@@ -590,8 +612,8 @@ struct PodcastSetupView: View {
                 displayName = viewModel.user?.displayName ?? ""
                 title = viewModel.profile?.title ?? "mycast"
                 formatPreset = viewModel.profile?.formatPreset ?? "two_hosts"
-                primaryHost = viewModel.profile?.hostPrimaryName ?? "Elena"
-                secondaryHost = viewModel.profile?.hostSecondaryName ?? "Marcus"
+                primaryHost = viewModel.profile?.hostPrimaryName ?? "Vinnie"
+                secondaryHost = viewModel.profile?.hostSecondaryName ?? "Demi"
                 guestNames = viewModel.profile?.guestNames.joined(separator: ", ") ?? "Alex, Sam"
                 durationMinutes = Double(viewModel.profile?.desiredDurationMinutes ?? 3)
                 if let stored = viewModel.profile?.voiceID,

@@ -47,8 +47,8 @@ class AudioSegment(BaseModel):
 
 
 class PodcastUxConfig(BaseModel):
-    host_primary_name: str = "Elena"
-    host_secondary_name: str = "Marcus"
+    host_primary_name: str = "Vinnie"
+    host_secondary_name: str = "Demi"
     format: str = "anchor_guest"
     tone: str = "calm_analyst"
     target_minutes: int = 6

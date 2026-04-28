@@ -486,8 +486,19 @@ class ControlPlaneService:
         ux = self._build_user_ux(profile, guest_name)
         prompt = build_digest_prompt(items, run_date=local_date, ux=ux)
         title_hint = f"{local_date.isoformat()} weekly briefing"
-        voice_id = profile.voice_id or self.settings.elevenlabs_voice_primary_id
-        generated = self.podcast_client.generate(prompt=prompt, title=title_hint, voice_id=voice_id)
+        primary_voice_id = profile.voice_id or self.settings.elevenlabs_voice_primary_id
+        secondary_voice_id = (
+            self.settings.elevenlabs_voice_secondary_id
+            if primary_voice_id == self.settings.elevenlabs_voice_primary_id
+            else self.settings.elevenlabs_voice_primary_id
+        )
+        generated = self.podcast_client.generate(
+            prompt=prompt,
+            title=title_hint,
+            voice_id=primary_voice_id,
+            secondary_voice_id=secondary_voice_id,
+            primary_speaker_name=ux.host_primary_name,
+        )
 
         episode_id = f"{user_id[:8]}-{local_date.isoformat()}-{uuid4().hex[:8]}"
         object_name, size_bytes = self.storage.upload_audio(
@@ -605,8 +616,8 @@ class ControlPlaneService:
                 user_id=user.id,
                 title="mycast",
                 format_preset="two_hosts",
-                host_primary_name="Elena",
-                host_secondary_name="Marcus",
+                host_primary_name="Vinnie",
+                host_secondary_name="Demi",
                 guest_names=[],
                 desired_duration_minutes=self.settings.free_default_duration_minutes,
                 voice_id=self.settings.elevenlabs_voice_primary_id,

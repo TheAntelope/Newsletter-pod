@@ -22,8 +22,8 @@ class PodcastProfileRecord(BaseModel):
     user_id: str
     title: str = "mycast"
     format_preset: str = "two_hosts"
-    host_primary_name: str = "Elena"
-    host_secondary_name: Optional[str] = "Marcus"
+    host_primary_name: str = "Vinnie"
+    host_secondary_name: Optional[str] = "Demi"
     guest_names: list[str] = Field(default_factory=list)
     desired_duration_minutes: int = 3
     voice_id: Optional[str] = None
