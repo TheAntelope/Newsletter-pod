@@ -312,7 +312,14 @@ class ControlPlaneService:
             "entitlements": self._entitlements_for(self._get_subscription(user_id)).model_dump(mode="json"),
         }
 
-    def update_schedule(self, user_id: str, timezone_name: Optional[str], weekdays: Optional[list[str]]) -> dict[str, Any]:
+    def update_schedule(
+        self,
+        user_id: str,
+        timezone_name: Optional[str],
+        weekdays: Optional[list[str]],
+        local_time: Optional[str] = None,
+        cutoff_time: Optional[str] = None,
+    ) -> dict[str, Any]:
         schedule = self._get_schedule(user_id)
         entitlements = self._entitlements_for(self._get_subscription(user_id))
 
@@ -328,6 +335,18 @@ class ControlPlaneService:
             if not normalized:
                 raise ControlPlaneError("At least one delivery day is required")
             schedule.weekdays = normalized
+
+        if local_time is not None:
+            schedule.local_time = _validate_local_time(local_time)
+            if cutoff_time is None:
+                schedule.cutoff_time = _derive_cutoff_time(
+                    schedule.local_time, self.settings.dispatch_window_hours
+                )
+        if cutoff_time is not None:
+            schedule.cutoff_time = _validate_local_time(cutoff_time)
+
+        if schedule.cutoff_time < schedule.local_time:
+            raise ControlPlaneError("cutoff_time must be at or after local_time")
 
         schedule.updated_at = utc_now()
         self.repository.save_schedule(schedule)
@@ -878,6 +897,27 @@ def _normalize_weekday(value: str) -> str:
     if normalized not in WEEKDAY_NAMES:
         raise ControlPlaneError(f"Invalid weekday: {value}")
     return normalized
+
+
+def _validate_local_time(value: str) -> str:
+    text = (value or "").strip()
+    if len(text) != 5 or text[2] != ":":
+        raise ControlPlaneError(f"Invalid time, expected HH:MM: {value}")
+    hours, minutes = text[:2], text[3:]
+    if not (hours.isdigit() and minutes.isdigit()):
+        raise ControlPlaneError(f"Invalid time, expected HH:MM: {value}")
+    if not (0 <= int(hours) <= 23 and 0 <= int(minutes) <= 59):
+        raise ControlPlaneError(f"Invalid time, expected HH:MM: {value}")
+    return text
+
+
+def _derive_cutoff_time(local_time: str, window_hours: int) -> str:
+    hours = int(local_time[:2])
+    minutes = int(local_time[3:])
+    end_hour = min(hours + max(window_hours, 1), 23)
+    if end_hour == 23 and hours + window_hours > 23:
+        return "23:59"
+    return f"{end_hour:02d}:{minutes:02d}"
 
 
 def _validate_format_preset(value: str) -> None:

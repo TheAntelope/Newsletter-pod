@@ -55,6 +55,8 @@ class UpdatePodcastConfigRequest(BaseModel):
 class UpdateScheduleRequest(BaseModel):
     timezone: Optional[str] = None
     weekdays: Optional[list[str]] = None
+    local_time: Optional[str] = None
+    cutoff_time: Optional[str] = None
 
 
 class BillingNotificationRequest(BaseModel):
@@ -247,6 +249,8 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 user.id,
                 timezone_name=request_payload.timezone,
                 weekdays=request_payload.weekdays,
+                local_time=request_payload.local_time,
+                cutoff_time=request_payload.cutoff_time,
             )
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

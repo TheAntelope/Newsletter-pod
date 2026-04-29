@@ -629,12 +629,19 @@ struct ScheduleSection: View {
     @EnvironmentObject private var viewModel: AppViewModel
     @State private var timezone = TimeZone.current.identifier
     @State private var selectedDays: Set<String> = ["monday"]
+    @State private var deliveryTime: Date = ScheduleSection.defaultDeliveryTime
 
     var body: some View {
         Section("Weekly Delivery") {
             TextField("Timezone", text: $timezone)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+
+            DatePicker(
+                "Delivery time",
+                selection: $deliveryTime,
+                displayedComponents: .hourAndMinute
+            )
 
             ForEach(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], id: \.self) { day in
                 Toggle(day.capitalized, isOn: Binding(
@@ -653,7 +660,8 @@ struct ScheduleSection: View {
                 Task {
                     await viewModel.saveSchedule(
                         timezone: timezone,
-                        weekdays: Array(selectedDays).sorted()
+                        weekdays: Array(selectedDays).sorted(),
+                        localTime: ScheduleSection.formatLocalTime(deliveryTime)
                     )
                 }
             }
@@ -661,14 +669,36 @@ struct ScheduleSection: View {
             .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
 
-            Text("Episodes target 7:00 AM local time with retries through 11:00 AM.")
+            Text("Episodes start generating at the time you pick and retry for the next four hours.")
                 .font(.caption)
                 .foregroundStyle(Theme.Palette.muted)
         }
         .onAppear {
             timezone = viewModel.schedule?.timezone ?? TimeZone.current.identifier
             selectedDays = Set(viewModel.schedule?.weekdays ?? ["monday"])
+            if let storedLocal = viewModel.schedule?.localTime,
+               let parsed = ScheduleSection.parseLocalTime(storedLocal) {
+                deliveryTime = parsed
+            }
         }
+    }
+
+    private static var defaultDeliveryTime: Date {
+        parseLocalTime("07:00") ?? Date()
+    }
+
+    private static func parseLocalTime(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm"
+        return formatter.date(from: value)
+    }
+
+    private static func formatLocalTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
     }
 }
 

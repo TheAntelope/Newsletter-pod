@@ -102,11 +102,16 @@ final class APIClient {
         try await request(path: "/v1/me/schedule", method: "GET", body: Optional<Int>.none, token: token)
     }
 
-    func updateSchedule(token: String, timezone: String, weekdays: [String]) async throws -> ScheduleEnvelope {
+    func updateSchedule(
+        token: String,
+        timezone: String,
+        weekdays: [String],
+        localTime: String
+    ) async throws -> ScheduleEnvelope {
         try await request(
             path: "/v1/me/schedule",
             method: "PATCH",
-            body: UpdateScheduleBody(timezone: timezone, weekdays: weekdays),
+            body: UpdateScheduleBody(timezone: timezone, weekdays: weekdays, localTime: localTime),
             token: token
         )
     }
@@ -233,4 +238,11 @@ private struct UpdatePodcastConfigBody: Encodable {
 private struct UpdateScheduleBody: Encodable {
     let timezone: String
     let weekdays: [String]
+    let localTime: String
+
+    private enum CodingKeys: String, CodingKey {
+        case timezone
+        case weekdays
+        case localTime = "local_time"
+    }
 }

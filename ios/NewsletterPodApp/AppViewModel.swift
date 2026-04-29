@@ -129,10 +129,15 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func saveSchedule(timezone: String, weekdays: [String]) async {
+    func saveSchedule(timezone: String, weekdays: [String], localTime: String) async {
         guard let sessionToken else { return }
         await load {
-            let response = try await apiClient.updateSchedule(token: sessionToken, timezone: timezone, weekdays: weekdays)
+            let response = try await apiClient.updateSchedule(
+                token: sessionToken,
+                timezone: timezone,
+                weekdays: weekdays,
+                localTime: localTime
+            )
             schedule = response.schedule
             entitlements = response.entitlements
             flashSaved("Schedule saved")

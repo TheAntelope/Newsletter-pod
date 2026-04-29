@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     weekly_target_local: str = Field(default="07:00", alias="WEEKLY_TARGET_LOCAL")
     weekly_cutoff_local: str = Field(default="11:00", alias="WEEKLY_CUTOFF_LOCAL")
     dispatch_interval_minutes: int = Field(default=15, alias="DISPATCH_INTERVAL_MINUTES")
+    dispatch_window_hours: int = Field(default=4, alias="DISPATCH_WINDOW_HOURS")
 
     free_max_sources: int = Field(default=5, alias="FREE_MAX_SOURCES")
     paid_max_sources: int = Field(default=15, alias="PAID_MAX_SOURCES")

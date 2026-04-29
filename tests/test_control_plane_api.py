@@ -122,6 +122,30 @@ def test_control_plane_auth_profile_sources_and_schedule_limits():
     assert good_schedule.status_code == 200
     assert good_schedule.json()["schedule"]["weekdays"] == ["wednesday"]
 
+    bad_time = client.patch(
+        "/v1/me/schedule",
+        json={"local_time": "9am"},
+        headers=headers,
+    )
+    assert bad_time.status_code == 400
+
+    custom_time = client.patch(
+        "/v1/me/schedule",
+        json={"local_time": "08:30"},
+        headers=headers,
+    )
+    assert custom_time.status_code == 200
+    assert custom_time.json()["schedule"]["local_time"] == "08:30"
+    assert custom_time.json()["schedule"]["cutoff_time"] == "12:30"
+
+    explicit_window = client.patch(
+        "/v1/me/schedule",
+        json={"local_time": "06:00", "cutoff_time": "07:30"},
+        headers=headers,
+    )
+    assert explicit_window.status_code == 200
+    assert explicit_window.json()["schedule"]["cutoff_time"] == "07:30"
+
 
 def test_paid_feed_isolation_and_billing_unlock():
     container, client = _build_app()
@@ -190,6 +214,70 @@ def test_paid_feed_isolation_and_billing_unlock():
 
     wrong_media = client.get(f"/media/{token_one.token}/ep-two.mp3")
     assert wrong_media.status_code == 404
+
+
+def test_dispatch_due_users_runs_users_in_window(monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    container, client = _build_app()
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier(
+        "apple-user-dispatch", "dispatch@example.com"
+    )
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    user_id = auth.json()["user"]["id"]
+    session_token = auth.json()["session_token"]
+    headers = {"Authorization": f"Bearer {session_token}"}
+
+    catalog = client.get("/v1/sources/catalog").json()["sources"]
+    client.put(
+        "/v1/me/sources",
+        json={"sources": [{"source_id": catalog[0]["source_id"]}]},
+        headers=headers,
+    )
+    container.control_plane.podcast_client = FakePodcastClient()
+
+    def fake_fetch(self, sources):
+        return IngestionResult(
+            items=[
+                SourceItem(
+                    source_id="source-a",
+                    source_name="Source A",
+                    guid="d1",
+                    link="https://example.com/d1",
+                    title="Daily One",
+                    summary="Sum",
+                    published_at=datetime(2026, 4, 29, 8, 0, tzinfo=timezone.utc),
+                    dedupe_key="d1",
+                ),
+            ],
+            cursor_updates={"source-a": datetime(2026, 4, 29, 8, 0, tzinfo=timezone.utc)},
+        )
+
+    monkeypatch.setattr(RSSIngestionService, "fetch_new_items", fake_fetch)
+
+    tz = ZoneInfo("America/Chicago")
+    now_utc = datetime(2026, 4, 29, 13, 5, tzinfo=timezone.utc)
+    local_now = now_utc.astimezone(tz)
+    weekday_name = [
+        "monday", "tuesday", "wednesday", "thursday",
+        "friday", "saturday", "sunday",
+    ][local_now.weekday()]
+
+    set_schedule = client.patch(
+        "/v1/me/schedule",
+        json={
+            "timezone": "America/Chicago",
+            "weekdays": [weekday_name],
+            "local_time": local_now.strftime("%H:%M"),
+        },
+        headers=headers,
+    )
+    assert set_schedule.status_code == 200
+
+    result = container.control_plane.dispatch_due_users(now_utc=now_utc)
+    assert result["processed_count"] == 1
+    assert result["processed"][0]["user_id"] == user_id
+    assert result["processed"][0]["status"] == "published"
 
 
 def test_process_user_generation_records_visible_cap(monkeypatch):

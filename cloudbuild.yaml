@@ -28,6 +28,50 @@ steps:
       - --platform=managed
       - --quiet
 
+  # Provision/refresh the Cloud Scheduler job that ticks the dispatcher.
+  # Prereqs (one-time, outside this build):
+  #   1. Create a service account, e.g. newsletter-pod-scheduler@PROJECT.iam.gserviceaccount.com
+  #   2. Grant it roles/run.invoker on the newsletter-pod Cloud Run service
+  #   3. Grant the Cloud Build SA roles/cloudscheduler.admin and
+  #      roles/iam.serviceAccountUser on the scheduler SA
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: schedule
+    waitFor:
+      - deploy
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        SERVICE_URL=$$(gcloud run services describe newsletter-pod \
+          --region=${_SCHEDULER_REGION} \
+          --format='value(status.url)')
+        SA="${_SCHEDULER_SERVICE_ACCOUNT}"
+        if [ -z "$$SA" ]; then
+          SA="newsletter-pod-scheduler@$PROJECT_ID.iam.gserviceaccount.com"
+        fi
+        if gcloud scheduler jobs describe "${_DISPATCH_JOB_NAME}" \
+            --location=${_SCHEDULER_REGION} >/dev/null 2>&1; then
+          ACTION=update
+        else
+          ACTION=create
+        fi
+        gcloud scheduler jobs "$$ACTION" http "${_DISPATCH_JOB_NAME}" \
+          --location="${_SCHEDULER_REGION}" \
+          --schedule="${_DISPATCH_SCHEDULE}" \
+          --time-zone=UTC \
+          --uri="$$SERVICE_URL/jobs/dispatch-due-users" \
+          --http-method=POST \
+          --oidc-service-account-email="$$SA" \
+          --oidc-token-audience="$$SERVICE_URL" \
+          --attempt-deadline=600s
+
+substitutions:
+  _SCHEDULER_REGION: europe-west1
+  _DISPATCH_JOB_NAME: newsletter-pod-dispatch-due-users
+  _DISPATCH_SCHEDULE: "*/10 * * * *"
+  _SCHEDULER_SERVICE_ACCOUNT: ""
+
 images:
   - europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/newsletter-pod:$COMMIT_SHA
   - europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/newsletter-pod:latest
