@@ -186,6 +186,7 @@ private struct GreetingHeader: View {
 
 private struct HeroEpisodeCard: View {
     @EnvironmentObject private var viewModel: AppViewModel
+    @State private var isDescriptionExpanded = false
 
     var body: some View {
         EditorialCard {
@@ -196,10 +197,7 @@ private struct HeroEpisodeCard: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if let latest = viewModel.feed?.latestEpisode {
-                Text(latest.description)
-                    .font(Theme.Typography.body(15))
-                    .foregroundStyle(Theme.Palette.inkSoft)
-                    .lineLimit(4)
+                CollapsibleDescription(text: latest.description, isExpanded: $isDescriptionExpanded)
 
                 HStack(spacing: Theme.Spacing.m) {
                     if let duration = latest.durationSeconds {
@@ -278,6 +276,74 @@ private struct HeroEpisodeCard: View {
                 if !ok { UIApplication.shared.open(url) }
             }
         }
+    }
+}
+
+private struct CollapsibleDescription: View {
+    let text: String
+    @Binding var isExpanded: Bool
+    @State private var fullHeight: CGFloat = 0
+    @State private var collapsedHeight: CGFloat = 0
+
+    private let collapsedLineLimit = 4
+    private var isTruncated: Bool { fullHeight > collapsedHeight + 1 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            Text(text)
+                .font(Theme.Typography.body(15))
+                .foregroundStyle(Theme.Palette.inkSoft)
+                .lineLimit(isExpanded ? nil : collapsedLineLimit)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(measuringText(lineLimit: nil, key: FullHeightKey.self))
+                .background(measuringText(lineLimit: collapsedLineLimit, key: CollapsedHeightKey.self))
+                .onPreferenceChange(FullHeightKey.self) { fullHeight = $0 }
+                .onPreferenceChange(CollapsedHeightKey.self) { collapsedHeight = $0 }
+
+            if isTruncated {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(isExpanded ? "Show less" : "Show more")
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .font(Theme.Typography.body(13).weight(.semibold))
+                    .foregroundStyle(Theme.Palette.amberDeep)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func measuringText<Key: PreferenceKey>(lineLimit: Int?, key: Key.Type) -> some View where Key.Value == CGFloat {
+        Text(text)
+            .font(Theme.Typography.body(15))
+            .lineLimit(lineLimit)
+            .fixedSize(horizontal: false, vertical: true)
+            .hidden()
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: Key.self, value: proxy.size.height)
+                }
+            )
+    }
+}
+
+private struct FullHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct CollapsedHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
