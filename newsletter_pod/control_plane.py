@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -33,6 +34,8 @@ from .user_models import (
     UserSourceRecord,
 )
 from .user_repository import ControlPlaneRepository
+
+logger = logging.getLogger(__name__)
 from .utils import link_hash, utc_now
 
 COMPLETED_RUN_STATUSES = {PublishStatus.PUBLISHED.value, PublishStatus.NO_CONTENT.value}
@@ -411,6 +414,7 @@ class ControlPlaneService:
         user_id: str,
         now_utc: Optional[datetime] = None,
         force: bool = False,
+        run_id: Optional[str] = None,
     ) -> dict[str, Any]:
         now_utc = now_utc or utc_now()
         user = self._require_user(user_id)
@@ -420,7 +424,8 @@ class ControlPlaneService:
         profile = self._get_profile(user_id)
         sources = [source for source in self.repository.list_user_sources(user_id) if source.enabled]
         local_date = now_utc.astimezone(ZoneInfo(schedule.timezone)).date()
-        run_id = uuid4().hex
+        if run_id is None:
+            run_id = uuid4().hex
 
         if not force and not self._should_attempt_user(user_id, schedule, now_utc):
             run = UserRunRecord(
@@ -583,6 +588,65 @@ class ControlPlaneService:
             "feed_url": self.get_feed_details(user_id)["feed_url"],
             "user": user.model_dump(mode="json"),
         }
+
+    def start_user_generation(self, user_id: str, force: bool = False) -> dict[str, Any]:
+        self._require_user(user_id)
+        existing = self.repository.find_in_progress_user_run(user_id)
+        if existing is not None:
+            return {"run": existing.model_dump(mode="json"), "started": False}
+
+        schedule = self._get_schedule(user_id)
+        now_utc = utc_now()
+        local_date = now_utc.astimezone(ZoneInfo(schedule.timezone)).date()
+        run = UserRunRecord(
+            id=uuid4().hex,
+            user_id=user_id,
+            local_run_date=local_date,
+            started_at=now_utc,
+            completed_at=now_utc,
+            status=PublishStatus.IN_PROGRESS.value,
+            message="Generation in progress",
+        )
+        self.repository.save_user_run(run)
+        return {"run": run.model_dump(mode="json"), "started": True}
+
+    def run_user_generation_in_background(
+        self, *, run_id: str, user_id: str, force: bool = True
+    ) -> None:
+        try:
+            self.process_user_generation(user_id=user_id, force=force, run_id=run_id)
+        except Exception as exc:
+            logger.exception("Background generation failed for run %s", run_id)
+            run = self.repository.get_user_run(run_id)
+            now = utc_now()
+            if run is None:
+                schedule = self._get_schedule(user_id)
+                local_date = now.astimezone(ZoneInfo(schedule.timezone)).date()
+                run = UserRunRecord(
+                    id=run_id,
+                    user_id=user_id,
+                    local_run_date=local_date,
+                    started_at=now,
+                    completed_at=now,
+                    status=PublishStatus.FAILED.value,
+                    message=str(exc)[:500] or "Generation failed",
+                )
+            else:
+                run.status = PublishStatus.FAILED.value
+                run.message = (str(exc)[:500] or "Generation failed")
+                run.completed_at = now
+            self.repository.save_user_run(run)
+
+    def get_user_run_status(self, user_id: str, run_id: str) -> dict[str, Any]:
+        run = self.repository.get_user_run(run_id)
+        if run is None or run.user_id != user_id:
+            raise ControlPlaneError("Run not found")
+        payload: dict[str, Any] = {"run": run.model_dump(mode="json")}
+        if run.published_episode_id:
+            episode = self.repository.get_user_episode(run.published_episode_id)
+            if episode is not None:
+                payload["episode"] = episode.model_dump(mode="json")
+        return payload
 
     def _create_default_user(
         self,

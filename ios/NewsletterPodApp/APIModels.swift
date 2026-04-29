@@ -194,15 +194,29 @@ struct UserEpisodeDTO: Codable {
 }
 
 struct UserRunDTO: Codable {
+    let id: String?
     let status: String
     let message: String
     let candidateCount: Int
     let capHit: Bool
+    let publishedEpisodeID: String?
 
     private enum CodingKeys: String, CodingKey {
+        case id
         case status
         case message
         case candidateCount = "candidate_count"
         case capHit = "cap_hit"
+        case publishedEpisodeID = "published_episode_id"
     }
+}
+
+struct RunStartEnvelope: Codable {
+    let run: UserRunDTO
+    let started: Bool
+}
+
+struct RunStatusEnvelope: Codable {
+    let run: UserRunDTO
+    let episode: UserEpisodeDTO?
 }

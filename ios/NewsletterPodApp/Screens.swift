@@ -237,17 +237,17 @@ private struct HeroEpisodeCard: View {
                 Button {
                     Task { await viewModel.generateNow() }
                 } label: {
-                    if viewModel.isLoading {
+                    if viewModel.isGenerating {
                         HStack(spacing: 8) {
                             ProgressView().tint(Theme.Palette.amberDeep)
-                            Text("Generating…")
+                            Text("Generating… (you can leave the app)")
                         }
                     } else {
                         Label("Generate episode now", systemImage: "wand.and.stars")
                     }
                 }
                 .buttonStyle(.amberOutlined)
-                .disabled(viewModel.isLoading || viewModel.selectedSources.isEmpty)
+                .disabled(viewModel.isGenerating || viewModel.selectedSources.isEmpty)
             }
         }
     }

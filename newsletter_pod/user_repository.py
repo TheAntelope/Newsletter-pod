@@ -114,6 +114,14 @@ class ControlPlaneRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_user_run(self, run_id: str) -> Optional[UserRunRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def find_in_progress_user_run(self, user_id: str) -> Optional[UserRunRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
     def save_cost_record(self, cost_record: CostRecord) -> None:
         raise NotImplementedError
 
@@ -216,6 +224,15 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
             for run in self._runs.values()
             if run.user_id == user_id and run.local_run_date == local_run_date
         ]
+
+    def get_user_run(self, run_id: str) -> Optional[UserRunRecord]:
+        return self._runs.get(run_id)
+
+    def find_in_progress_user_run(self, user_id: str) -> Optional[UserRunRecord]:
+        for run in self._runs.values():
+            if run.user_id == user_id and run.status == "in_progress":
+                return run
+        return None
 
     def save_cost_record(self, cost_record: CostRecord) -> None:
         self._costs[cost_record.run_id] = cost_record
@@ -358,6 +375,24 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
             self._runs.where("user_id", "==", user_id).where("local_run_date_iso", "==", run_date_iso).stream()
         )
         return [UserRunRecord.model_validate(doc.to_dict()) for doc in docs]
+
+    def get_user_run(self, run_id: str) -> Optional[UserRunRecord]:
+        doc = self._runs.document(run_id).get()
+        if not doc.exists:
+            return None
+        return UserRunRecord.model_validate(doc.to_dict())
+
+    def find_in_progress_user_run(self, user_id: str) -> Optional[UserRunRecord]:
+        docs = list(
+            self._runs
+                .where("user_id", "==", user_id)
+                .where("status", "==", "in_progress")
+                .limit(1)
+                .stream()
+        )
+        if not docs:
+            return None
+        return UserRunRecord.model_validate(docs[0].to_dict())
 
     def save_cost_record(self, cost_record: CostRecord) -> None:
         self._costs.document(cost_record.run_id).set(cost_record.model_dump(mode="python"))

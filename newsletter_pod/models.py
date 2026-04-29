@@ -13,6 +13,7 @@ class PublishStatus(str, Enum):
     PRE_ACCESS = "pre_access"
     FAILED = "failed"
     SKIPPED = "skipped"
+    IN_PROGRESS = "in_progress"
 
 
 class SourceDefinition(BaseModel):

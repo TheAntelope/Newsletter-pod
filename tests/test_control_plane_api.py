@@ -192,6 +192,58 @@ def test_paid_feed_isolation_and_billing_unlock():
     assert wrong_media.status_code == 404
 
 
+def test_generate_endpoint_starts_async_run_and_run_status_is_queryable(monkeypatch):
+    container, client = _build_app()
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier("apple-user-async", "async@example.com")
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    session_token = auth.json()["session_token"]
+    headers = {"Authorization": f"Bearer {session_token}"}
+
+    catalog = client.get("/v1/sources/catalog").json()["sources"]
+    client.put(
+        "/v1/me/sources",
+        json={"sources": [{"source_id": catalog[0]["source_id"]}]},
+        headers=headers,
+    )
+
+    container.control_plane.podcast_client = FakePodcastClient()
+
+    def fake_fetch(self, sources):
+        return IngestionResult(
+            items=[
+                SourceItem(
+                    source_id="source-a",
+                    source_name="Source A",
+                    guid="1",
+                    link="https://example.com/1",
+                    title="Story",
+                    summary="Body",
+                    published_at=datetime(2026, 4, 28, 8, 0, tzinfo=timezone.utc),
+                    dedupe_key="1",
+                )
+            ],
+            cursor_updates={"source-a": datetime(2026, 4, 28, 8, 0, tzinfo=timezone.utc)},
+        )
+
+    monkeypatch.setattr(RSSIngestionService, "fetch_new_items", fake_fetch)
+
+    start = client.post("/v1/me/generate", headers=headers)
+    assert start.status_code == 202
+    payload = start.json()
+    assert payload["started"] is True
+    run_id = payload["run"]["id"]
+    assert run_id
+
+    status = client.get(f"/v1/me/runs/{run_id}", headers=headers)
+    assert status.status_code == 200
+    body = status.json()
+    assert body["run"]["id"] == run_id
+    assert body["run"]["status"] in {"in_progress", "published", "no_content"}
+
+    missing = client.get("/v1/me/runs/does-not-exist", headers=headers)
+    assert missing.status_code == 404
+
+
 def test_process_user_generation_records_visible_cap(monkeypatch):
     container, client = _build_app()
     container.control_plane.apple_identity_verifier = FakeAppleVerifier("apple-user-3", "third@example.com")

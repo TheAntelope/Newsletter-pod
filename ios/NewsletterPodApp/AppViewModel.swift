@@ -14,9 +14,12 @@ final class AppViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var savedMessage: String?
+    @Published var activeRunID: String?
 
     let apiClient: APIClient
     let purchaseManager: PurchaseManager
+
+    private var pollTask: Task<Void, Never>?
 
     init(apiClient: APIClient = APIClient(), purchaseManager: PurchaseManager = PurchaseManager()) {
         self.apiClient = apiClient
@@ -25,6 +28,7 @@ final class AppViewModel: ObservableObject {
 
     var isAuthenticated: Bool { sessionToken != nil }
     var isPaid: Bool { subscription?.tier == "paid" }
+    var isGenerating: Bool { activeRunID != nil }
 
     func signIn(identityToken: String, givenName: String? = nil) async {
         await load {
@@ -59,6 +63,16 @@ final class AppViewModel: ObservableObject {
         catalogSources = catalogValue.sources
         selectedSources = sourcesValue.sources
         self.feed = feedValue
+        resumeGenerationPollingIfNeeded()
+    }
+
+    private func resumeGenerationPollingIfNeeded() {
+        guard pollTask == nil else { return }
+        guard let run = feed?.latestRun, run.status == "in_progress", let runID = run.id else {
+            return
+        }
+        activeRunID = runID
+        pollTask = Task { [weak self] in await self?.pollRun(runID: runID) }
     }
 
     func updateProfile(displayName: String, timezone: String) async {
@@ -122,10 +136,53 @@ final class AppViewModel: ObservableObject {
 
     func generateNow() async {
         guard let sessionToken else { return }
-        await load {
-            try await apiClient.generateNow(token: sessionToken)
-            try await refresh()
-            flashSaved("Episode generated")
+        guard activeRunID == nil else { return }
+        do {
+            errorMessage = nil
+            let envelope = try await apiClient.generateNow(token: sessionToken)
+            guard let runID = envelope.run.id else {
+                errorMessage = "Could not start generation"
+                return
+            }
+            activeRunID = runID
+            pollTask?.cancel()
+            pollTask = Task { [weak self] in await self?.pollRun(runID: runID) }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func pollRun(runID: String) async {
+        defer { pollTask = nil }
+        guard let sessionToken else { return }
+        let pollInterval: UInt64 = 5_000_000_000
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(nanoseconds: pollInterval)
+            } catch {
+                return
+            }
+            guard activeRunID == runID else { return }
+            do {
+                let status = try await apiClient.fetchRun(token: sessionToken, runID: runID)
+                if status.run.status != "in_progress" {
+                    activeRunID = nil
+                    try? await refresh()
+                    switch status.run.status {
+                    case "published":
+                        flashSaved("Episode ready")
+                    case "no_content":
+                        flashSaved("No new items today")
+                    case "failed":
+                        errorMessage = status.run.message.isEmpty ? "Generation failed" : status.run.message
+                    default:
+                        break
+                    }
+                    return
+                }
+            } catch {
+                // Transient poll failure — keep trying.
+            }
         }
     }
 

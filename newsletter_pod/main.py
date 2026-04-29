@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -257,11 +257,38 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         assert container.control_plane is not None
         return container.control_plane.get_feed_details(user.id)
 
-    @app.post("/v1/me/generate")
-    def generate_episode_now(authorization: str | None = Header(default=None)) -> dict:
+    @app.post("/v1/me/generate", status_code=status.HTTP_202_ACCEPTED)
+    def generate_episode_now(
+        background_tasks: BackgroundTasks,
+        response: Response,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
         user = _require_session_user(container, authorization)
         assert container.control_plane is not None
-        return container.control_plane.process_user_generation(user_id=user.id, force=True)
+        result = container.control_plane.start_user_generation(user_id=user.id, force=True)
+        if result.get("started"):
+            run_id = result["run"]["id"]
+            background_tasks.add_task(
+                container.control_plane.run_user_generation_in_background,
+                run_id=run_id,
+                user_id=user.id,
+                force=True,
+            )
+        else:
+            response.status_code = status.HTTP_200_OK
+        return result
+
+    @app.get("/v1/me/runs/{run_id}")
+    def get_user_run(
+        run_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.get_user_run_status(user_id=user.id, run_id=run_id)
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
     @app.post("/v1/billing/app-store/notifications")
     def receive_billing_notification(request_payload: BillingNotificationRequest) -> dict:
