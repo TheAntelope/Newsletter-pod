@@ -282,11 +282,23 @@ private struct HeroEpisodeCard: View {
 private struct CollapsibleDescription: View {
     let text: String
     @Binding var isExpanded: Bool
-    @State private var fullHeight: CGFloat = 0
-    @State private var collapsedHeight: CGFloat = 0
+    @State private var availableWidth: CGFloat = 0
 
     private let collapsedLineLimit = 4
-    private var isTruncated: Bool { fullHeight > collapsedHeight + 1 }
+    private let bodyFont = UIFont.systemFont(ofSize: 15)
+
+    private var isTruncated: Bool {
+        guard availableWidth > 0 else { return false }
+        let constraint = CGSize(width: availableWidth, height: .greatestFiniteMagnitude)
+        let bounds = (text as NSString).boundingRect(
+            with: constraint,
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: bodyFont],
+            context: nil
+        )
+        let lineCount = bounds.height / bodyFont.lineHeight
+        return lineCount > CGFloat(collapsedLineLimit) + 0.1
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
@@ -295,10 +307,16 @@ private struct CollapsibleDescription: View {
                 .foregroundStyle(Theme.Palette.inkSoft)
                 .lineLimit(isExpanded ? nil : collapsedLineLimit)
                 .fixedSize(horizontal: false, vertical: true)
-                .background(measuringText(lineLimit: nil, key: FullHeightKey.self))
-                .background(measuringText(lineLimit: collapsedLineLimit, key: CollapsedHeightKey.self))
-                .onPreferenceChange(FullHeightKey.self) { fullHeight = $0 }
-                .onPreferenceChange(CollapsedHeightKey.self) { collapsedHeight = $0 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { availableWidth = proxy.size.width }
+                            .onChange(of: proxy.size.width) { _, newValue in
+                                availableWidth = newValue
+                            }
+                    }
+                )
 
             if isTruncated {
                 Button {
@@ -317,33 +335,6 @@ private struct CollapsibleDescription: View {
                 .buttonStyle(.plain)
             }
         }
-    }
-
-    private func measuringText<Key: PreferenceKey>(lineLimit: Int?, key: Key.Type) -> some View where Key.Value == CGFloat {
-        Text(text)
-            .font(Theme.Typography.body(15))
-            .lineLimit(lineLimit)
-            .fixedSize(horizontal: false, vertical: true)
-            .hidden()
-            .background(
-                GeometryReader { proxy in
-                    Color.clear.preference(key: Key.self, value: proxy.size.height)
-                }
-            )
-    }
-}
-
-private struct FullHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-private struct CollapsedHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
     }
 }
 
