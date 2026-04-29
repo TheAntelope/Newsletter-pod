@@ -186,6 +186,7 @@ private struct GreetingHeader: View {
 
 private struct HeroEpisodeCard: View {
     @EnvironmentObject private var viewModel: AppViewModel
+    @State private var isDescriptionExpanded = false
 
     var body: some View {
         EditorialCard {
@@ -196,10 +197,7 @@ private struct HeroEpisodeCard: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if let latest = viewModel.feed?.latestEpisode {
-                Text(latest.description)
-                    .font(Theme.Typography.body(15))
-                    .foregroundStyle(Theme.Palette.inkSoft)
-                    .lineLimit(4)
+                CollapsibleDescription(text: latest.description, isExpanded: $isDescriptionExpanded)
 
                 HStack(spacing: Theme.Spacing.m) {
                     if let duration = latest.durationSeconds {
@@ -276,6 +274,65 @@ private struct HeroEpisodeCard: View {
         if let podcastURL = components.url {
             UIApplication.shared.open(podcastURL) { ok in
                 if !ok { UIApplication.shared.open(url) }
+            }
+        }
+    }
+}
+
+private struct CollapsibleDescription: View {
+    let text: String
+    @Binding var isExpanded: Bool
+    @State private var availableWidth: CGFloat = 0
+
+    private let collapsedLineLimit = 4
+    private let bodyFont = UIFont.systemFont(ofSize: 15)
+
+    private var isTruncated: Bool {
+        guard availableWidth > 0 else { return false }
+        let constraint = CGSize(width: availableWidth, height: .greatestFiniteMagnitude)
+        let bounds = (text as NSString).boundingRect(
+            with: constraint,
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: bodyFont],
+            context: nil
+        )
+        let lineCount = bounds.height / bodyFont.lineHeight
+        return lineCount > CGFloat(collapsedLineLimit) + 0.1
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            Text(text)
+                .font(Theme.Typography.body(15))
+                .foregroundStyle(Theme.Palette.inkSoft)
+                .lineLimit(isExpanded ? nil : collapsedLineLimit)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { availableWidth = proxy.size.width }
+                            .onChange(of: proxy.size.width) { _, newValue in
+                                availableWidth = newValue
+                            }
+                    }
+                )
+
+            if isTruncated {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(isExpanded ? "Show less" : "Show more")
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .font(Theme.Typography.body(13).weight(.semibold))
+                    .foregroundStyle(Theme.Palette.amberDeep)
+                }
+                .buttonStyle(.plain)
             }
         }
     }
