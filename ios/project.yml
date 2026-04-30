@@ -40,13 +40,34 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.news
         ENABLE_PREVIEWS: YES
+  NewsletterPodUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: NewsletterPodUITests
+    dependencies:
+      - target: NewsletterPod
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.newsletterpod.app.uitests
+        TEST_TARGET_NAME: NewsletterPod
+        SWIFT_VERSION: "5.10"
+        DEVELOPMENT_TEAM: "R7HS2T53Z8"
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
 schemes:
   NewsletterPod:
     build:
       targets:
         NewsletterPod: all
+        NewsletterPodUITests: [test]
     run:
       config: Debug
       storeKitConfiguration: NewsletterPodApp/Configuration.storekit
+    test:
+      config: Debug
+      targets:
+        - NewsletterPodUITests
     archive:
       config: Release

@@ -30,12 +30,43 @@ final class AppViewModel: ObservableObject {
 
     let apiClient: APIClient
     let purchaseManager: PurchaseManager
+    let isUITestMode: Bool
 
     private var pollTask: Task<Void, Never>?
 
     init(apiClient: APIClient = APIClient(), purchaseManager: PurchaseManager = PurchaseManager()) {
         self.apiClient = apiClient
         self.purchaseManager = purchaseManager
+        self.isUITestMode = ProcessInfo.processInfo.arguments.contains("-uiTestMode")
+        if isUITestMode {
+            applyUITestSeed()
+        }
+    }
+
+    private func applyUITestSeed() {
+        UserDefaults.standard.removeObject(forKey: Self.onboardingCompleteKey)
+        sessionToken = "ui-test-token"
+        user = UserDTO(
+            id: "ui-test-user",
+            email: nil,
+            displayName: "Listener",
+            timezone: TimeZone.current.identifier
+        )
+        subscription = SubscriptionDTO(
+            userID: "ui-test-user",
+            tier: "free",
+            status: "active",
+            productID: nil
+        )
+        entitlements = EntitlementsDTO(
+            tier: "free",
+            maxSources: 5,
+            maxDeliveryDays: 7,
+            minDurationMinutes: 3,
+            maxDurationMinutes: 8,
+            maxItemsPerEpisode: 25
+        )
+        showOnboarding = true
     }
 
     var isAuthenticated: Bool { sessionToken != nil }
@@ -58,6 +89,7 @@ final class AppViewModel: ObservableObject {
 
     func evaluateOnboardingTrigger() {
         guard isAuthenticated else { return }
+        if isUITestMode { showOnboarding = true; return }
         if UserDefaults.standard.bool(forKey: Self.onboardingCompleteKey) { return }
         if !selectedSources.isEmpty {
             UserDefaults.standard.set(true, forKey: Self.onboardingCompleteKey)
@@ -76,6 +108,7 @@ final class AppViewModel: ObservableObject {
     }
 
     func refresh() async throws {
+        if isUITestMode { return }
         guard let sessionToken else { return }
         async let me = apiClient.fetchMe(token: sessionToken)
         async let catalog = apiClient.fetchCatalog()
