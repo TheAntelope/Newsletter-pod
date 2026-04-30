@@ -12,12 +12,17 @@ struct RootView: View {
                 DashboardTabView()
                     .task {
                         try? await viewModel.refresh()
+                        viewModel.evaluateOnboardingTrigger()
                     }
             } else {
                 SignInView()
             }
         }
         .tint(Theme.Palette.amberDeep)
+        .fullScreenCover(isPresented: $viewModel.showOnboarding) {
+            OnboardingFlowView()
+                .environmentObject(viewModel)
+        }
         .overlay(alignment: .top) {
             VStack(spacing: 8) {
                 if let errorMessage = viewModel.errorMessage {
@@ -95,6 +100,8 @@ struct SignInView: View {
 }
 
 struct DashboardTabView: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
     init() {
         let appearance = UITabBarAppearance()
         appearance.configureWithOpaqueBackground()
@@ -104,17 +111,22 @@ struct DashboardTabView: View {
     }
 
     var body: some View {
-        TabView {
+        TabView(selection: $viewModel.selectedTab) {
             HomeView()
                 .tabItem { Label("Home", systemImage: "house.fill") }
+                .tag(DashboardTab.home)
             SourcesView()
                 .tabItem { Label("Sources", systemImage: "tray.full") }
+                .tag(DashboardTab.sources)
             PodcastSetupView()
                 .tabItem { Label("Podcast", systemImage: "mic.fill") }
+                .tag(DashboardTab.podcast)
             FeedAccessView()
                 .tabItem { Label("Feed", systemImage: "antenna.radiowaves.left.and.right") }
+                .tag(DashboardTab.feed)
             PaywallView()
                 .tabItem { Label("Upgrade", systemImage: "sparkles") }
+                .tag(DashboardTab.upgrade)
         }
     }
 }
@@ -207,8 +219,19 @@ private struct HeroEpisodeCard: View {
                 }
                 .font(Theme.Typography.body(13))
                 .foregroundStyle(Theme.Palette.muted)
+            } else if viewModel.selectedSources.isEmpty {
+                Text("Tap below for a guided setup — pick sources, choose a format, and we'll start your first episode.")
+                    .font(Theme.Typography.body(15))
+                    .foregroundStyle(Theme.Palette.inkSoft)
+
+                Button {
+                    viewModel.resumeOnboarding()
+                } label: {
+                    Label("Start guided setup", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.amberFilled)
             } else {
-                Text("Once your first episode is ready, it will appear here. Configure your sources and delivery schedule to get started.")
+                Text("Your sources are set. Tap Generate below to make your first episode now, or wait for your scheduled delivery.")
                     .font(Theme.Typography.body(15))
                     .foregroundStyle(Theme.Palette.inkSoft)
             }
@@ -455,11 +478,42 @@ private struct SetupChecklistCard: View {
             EditorialCard {
                 MetaLabel(text: "Setup checklist")
                 VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                    ChecklistRow(label: "Pick at least one source", isComplete: hasSources)
-                    ChecklistRow(label: "Configure your show", isComplete: hasShowConfigured)
-                    ChecklistRow(label: "Set a delivery schedule", isComplete: hasSchedule)
-                    ChecklistRow(label: "First episode ready", isComplete: hasEpisode)
+                    Button {
+                        viewModel.selectedTab = .sources
+                    } label: {
+                        ChecklistRow(label: "Pick at least one source", isComplete: hasSources)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        viewModel.selectedTab = .podcast
+                    } label: {
+                        ChecklistRow(label: "Configure your show", isComplete: hasShowConfigured)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        viewModel.selectedTab = .podcast
+                    } label: {
+                        ChecklistRow(label: "Set a delivery schedule", isComplete: hasSchedule)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        Task { await viewModel.generateNow() }
+                    } label: {
+                        ChecklistRow(label: "First episode ready", isComplete: hasEpisode)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!hasSources || hasEpisode)
                 }
+
+                Button {
+                    viewModel.resumeOnboarding()
+                } label: {
+                    Label("Resume guided setup", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.amberOutlined)
             }
         }
     }
@@ -1010,5 +1064,605 @@ private struct PlanCard: View {
             }
             .buttonStyle(.amberFilled)
         }
+    }
+}
+
+// MARK: - Onboarding
+
+struct OnboardingStarterPack: Identifiable {
+    let id: String
+    let name: String
+    let summary: String
+    let icon: String
+    let sourceIDs: [String]
+
+    static let all: [OnboardingStarterPack] = [
+        OnboardingStarterPack(
+            id: "tech-daily",
+            name: "Tech daily",
+            summary: "TechCrunch, Hacker News, GeekWire.",
+            icon: "bolt.fill",
+            sourceIDs: ["techcrunch", "hacker-news", "geekwire-startups"]
+        ),
+        OnboardingStarterPack(
+            id: "deep-reads",
+            name: "Deep reads",
+            summary: "Ars Technica, MIT Technology Review, WIRED Business.",
+            icon: "book.fill",
+            sourceIDs: ["ars-technica", "mit-technology-review", "wired-business"]
+        ),
+        OnboardingStarterPack(
+            id: "strategy",
+            name: "Strategy & business",
+            summary: "Stratechery, WIRED Business, VentureBeat.",
+            icon: "chart.line.uptrend.xyaxis",
+            sourceIDs: ["stratechery", "wired-business", "venturebeat"]
+        ),
+        OnboardingStarterPack(
+            id: "mix",
+            name: "Mix it up",
+            summary: "A balanced rotation across news, analysis, and deep tech.",
+            icon: "sparkles",
+            sourceIDs: ["hacker-news", "techcrunch", "ars-technica", "mit-technology-review"]
+        ),
+    ]
+}
+
+struct OnboardingShowPreset: Identifiable {
+    let id: String
+    let name: String
+    let tagline: String
+    let formatPreset: String
+    let primaryHost: String
+    let secondaryHost: String?
+    let durationMinutes: Int
+
+    static let all: [OnboardingShowPreset] = [
+        OnboardingShowPreset(
+            id: "quick",
+            name: "Quick brief",
+            tagline: "3 minutes • solo host",
+            formatPreset: "solo_host",
+            primaryHost: "Vinnie",
+            secondaryHost: nil,
+            durationMinutes: 3
+        ),
+        OnboardingShowPreset(
+            id: "twohost",
+            name: "Two-host show",
+            tagline: "5 minutes • banter between two hosts",
+            formatPreset: "two_hosts",
+            primaryHost: "Vinnie",
+            secondaryHost: "Demi",
+            durationMinutes: 5
+        ),
+        OnboardingShowPreset(
+            id: "deep",
+            name: "Deep dive",
+            tagline: "8 minutes • two hosts, more depth",
+            formatPreset: "two_hosts",
+            primaryHost: "Vinnie",
+            secondaryHost: "Demi",
+            durationMinutes: 8
+        ),
+    ]
+}
+
+enum OnboardingScheduleChoice: String, CaseIterable, Identifiable {
+    case daily, weekdays, weekly
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .daily: return "Daily"
+        case .weekdays: return "Weekdays"
+        case .weekly: return "Weekly"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .daily: return "Every day at 7:00 AM local time."
+        case .weekdays: return "Monday through Friday at 7:00 AM."
+        case .weekly: return "Mondays at 7:00 AM."
+        }
+    }
+
+    var weekdays: [String] {
+        switch self {
+        case .daily:
+            return ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        case .weekdays:
+            return ["monday", "tuesday", "wednesday", "thursday", "friday"]
+        case .weekly:
+            return ["monday"]
+        }
+    }
+}
+
+struct OnboardingFlowView: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @State private var step: Int = 0
+    @State private var selectedPackIDs: Set<String> = ["tech-daily"]
+    @State private var selectedShowPresetID: String = "twohost"
+    @State private var selectedSchedule: OnboardingScheduleChoice = .daily
+
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .top) {
+                Theme.Palette.cream.ignoresSafeArea()
+                stepContent
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    OnboardingProgressDots(current: step, total: 5)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if step < 4 {
+                        Button("Skip") { viewModel.completeOnboarding() }
+                            .foregroundStyle(Theme.Palette.muted)
+                    }
+                }
+            }
+            .toolbarBackground(Theme.Palette.cream, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+        }
+        .tint(Theme.Palette.amberDeep)
+    }
+
+    @ViewBuilder
+    private var stepContent: some View {
+        switch step {
+        case 0:
+            OnboardingWelcomeStep(
+                firstName: firstName,
+                onContinue: { step = 1 }
+            )
+        case 1:
+            OnboardingSourcesStep(
+                selected: $selectedPackIDs,
+                onBack: { step = 0 },
+                onContinue: {
+                    Task {
+                        await saveSourcesFromPacks()
+                        step = 2
+                    }
+                }
+            )
+        case 2:
+            OnboardingShowStep(
+                selected: $selectedShowPresetID,
+                onBack: { step = 1 },
+                onContinue: {
+                    Task {
+                        await saveShowPreset()
+                        step = 3
+                    }
+                }
+            )
+        case 3:
+            OnboardingScheduleStep(
+                selected: $selectedSchedule,
+                onBack: { step = 2 },
+                onContinue: {
+                    Task {
+                        await saveSchedule()
+                        step = 4
+                    }
+                }
+            )
+        default:
+            OnboardingDoneStep(
+                onFinish: { viewModel.completeOnboarding() }
+            )
+        }
+    }
+
+    private var firstName: String {
+        let trimmed = (viewModel.user?.displayName ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.split(separator: " ").first.map(String.init) ?? trimmed
+    }
+
+    private func saveSourcesFromPacks() async {
+        let ids = Set(
+            OnboardingStarterPack.all
+                .filter { selectedPackIDs.contains($0.id) }
+                .flatMap { $0.sourceIDs }
+        )
+        guard !ids.isEmpty else { return }
+        await viewModel.saveSources(catalogIDs: Array(ids), customURLs: [])
+    }
+
+    private func saveShowPreset() async {
+        guard let preset = OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID }) else { return }
+        let title = (viewModel.profile?.title.isEmpty == false) ? viewModel.profile!.title : "mycast"
+        let voiceID = viewModel.profile?.voiceID ?? PodcastSetupView.voiceOptions[0].id
+        await viewModel.savePodcastConfig(
+            title: title,
+            formatPreset: preset.formatPreset,
+            primaryHost: preset.primaryHost,
+            secondaryHost: preset.secondaryHost,
+            guestNames: [],
+            desiredDurationMinutes: preset.durationMinutes,
+            voiceID: voiceID
+        )
+    }
+
+    private func saveSchedule() async {
+        let timezone = viewModel.user?.timezone ?? TimeZone.current.identifier
+        await viewModel.saveSchedule(timezone: timezone, weekdays: selectedSchedule.weekdays)
+    }
+}
+
+private struct OnboardingProgressDots: View {
+    let current: Int
+    let total: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<total, id: \.self) { index in
+                Circle()
+                    .fill(index <= current ? Theme.Palette.amber : Theme.Palette.rule)
+                    .frame(width: 6, height: 6)
+            }
+        }
+    }
+}
+
+private struct OnboardingStepShell<Content: View>: View {
+    let title: String
+    let subtitle: String
+    let primaryLabel: String
+    let primaryDisabled: Bool
+    let onPrimary: () -> Void
+    let onBack: (() -> Void)?
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                        Text(title)
+                            .font(Theme.Typography.display(32))
+                            .foregroundStyle(Theme.Palette.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(subtitle)
+                            .font(Theme.Typography.body(16))
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    content()
+                }
+                .padding(.horizontal, Theme.Spacing.l)
+                .padding(.top, Theme.Spacing.m)
+                .padding(.bottom, Theme.Spacing.l)
+            }
+
+            VStack(spacing: Theme.Spacing.s) {
+                Button(action: onPrimary) {
+                    Text(primaryLabel)
+                }
+                .buttonStyle(.amberFilled)
+                .disabled(primaryDisabled)
+
+                if let onBack {
+                    Button(action: onBack) {
+                        Text("Back")
+                    }
+                    .buttonStyle(.amberOutlined)
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.l)
+            .padding(.bottom, Theme.Spacing.l)
+        }
+    }
+}
+
+private struct OnboardingWelcomeStep: View {
+    let firstName: String
+    let onContinue: () -> Void
+
+    var body: some View {
+        OnboardingStepShell(
+            title: greeting,
+            subtitle: "Here's how mycast works — about 30 seconds, then we'll start your first episode.",
+            primaryLabel: "Let's set it up",
+            primaryDisabled: false,
+            onPrimary: onContinue,
+            onBack: nil
+        ) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                bullet(icon: "tray.full", title: "Pick your sources", text: "Curated packs of feeds, or pick your own.")
+                bullet(icon: "waveform", title: "We generate audio", text: "Hosts read the latest items in your show.")
+                bullet(icon: "antenna.radiowaves.left.and.right", title: "Listen in Apple Podcasts", text: "A private feed lands every delivery day.")
+            }
+        }
+    }
+
+    private var greeting: String {
+        firstName.isEmpty ? "Welcome to mycast." : "Hi \(firstName) — welcome to mycast."
+    }
+
+    private func bullet(icon: String, title: String, text: String) -> some View {
+        EditorialCard {
+            HStack(alignment: .top, spacing: Theme.Spacing.m) {
+                Image(systemName: icon)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.amberDeep)
+                    .frame(width: 32)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(Theme.Typography.title(17))
+                        .foregroundStyle(Theme.Palette.ink)
+                    Text(text)
+                        .font(Theme.Typography.body(14))
+                        .foregroundStyle(Theme.Palette.inkSoft)
+                }
+            }
+        }
+    }
+}
+
+private struct OnboardingSourcesStep: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @Binding var selected: Set<String>
+    let onBack: () -> Void
+    let onContinue: () -> Void
+
+    var body: some View {
+        OnboardingStepShell(
+            title: "Pick a starter pack.",
+            subtitle: "Choose one or more — you can fine-tune individual feeds later on the Sources tab.",
+            primaryLabel: viewModel.isLoading ? "Saving…" : "Continue",
+            primaryDisabled: selected.isEmpty || viewModel.isLoading,
+            onPrimary: onContinue,
+            onBack: onBack
+        ) {
+            VStack(spacing: Theme.Spacing.m) {
+                ForEach(OnboardingStarterPack.all) { pack in
+                    PackCard(
+                        pack: pack,
+                        isSelected: selected.contains(pack.id),
+                        onToggle: { toggle(pack.id) }
+                    )
+                }
+            }
+        }
+    }
+
+    private func toggle(_ id: String) {
+        if selected.contains(id) {
+            selected.remove(id)
+        } else {
+            selected.insert(id)
+        }
+    }
+
+    private struct PackCard: View {
+        let pack: OnboardingStarterPack
+        let isSelected: Bool
+        let onToggle: () -> Void
+
+        var body: some View {
+            Button(action: onToggle) {
+                EditorialCard {
+                    HStack(alignment: .top, spacing: Theme.Spacing.m) {
+                        Image(systemName: pack.icon)
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(isSelected ? Theme.Palette.amberDeep : Theme.Palette.muted)
+                            .frame(width: 32)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(pack.name)
+                                .font(Theme.Typography.title(18))
+                                .foregroundStyle(Theme.Palette.ink)
+                            Text(pack.summary)
+                                .font(Theme.Typography.body(14))
+                                .foregroundStyle(Theme.Palette.inkSoft)
+                                .multilineTextAlignment(.leading)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 22))
+                            .foregroundStyle(isSelected ? Theme.Palette.amber : Theme.Palette.rule)
+                    }
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                        .stroke(isSelected ? Theme.Palette.amber : Color.clear, lineWidth: 2)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+private struct OnboardingShowStep: View {
+    @Binding var selected: String
+    let onBack: () -> Void
+    let onContinue: () -> Void
+
+    var body: some View {
+        OnboardingStepShell(
+            title: "Pick a show shape.",
+            subtitle: "We'll use these defaults for your hosts and length. You can customize on the Podcast tab any time.",
+            primaryLabel: "Continue",
+            primaryDisabled: false,
+            onPrimary: onContinue,
+            onBack: onBack
+        ) {
+            VStack(spacing: Theme.Spacing.m) {
+                ForEach(OnboardingShowPreset.all) { preset in
+                    PresetCard(
+                        preset: preset,
+                        isSelected: preset.id == selected,
+                        onSelect: { selected = preset.id }
+                    )
+                }
+            }
+        }
+    }
+
+    private struct PresetCard: View {
+        let preset: OnboardingShowPreset
+        let isSelected: Bool
+        let onSelect: () -> Void
+
+        var body: some View {
+            Button(action: onSelect) {
+                EditorialCard {
+                    HStack(alignment: .top, spacing: Theme.Spacing.m) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(preset.name)
+                                .font(Theme.Typography.title(18))
+                                .foregroundStyle(Theme.Palette.ink)
+                            Text(preset.tagline)
+                                .font(Theme.Typography.body(14))
+                                .foregroundStyle(Theme.Palette.inkSoft)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 22))
+                            .foregroundStyle(isSelected ? Theme.Palette.amber : Theme.Palette.rule)
+                    }
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                        .stroke(isSelected ? Theme.Palette.amber : Color.clear, lineWidth: 2)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+private struct OnboardingScheduleStep: View {
+    @Binding var selected: OnboardingScheduleChoice
+    let onBack: () -> Void
+    let onContinue: () -> Void
+
+    var body: some View {
+        OnboardingStepShell(
+            title: "When should it land?",
+            subtitle: "Episodes target 7:00 AM in your local timezone (\(TimeZone.current.identifier)).",
+            primaryLabel: "Continue",
+            primaryDisabled: false,
+            onPrimary: onContinue,
+            onBack: onBack
+        ) {
+            VStack(spacing: Theme.Spacing.s) {
+                ForEach(OnboardingScheduleChoice.allCases) { choice in
+                    Button {
+                        selected = choice
+                    } label: {
+                        EditorialCard {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(choice.label)
+                                        .font(Theme.Typography.title(18))
+                                        .foregroundStyle(Theme.Palette.ink)
+                                    Text(choice.detail)
+                                        .font(Theme.Typography.body(14))
+                                        .foregroundStyle(Theme.Palette.inkSoft)
+                                }
+                                Spacer(minLength: 0)
+                                Image(systemName: selected == choice ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 22))
+                                    .foregroundStyle(selected == choice ? Theme.Palette.amber : Theme.Palette.rule)
+                            }
+                        }
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                                .stroke(selected == choice ? Theme.Palette.amber : Color.clear, lineWidth: 2)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+private struct OnboardingDoneStep: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    let onFinish: () -> Void
+    @State private var didTriggerGeneration = false
+
+    var body: some View {
+        OnboardingStepShell(
+            title: "You're set.",
+            subtitle: "Your first episode is being made now — about 3-5 minutes. Subscribe in Apple Podcasts so it lands automatically when ready.",
+            primaryLabel: "Open Apple Podcasts",
+            primaryDisabled: viewModel.feed?.feedURL == nil,
+            onPrimary: openInApplePodcasts,
+            onBack: nil
+        ) {
+            VStack(spacing: Theme.Spacing.m) {
+                EditorialCard {
+                    HStack(spacing: Theme.Spacing.m) {
+                        if viewModel.isGenerating {
+                            ProgressView().tint(Theme.Palette.amberDeep)
+                        } else {
+                            Image(systemName: "wand.and.stars")
+                                .foregroundStyle(Theme.Palette.amberDeep)
+                                .font(.system(size: 22, weight: .semibold))
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(viewModel.isGenerating ? "Generating your first episode…" : "Episode requested")
+                                .font(Theme.Typography.title(17))
+                                .foregroundStyle(Theme.Palette.ink)
+                            Text("You can close this and come back later.")
+                                .font(Theme.Typography.body(13))
+                                .foregroundStyle(Theme.Palette.inkSoft)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+
+                Button {
+                    UIPasteboard.general.string = viewModel.feed?.feedURL
+                } label: {
+                    Label("Copy feed link", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.amberOutlined)
+                .disabled(viewModel.feed?.feedURL == nil)
+
+                Button {
+                    onFinish()
+                } label: {
+                    Text("Go to dashboard")
+                        .font(Theme.Typography.body(14).weight(.semibold))
+                        .foregroundStyle(Theme.Palette.muted)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, Theme.Spacing.s)
+            }
+        }
+        .task {
+            guard !didTriggerGeneration else { return }
+            didTriggerGeneration = true
+            await viewModel.generateNow()
+        }
+    }
+
+    private func openInApplePodcasts() {
+        guard let urlString = viewModel.feed?.feedURL,
+              let url = URL(string: urlString),
+              let host = url.host else {
+            onFinish()
+            return
+        }
+        var components = URLComponents()
+        components.scheme = "podcast"
+        components.host = host
+        components.path = url.path
+        if let podcastURL = components.url {
+            UIApplication.shared.open(podcastURL) { ok in
+                if !ok { UIApplication.shared.open(url) }
+            }
+        }
+        onFinish()
     }
 }
