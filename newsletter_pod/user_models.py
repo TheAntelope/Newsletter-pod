@@ -14,6 +14,7 @@ class UserRecord(BaseModel):
     email: Optional[str] = None
     display_name: str = "Listener"
     timezone: str = "UTC"
+    inbound_alias: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -107,6 +108,22 @@ class UserRunRecord(BaseModel):
     dropped_item_count: int = 0
     cap_hit: bool = False
     published_episode_id: Optional[str] = None
+
+
+class InboundEmailItem(BaseModel):
+    """A single newsletter email captured via the Mailgun inbound webhook."""
+
+    id: str  # deterministic: hash(message_id || user_id)
+    user_id: str
+    message_id: Optional[str] = None  # RFC 822 Message-Id, for dedupe
+    from_email: str  # canonical sender address
+    from_name: Optional[str] = None
+    sender_domain: str  # parsed from from_email, e.g. "stratechery.com"
+    subject: str
+    body_text: str  # cleaned plaintext body
+    article_url: Optional[str] = None  # extracted "read on web" link if found
+    received_at: datetime
+    consumed_at: Optional[datetime] = None  # set when included in an episode
 
 
 class CostRecord(BaseModel):

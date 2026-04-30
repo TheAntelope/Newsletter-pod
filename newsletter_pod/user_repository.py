@@ -11,6 +11,7 @@ from .user_models import (
     CostRecord,
     DeliveryScheduleRecord,
     FeedTokenRecord,
+    InboundEmailItem,
     PodcastProfileRecord,
     SubscriptionRecord,
     UserEpisodeRecord,
@@ -129,6 +130,18 @@ class ControlPlaneRepository(ABC):
     def save_billing_event(self, event: BillingEventRecord) -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    def get_user_by_inbound_alias(self, alias: str) -> Optional[UserRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_inbound_item(self, item: InboundEmailItem) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_inbound_item(self, item_id: str) -> Optional[InboundEmailItem]:
+        raise NotImplementedError
+
 
 class InMemoryControlPlaneRepository(ControlPlaneRepository):
     def __init__(self) -> None:
@@ -145,6 +158,7 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         self._runs: dict[str, UserRunRecord] = {}
         self._costs: dict[str, CostRecord] = {}
         self._billing_events: dict[str, BillingEventRecord] = {}
+        self._inbound_items: dict[str, InboundEmailItem] = {}
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         return self._users.get(user_id)
@@ -240,6 +254,18 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
     def save_billing_event(self, event: BillingEventRecord) -> None:
         self._billing_events[event.id] = event
 
+    def get_user_by_inbound_alias(self, alias: str) -> Optional[UserRecord]:
+        for user in self._users.values():
+            if (user.inbound_alias or "").lower() == alias.lower():
+                return user
+        return None
+
+    def save_inbound_item(self, item: InboundEmailItem) -> None:
+        self._inbound_items[item.id] = item
+
+    def get_inbound_item(self, item_id: str) -> Optional[InboundEmailItem]:
+        return self._inbound_items.get(item_id)
+
 
 class FirestoreControlPlaneRepository(ControlPlaneRepository):
     def __init__(self, collection_prefix: str) -> None:
@@ -255,6 +281,7 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         self._cursors = self._db.collection(f"{collection_prefix}_user_cursors")
         self._costs = self._db.collection(f"{collection_prefix}_cost_records")
         self._billing_events = self._db.collection(f"{collection_prefix}_billing_events")
+        self._inbound_items = self._db.collection(f"{collection_prefix}_inbound_items")
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         doc = self._users.document(user_id).get()
@@ -399,3 +426,20 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
 
     def save_billing_event(self, event: BillingEventRecord) -> None:
         self._billing_events.document(event.id).set(event.model_dump(mode="python"))
+
+    def get_user_by_inbound_alias(self, alias: str) -> Optional[UserRecord]:
+        docs = list(
+            self._users.where("inbound_alias", "==", alias.lower()).limit(1).stream()
+        )
+        if not docs:
+            return None
+        return UserRecord.model_validate(docs[0].to_dict())
+
+    def save_inbound_item(self, item: InboundEmailItem) -> None:
+        self._inbound_items.document(item.id).set(item.model_dump(mode="python"))
+
+    def get_inbound_item(self, item_id: str) -> Optional[InboundEmailItem]:
+        doc = self._inbound_items.document(item_id).get()
+        if not doc.exists:
+            return None
+        return InboundEmailItem.model_validate(doc.to_dict())

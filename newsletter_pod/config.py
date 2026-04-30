@@ -122,6 +122,10 @@ class Settings(BaseSettings):
     app_store_monthly_product_id: str = Field(default="com.newsletterpod.paid.monthly", alias="APP_STORE_MONTHLY_PRODUCT_ID")
     app_store_annual_product_id: str = Field(default="com.newsletterpod.paid.annual", alias="APP_STORE_ANNUAL_PRODUCT_ID")
 
+    inbound_email_domain: str = Field(default="clawcast.app", alias="INBOUND_EMAIL_DOMAIN")
+    mailgun_webhook_signing_key: Optional[str] = Field(default=None, alias="MAILGUN_WEBHOOK_SIGNING_KEY")
+    mailgun_api_key: Optional[str] = Field(default=None, alias="MAILGUN_API_KEY")
+
     @classmethod
     def from_env(cls) -> "Settings":
         settings = cls()
@@ -131,6 +135,12 @@ class Settings(BaseSettings):
         )
         settings.smtp_password = _normalize_secret_value(_resolve_secret_reference(settings.smtp_password))
         settings.job_trigger_token = _normalize_secret_value(_resolve_secret_reference(settings.job_trigger_token))
+        settings.mailgun_webhook_signing_key = _normalize_secret_value(
+            _resolve_secret_reference(settings.mailgun_webhook_signing_key)
+        )
+        settings.mailgun_api_key = _normalize_secret_value(
+            _resolve_secret_reference(settings.mailgun_api_key)
+        )
         settings.session_signing_secret = _normalize_secret_value(
             _resolve_secret_reference(settings.session_signing_secret)
         ) or "dev-session-secret"

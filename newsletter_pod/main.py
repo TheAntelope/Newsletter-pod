@@ -14,6 +14,11 @@ from .auth import AppleIdentityVerifier, AuthError, SessionManager
 from .config import Settings
 from .control_plane import ControlPlaneError, ControlPlaneService, build_task_enqueuer
 from .feed import build_feed_xml
+from .inbound import (
+    InboundConfigError,
+    InboundEmailHandler,
+    InboundSignatureError,
+)
 from .legal import PRIVACY_HTML, TERMS_HTML
 from .mailer import NoopMailer, SMTPMailer
 from .podcast_api import PodcastApiClient
@@ -294,6 +299,25 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
     def receive_billing_notification(request_payload: BillingNotificationRequest) -> dict:
         assert container.control_plane is not None
         return container.control_plane.apply_app_store_notification(request_payload.model_dump(exclude_none=True))
+
+    @app.post("/webhooks/mailgun/inbound")
+    async def receive_mailgun_inbound(request: Request) -> dict:
+        assert container.control_repository is not None
+        form = await request.form()
+        # Mailgun sends multipart/form-data; we don't care about attachments,
+        # only the textual fields. Coerce everything we read into strings.
+        payload = {key: (value if isinstance(value, str) else "") for key, value in form.items()}
+        handler = InboundEmailHandler(
+            repository=container.control_repository,
+            inbound_email_domain=container.settings.inbound_email_domain,
+            mailgun_signing_key=container.settings.mailgun_webhook_signing_key,
+        )
+        try:
+            return handler.handle(payload)
+        except InboundSignatureError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+        except InboundConfigError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 
     @app.api_route("/media/{secret_token}/{episode_id}.mp3", methods=["GET", "HEAD"])
     def get_private_media(
