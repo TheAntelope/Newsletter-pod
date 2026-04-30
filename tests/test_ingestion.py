@@ -5,7 +5,7 @@ from typing import Optional
 
 import requests
 
-from newsletter_pod.ingestion import RSSIngestionService
+from newsletter_pod.ingestion import RSSIngestionService, sanitize_link
 from newsletter_pod.models import SourceDefinition
 
 
@@ -130,6 +130,49 @@ def test_first_run_bootstraps_latest_items_per_source_and_sets_cursor(monkeypatc
     ]
     assert "source-a" in result.cursor_updates
     assert result.cursor_updates["source-a"].tzinfo is not None
+
+
+def test_sanitize_link_drops_known_auth_params():
+    url = "https://stratechery.com/2026/an-article/?access_token=SECRET123&utm_source=rss"
+    assert sanitize_link(url) == "https://stratechery.com/2026/an-article/?utm_source=rss"
+
+
+def test_sanitize_link_drops_token_suffixed_params():
+    url = "https://example.com/p?passthrough_token=abc&page=2"
+    assert sanitize_link(url) == "https://example.com/p?page=2"
+
+
+def test_sanitize_link_keeps_url_when_no_auth_params():
+    url = "https://example.com/p?page=2&utm_medium=email"
+    assert sanitize_link(url) == url
+
+
+def test_ingestion_strips_auth_token_from_rss_link(monkeypatch):
+    repository = StubCursorRepository(
+        {"src": datetime(2026, 3, 8, 0, 0, tzinfo=timezone.utc)}
+    )
+    service = RSSIngestionService(repository=repository)
+
+    monkeypatch.setattr(
+        service,
+        "_fetch_entries",
+        lambda _: [
+            {
+                "id": "1",
+                "link": "https://stratechery.com/2026/article/?access_token=LEAKED",
+                "title": "Title",
+                "summary": "Body",
+                "published": "Mon, 09 Mar 2026 05:00:00 GMT",
+            }
+        ],
+    )
+
+    result = service.fetch_new_items(
+        [SourceDefinition(id="src", name="Src", rss_url="x", enabled=True)]
+    )
+    assert len(result.items) == 1
+    assert "access_token" not in result.items[0].link
+    assert result.items[0].link == "https://stratechery.com/2026/article/"
 
 
 def test_one_failing_source_does_not_block_other_sources(monkeypatch):

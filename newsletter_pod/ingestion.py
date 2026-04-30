@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Protocol
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import feedparser
 import requests
@@ -24,6 +25,46 @@ HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 RSS_USER_AGENT = (
     "Mozilla/5.0 (compatible; NewsletterPod/1.0; +https://newsletter-pod.app)"
 )
+# Query-string parameters that frequently carry per-subscriber auth secrets
+# in paid-newsletter RSS feeds (Stratechery, etc.). Stripped before the URL
+# is stored on a SourceItem so the secret never reaches show notes, the feed
+# XML, or Firestore.
+AUTH_QUERY_PARAMS = {
+    "access_token",
+    "auth_token",
+    "passthrough_token",
+    "session_token",
+    "session",
+    "sessionid",
+    "sid",
+    "secret",
+    "key",
+    "apikey",
+    "api_key",
+    "token",
+    "auth",
+    "password",
+    "pwd",
+}
+
+
+def sanitize_link(url: str) -> str:
+    if not url:
+        return url
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if not parts.query:
+        return url
+    kept = [
+        (k, v)
+        for k, v in parse_qsl(parts.query, keep_blank_values=True)
+        if k.lower() not in AUTH_QUERY_PARAMS
+        and not k.lower().endswith("_token")
+        and not k.lower().endswith("_key")
+    ]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept), parts.fragment))
 
 
 @dataclass
@@ -105,7 +146,7 @@ class RSSIngestionService:
         return list(parsed.entries)
 
     def _entry_to_item(self, source: SourceDefinition, entry: dict, fetched_at: datetime) -> SourceItem | None:
-        link = entry.get("link")
+        link = sanitize_link(entry.get("link") or "")
         if not link:
             return None
 
