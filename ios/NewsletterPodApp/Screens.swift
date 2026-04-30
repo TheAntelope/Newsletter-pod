@@ -110,6 +110,10 @@ struct DashboardTabView: View {
         UITabBar.appearance().scrollEdgeAppearance = appearance
     }
 
+    private var showsUpgradeTab: Bool {
+        !viewModel.isPaid && viewModel.feed?.latestEpisode != nil
+    }
+
     var body: some View {
         TabView(selection: $viewModel.selectedTab) {
             HomeView()
@@ -124,9 +128,11 @@ struct DashboardTabView: View {
             FeedAccessView()
                 .tabItem { Label("Feed", systemImage: "antenna.radiowaves.left.and.right") }
                 .tag(DashboardTab.feed)
-            PaywallView()
-                .tabItem { Label("Upgrade", systemImage: "sparkles") }
-                .tag(DashboardTab.upgrade)
+            if showsUpgradeTab {
+                PaywallView()
+                    .tabItem { Label("Upgrade", systemImage: "sparkles") }
+                    .tag(DashboardTab.upgrade)
+            }
         }
     }
 }
@@ -213,6 +219,18 @@ private struct HeroEpisodeCard: View {
                 }
                 .font(Theme.Typography.body(13))
                 .foregroundStyle(Theme.Palette.muted)
+            } else if viewModel.isGenerating {
+                HStack(alignment: .top, spacing: Theme.Spacing.m) {
+                    ProgressView().tint(Theme.Palette.amberDeep)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Your first episode is being made.")
+                            .font(Theme.Typography.body(15).weight(.semibold))
+                            .foregroundStyle(Theme.Palette.ink)
+                        Text("About 3–5 minutes. You can close the app and come back later — it will land in Apple Podcasts when ready.")
+                            .font(Theme.Typography.body(14))
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                    }
+                }
             } else if viewModel.selectedSources.isEmpty {
                 Text("Tap below for a guided setup — pick sources, choose a format, and we'll start your first episode.")
                     .font(Theme.Typography.body(15))
@@ -268,11 +286,15 @@ private struct HeroEpisodeCard: View {
     }
 
     private var episodeBadge: String {
-        viewModel.feed?.latestEpisode == nil ? "Coming Soon" : "Latest Episode"
+        if viewModel.feed?.latestEpisode != nil { return "Latest Episode" }
+        if viewModel.isGenerating { return "Generating Now" }
+        return "Coming Soon"
     }
 
     private var episodeTitle: String {
-        viewModel.feed?.latestEpisode?.title ?? "No episode yet"
+        if let title = viewModel.feed?.latestEpisode?.title { return title }
+        if viewModel.isGenerating { return "Cooking up your first briefing…" }
+        return "No episode yet"
     }
 
     private func formatDuration(_ seconds: Int) -> String {
@@ -417,6 +439,7 @@ private enum DescriptionBlock {
 
 private struct AboutPodcastCard: View {
     @EnvironmentObject private var viewModel: AppViewModel
+    @State private var showScheduleEditor = false
 
     var body: some View {
         EditorialCard {
@@ -430,8 +453,29 @@ private struct AboutPodcastCard: View {
                 infoRow(label: "Hosts", value: hostsLabel)
                 infoRow(label: "Voice", value: voiceLabel)
                 infoRow(label: "Length", value: "\(viewModel.profile?.desiredDurationMinutes ?? 8) min")
-                infoRow(label: "Delivery", value: deliveryLabel)
+                Button {
+                    showScheduleEditor = true
+                } label: {
+                    HStack {
+                        Text("Delivery")
+                            .font(Theme.Typography.body(14))
+                            .foregroundStyle(Theme.Palette.muted)
+                        Spacer()
+                        Text(deliveryLabel)
+                            .font(Theme.Typography.body(14).weight(.medium))
+                            .foregroundStyle(Theme.Palette.ink)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.muted)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
+        }
+        .sheet(isPresented: $showScheduleEditor) {
+            ScheduleEditorView()
+                .environmentObject(viewModel)
         }
     }
 
@@ -769,7 +813,6 @@ struct PodcastSetupView: View {
                     .listRowBackground(Color.clear)
                 }
 
-                ScheduleSection()
             }
             .navigationTitle("Podcast Setup")
             .editorialBackground()
@@ -833,6 +876,28 @@ struct ScheduleSection: View {
         .onAppear {
             timezone = viewModel.schedule?.timezone ?? TimeZone.current.identifier
             selectedDays = Set(viewModel.schedule?.weekdays ?? ["monday"])
+        }
+    }
+}
+
+struct ScheduleEditorView: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                ScheduleSection()
+            }
+            .editorialBackground()
+            .navigationTitle("Delivery schedule")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                }
+            }
         }
     }
 }
