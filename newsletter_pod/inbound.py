@@ -95,7 +95,7 @@ def extract_alias_from_recipient(recipient: str, domain: str) -> Optional[str]:
     local, _, recipient_domain = recipient.partition("@")
     if recipient_domain.lower() != domain.lower():
         return None
-    # Strip plus-tag suffixes (e.g., "alias+marketing@clawcast.app").
+    # Strip plus-tag suffixes (e.g., "alias+marketing@theclawcast.com").
     alias = local.split("+", 1)[0].strip().lower()
     return alias or None
 

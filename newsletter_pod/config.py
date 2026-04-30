@@ -122,7 +122,7 @@ class Settings(BaseSettings):
     app_store_monthly_product_id: str = Field(default="com.newsletterpod.paid.monthly", alias="APP_STORE_MONTHLY_PRODUCT_ID")
     app_store_annual_product_id: str = Field(default="com.newsletterpod.paid.annual", alias="APP_STORE_ANNUAL_PRODUCT_ID")
 
-    inbound_email_domain: str = Field(default="clawcast.app", alias="INBOUND_EMAIL_DOMAIN")
+    inbound_email_domain: str = Field(default="theclawcast.com", alias="INBOUND_EMAIL_DOMAIN")
     mailgun_webhook_signing_key: Optional[str] = Field(default=None, alias="MAILGUN_WEBHOOK_SIGNING_KEY")
     mailgun_api_key: Optional[str] = Field(default=None, alias="MAILGUN_API_KEY")
 

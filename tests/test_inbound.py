@@ -61,10 +61,10 @@ def test_verify_mailgun_signature_round_trip():
 
 
 def test_extract_alias_from_recipient_strips_plus_tags_and_normalizes_case():
-    assert extract_alias_from_recipient("A7F2BK9Q@clawcast.app", "clawcast.app") == "a7f2bk9q"
-    assert extract_alias_from_recipient("a7f2bk9q+marketing@clawcast.app", "clawcast.app") == "a7f2bk9q"
-    assert extract_alias_from_recipient("a7f2bk9q@somewhere.else", "clawcast.app") is None
-    assert extract_alias_from_recipient("malformed", "clawcast.app") is None
+    assert extract_alias_from_recipient("A7F2BK9Q@theclawcast.com", "theclawcast.com") == "a7f2bk9q"
+    assert extract_alias_from_recipient("a7f2bk9q+marketing@theclawcast.com", "theclawcast.com") == "a7f2bk9q"
+    assert extract_alias_from_recipient("a7f2bk9q@somewhere.else", "theclawcast.com") is None
+    assert extract_alias_from_recipient("malformed", "theclawcast.com") is None
 
 
 def test_parse_email_address_handles_display_names():
@@ -104,7 +104,7 @@ def _build_app_with_user():
     settings.job_trigger_token = None
     settings.app_base_url = "http://testserver"
     settings.publish_summary_email_enabled = False
-    settings.inbound_email_domain = "clawcast.app"
+    settings.inbound_email_domain = "theclawcast.com"
     settings.mailgun_webhook_signing_key = SIGNING_KEY
     container = _build_container(settings)
 
@@ -128,7 +128,7 @@ def _build_app_with_user():
 def test_inbound_handler_stores_email_for_known_alias():
     container, repo, user, client = _build_app_with_user()
     payload = _payload(
-        recipient="a7f2bk9q@clawcast.app",
+        recipient="a7f2bk9q@theclawcast.com",
         sender='"Ben Thompson" <newsletter@stratechery.com>',
         subject="Today's Stratechery",
         body="Read on the web: https://stratechery.com/2026/some-article/",
@@ -151,7 +151,7 @@ def test_inbound_handler_stores_email_for_known_alias():
 def test_inbound_handler_returns_unauthorized_on_bad_signature():
     _, _, _, client = _build_app_with_user()
     payload = _payload(
-        recipient="a7f2bk9q@clawcast.app",
+        recipient="a7f2bk9q@theclawcast.com",
         sender="x@y.com",
         subject="hi",
         body="body",
@@ -164,7 +164,7 @@ def test_inbound_handler_returns_unauthorized_on_bad_signature():
 def test_inbound_handler_ignores_unknown_alias():
     _, _, _, client = _build_app_with_user()
     payload = _payload(
-        recipient="ghost1234@clawcast.app",
+        recipient="ghost1234@theclawcast.com",
         sender="x@y.com",
         subject="hi",
         body="body",
@@ -178,7 +178,7 @@ def test_inbound_handler_ignores_unknown_alias():
 def test_inbound_handler_skips_confirmation_emails():
     _, repo, _, client = _build_app_with_user()
     payload = _payload(
-        recipient="a7f2bk9q@clawcast.app",
+        recipient="a7f2bk9q@theclawcast.com",
         sender="newsletter@example.com",
         subject="Please confirm your subscription",
         body="Click here to confirm your subscription.",
@@ -193,7 +193,7 @@ def test_inbound_handler_skips_confirmation_emails():
 def test_inbound_handler_dedupes_on_message_id():
     _, repo, _, client = _build_app_with_user()
     payload = _payload(
-        recipient="a7f2bk9q@clawcast.app",
+        recipient="a7f2bk9q@theclawcast.com",
         sender="x@y.com",
         subject="A digest",
         body="content",
@@ -222,8 +222,8 @@ def test_handler_rejects_when_signing_key_missing():
     container, repo, user, _ = _build_app_with_user()
     handler = InboundEmailHandler(
         repository=repo,
-        inbound_email_domain="clawcast.app",
+        inbound_email_domain="theclawcast.com",
         mailgun_signing_key=None,
     )
     with pytest.raises(Exception):
-        handler.handle({"recipient": "a7f2bk9q@clawcast.app"})
+        handler.handle({"recipient": "a7f2bk9q@theclawcast.com"})
