@@ -168,16 +168,10 @@ private struct GreetingHeader: View {
     }
 
     private var greeting: String {
-        let trimmedName = (viewModel.user?.displayName ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let firstName = trimmedName
-            .split(separator: " ")
-            .first
-            .map(String.init) ?? trimmedName
-        if firstName.isEmpty {
+        guard let user = viewModel.user, user.hasFriendlyName else {
             return "good \(timeOfDay)."
         }
-        return "good \(timeOfDay), \(firstName)."
+        return "good \(timeOfDay), \(user.firstName)."
     }
 
     private var timeOfDay: String {
@@ -1260,9 +1254,7 @@ struct OnboardingFlowView: View {
     }
 
     private var firstName: String {
-        let trimmed = (viewModel.user?.displayName ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.split(separator: " ").first.map(String.init) ?? trimmed
+        viewModel.user?.firstName ?? ""
     }
 
     private func saveSourcesFromPacks() async {

@@ -71,6 +71,21 @@ struct UserDTO: Codable {
         case displayName = "display_name"
         case timezone
     }
+
+    var hasFriendlyName: Bool {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "Listener" { return false }
+        let looksLikeEmailPrefix = !trimmed.contains(" ") &&
+            trimmed.range(of: #"^[a-z0-9._-]+$"#, options: .regularExpression) != nil &&
+            trimmed.contains(where: { $0.isNumber })
+        return !looksLikeEmailPrefix
+    }
+
+    var firstName: String {
+        guard hasFriendlyName else { return "" }
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.split(separator: " ").first.map(String.init) ?? trimmed
+    }
 }
 
 struct SubscriptionDTO: Codable {

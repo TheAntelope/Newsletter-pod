@@ -656,12 +656,7 @@ class ControlPlaneService:
     ) -> UserRecord:
         now = utc_now()
         cleaned_given = (given_name or "").strip()
-        if cleaned_given:
-            display_name = cleaned_given
-        elif email:
-            display_name = email.split("@", maxsplit=1)[0]
-        else:
-            display_name = "Listener"
+        display_name = cleaned_given or "Listener"
         return UserRecord(
             id=uuid4().hex,
             apple_subject=subject,
