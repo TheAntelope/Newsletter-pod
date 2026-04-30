@@ -58,7 +58,7 @@ struct SignInView: View {
 
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 Spacer()
-                MetaLabel(text: "mycast")
+                MetaLabel(text: "ClawCast")
                 Text("Your daily\nbriefing, on tap.")
                     .font(Theme.Typography.display(40))
                     .foregroundStyle(Theme.Palette.ink)
@@ -444,7 +444,7 @@ private struct AboutPodcastCard: View {
     var body: some View {
         EditorialCard {
             MetaLabel(text: "About this podcast")
-            Text(viewModel.profile?.title ?? "mycast")
+            Text(viewModel.profile?.title ?? "ClawCast")
                 .font(Theme.Typography.title(20))
                 .foregroundStyle(Theme.Palette.ink)
 
@@ -818,7 +818,7 @@ struct PodcastSetupView: View {
             .editorialBackground()
             .onAppear {
                 displayName = viewModel.user?.displayName ?? ""
-                title = viewModel.profile?.title ?? "mycast"
+                title = viewModel.profile?.title ?? "ClawCast"
                 formatPreset = viewModel.profile?.formatPreset ?? "two_hosts"
                 primaryHost = viewModel.profile?.hostPrimaryName ?? "Vinnie"
                 secondaryHost = viewModel.profile?.hostSecondaryName ?? "Demi"
@@ -1405,7 +1405,7 @@ struct OnboardingFlowView: View {
 
     private func saveShowPreset() async {
         guard let preset = OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID }) else { return }
-        let title = (viewModel.profile?.title.isEmpty == false) ? viewModel.profile!.title : "mycast"
+        let title = (viewModel.profile?.title.isEmpty == false) ? viewModel.profile!.title : "ClawCast"
         let voiceID = viewModel.profile?.voiceID ?? PodcastSetupView.voiceOptions[0].id
         await viewModel.savePodcastConfig(
             title: title,
@@ -1496,7 +1496,7 @@ private struct OnboardingWelcomeStep: View {
     var body: some View {
         OnboardingStepShell(
             title: greeting,
-            subtitle: "Here's how mycast works — about 30 seconds, then we'll start your first episode.",
+            subtitle: "Here's how ClawCast works — about 30 seconds, then we'll start your first episode.",
             primaryLabel: "Let's set it up",
             primaryDisabled: false,
             onPrimary: onContinue,
@@ -1511,7 +1511,7 @@ private struct OnboardingWelcomeStep: View {
     }
 
     private var greeting: String {
-        firstName.isEmpty ? "Welcome to mycast." : "Hi \(firstName) — welcome to mycast."
+        firstName.isEmpty ? "Welcome to ClawCast." : "Hi \(firstName) — welcome to ClawCast."
     }
 
     private func bullet(icon: String, title: String, text: String) -> some View {

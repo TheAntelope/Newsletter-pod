@@ -33,7 +33,7 @@ targets:
     settings:
       base:
         PRODUCT_MODULE_NAME: NewsletterPod
-        INFOPLIST_KEY_CFBundleDisplayName: mycast
+        INFOPLIST_KEY_CFBundleDisplayName: ClawCast
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES

@@ -1,6 +1,6 @@
-# Newsletter Pod (mycast)
+# Newsletter Pod (ClawCast)
 
-Multi-tenant private podcast backend powering the **mycast** iOS app. Each user gets their own briefing podcast generated from their chosen RSS sources, on their chosen schedule, in their chosen voice.
+Multi-tenant private podcast backend powering the **ClawCast** iOS app. Each user gets their own briefing podcast generated from their chosen RSS sources, on their chosen schedule, in their chosen voice.
 
 ## What this service does
 

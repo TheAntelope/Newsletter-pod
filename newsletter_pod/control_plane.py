@@ -680,7 +680,7 @@ class ControlPlaneService:
         self.repository.save_profile(
             PodcastProfileRecord(
                 user_id=user.id,
-                title="mycast",
+                title="ClawCast",
                 format_preset="two_hosts",
                 host_primary_name="Vinnie",
                 host_secondary_name="Demi",
@@ -772,7 +772,7 @@ class ControlPlaneService:
             now = utc_now()
             profile = PodcastProfileRecord(
                 user_id=user_id,
-                title="mycast",
+                title="ClawCast",
                 desired_duration_minutes=self.settings.free_default_duration_minutes,
                 voice_id=self.settings.elevenlabs_voice_primary_id,
                 created_at=now,

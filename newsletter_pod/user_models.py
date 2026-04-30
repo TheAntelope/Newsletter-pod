@@ -20,7 +20,7 @@ class UserRecord(BaseModel):
 
 class PodcastProfileRecord(BaseModel):
     user_id: str
-    title: str = "mycast"
+    title: str = "ClawCast"
     format_preset: str = "two_hosts"
     host_primary_name: str = "Vinnie"
     host_secondary_name: Optional[str] = "Demi"

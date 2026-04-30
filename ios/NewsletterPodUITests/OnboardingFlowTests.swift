@@ -33,7 +33,7 @@ final class OnboardingFlowTests: XCTestCase {
 
     func testOnboardingHappyPath() throws {
         // Step 1 of 5 — Welcome
-        let welcome = app.staticTexts["Welcome to mycast."]
+        let welcome = app.staticTexts["Welcome to ClawCast."]
         XCTAssertTrue(
             welcome.waitForExistence(timeout: 8),
             "Onboarding welcome screen did not appear"
@@ -70,8 +70,8 @@ final class OnboardingFlowTests: XCTestCase {
     func testWelcomeGreetingDropsEmailPrefixUser() throws {
         // The seeded user has displayName="Listener", which UserDTO.hasFriendlyName
         // treats as no friendly name. The welcome screen should fall back to
-        // "Welcome to mycast." instead of "Hi <junk-name> — welcome to mycast."
-        let welcome = app.staticTexts["Welcome to mycast."]
+        // "Welcome to ClawCast." instead of "Hi <junk-name> — welcome to ClawCast."
+        let welcome = app.staticTexts["Welcome to ClawCast."]
         XCTAssertTrue(
             welcome.waitForExistence(timeout: 8),
             "Expected anonymous welcome line, got: \(app.debugDescription)"
