@@ -100,12 +100,19 @@ def test_control_plane_auth_profile_sources_and_schedule_limits():
             "format_preset": "rotating_guest",
             "host_primary_name": "Vince",
             "guest_names": ["Alex", "Sam"],
-            "desired_duration_minutes": 7,
+            "desired_duration_minutes": 5,
         },
         headers=headers,
     )
     assert patch_profile.status_code == 200
     assert patch_profile.json()["profile"]["format_preset"] == "rotating_guest"
+
+    over_cap_duration = client.patch(
+        "/v1/me/podcast-config",
+        json={"desired_duration_minutes": 8},
+        headers=headers,
+    )
+    assert over_cap_duration.status_code == 400
 
     too_many_days = client.patch(
         "/v1/me/schedule",

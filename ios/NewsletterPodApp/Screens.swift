@@ -1053,9 +1053,9 @@ struct PaywallView: View {
             VStack(spacing: Theme.Spacing.s) {
                 comparisonRow(label: "Sources", free: "5", paid: "15")
                 EditorialDivider()
-                comparisonRow(label: "Delivery days / week", free: "1", paid: "3")
+                comparisonRow(label: "Delivery days / week", free: "5", paid: "7")
                 EditorialDivider()
-                comparisonRow(label: "Episode length", free: "5–8 min", paid: "up to 20 min")
+                comparisonRow(label: "Episode length", free: "3–5 min", paid: "5–20 min")
             }
         }
     }
@@ -1235,6 +1235,7 @@ struct OnboardingShowPreset: Identifiable {
     let primaryHost: String
     let secondaryHost: String?
     let durationMinutes: Int
+    let requiresPaid: Bool
 
     static let all: [OnboardingShowPreset] = [
         OnboardingShowPreset(
@@ -1244,7 +1245,8 @@ struct OnboardingShowPreset: Identifiable {
             formatPreset: "solo_host",
             primaryHost: "Vinnie",
             secondaryHost: nil,
-            durationMinutes: 3
+            durationMinutes: 3,
+            requiresPaid: false
         ),
         OnboardingShowPreset(
             id: "twohost",
@@ -1253,7 +1255,8 @@ struct OnboardingShowPreset: Identifiable {
             formatPreset: "two_hosts",
             primaryHost: "Vinnie",
             secondaryHost: "Demi",
-            durationMinutes: 5
+            durationMinutes: 5,
+            requiresPaid: false
         ),
         OnboardingShowPreset(
             id: "deep",
@@ -1262,7 +1265,8 @@ struct OnboardingShowPreset: Identifiable {
             formatPreset: "two_hosts",
             primaryHost: "Vinnie",
             secondaryHost: "Demi",
-            durationMinutes: 8
+            durationMinutes: 8,
+            requiresPaid: true
         ),
     ]
 }
@@ -1298,6 +1302,11 @@ enum OnboardingScheduleChoice: String, CaseIterable, Identifiable {
             return ["monday"]
         }
     }
+
+    var requiresPaid: Bool {
+        // Only Daily exceeds the free 5-day cap.
+        self == .daily
+    }
 }
 
 struct OnboardingFlowView: View {
@@ -1305,7 +1314,7 @@ struct OnboardingFlowView: View {
     @State private var step: Int = 0
     @State private var selectedPackIDs: Set<String> = ["tech-daily"]
     @State private var selectedShowPresetID: String = "twohost"
-    @State private var selectedSchedule: OnboardingScheduleChoice = .daily
+    @State private var selectedSchedule: OnboardingScheduleChoice = .weekdays
 
     var body: some View {
         NavigationStack {
@@ -1352,6 +1361,7 @@ struct OnboardingFlowView: View {
         case 2:
             OnboardingShowStep(
                 selected: $selectedShowPresetID,
+                isPaid: viewModel.isPaid,
                 onBack: { step = 1 },
                 onContinue: {
                     Task {
@@ -1363,6 +1373,7 @@ struct OnboardingFlowView: View {
         case 3:
             OnboardingScheduleStep(
                 selected: $selectedSchedule,
+                isPaid: viewModel.isPaid,
                 onBack: { step = 2 },
                 onContinue: {
                     Task {
@@ -1598,6 +1609,7 @@ private struct OnboardingSourcesStep: View {
 
 private struct OnboardingShowStep: View {
     @Binding var selected: String
+    let isPaid: Bool
     let onBack: () -> Void
     let onContinue: () -> Void
 
@@ -1615,6 +1627,7 @@ private struct OnboardingShowStep: View {
                     PresetCard(
                         preset: preset,
                         isSelected: preset.id == selected,
+                        isLocked: preset.requiresPaid && !isPaid,
                         onSelect: { selected = preset.id }
                     )
                 }
@@ -1625,38 +1638,59 @@ private struct OnboardingShowStep: View {
     private struct PresetCard: View {
         let preset: OnboardingShowPreset
         let isSelected: Bool
+        let isLocked: Bool
         let onSelect: () -> Void
 
         var body: some View {
-            Button(action: onSelect) {
+            Button(action: { if !isLocked { onSelect() } }) {
                 EditorialCard {
                     HStack(alignment: .top, spacing: Theme.Spacing.m) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(preset.name)
-                                .font(Theme.Typography.title(18))
-                                .foregroundStyle(Theme.Palette.ink)
+                            HStack(spacing: 8) {
+                                Text(preset.name)
+                                    .font(Theme.Typography.title(18))
+                                    .foregroundStyle(Theme.Palette.ink)
+                                if isLocked {
+                                    PaidBadge()
+                                }
+                            }
                             Text(preset.tagline)
                                 .font(Theme.Typography.body(14))
                                 .foregroundStyle(Theme.Palette.inkSoft)
                         }
                         Spacer(minLength: 0)
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        Image(systemName: isLocked ? "lock.fill" : (isSelected ? "checkmark.circle.fill" : "circle"))
                             .font(.system(size: 22))
-                            .foregroundStyle(isSelected ? Theme.Palette.amber : Theme.Palette.rule)
+                            .foregroundStyle(isLocked ? Theme.Palette.muted : (isSelected ? Theme.Palette.amber : Theme.Palette.rule))
                     }
                 }
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                        .stroke(isSelected ? Theme.Palette.amber : Color.clear, lineWidth: 2)
+                        .stroke(isSelected && !isLocked ? Theme.Palette.amber : Color.clear, lineWidth: 2)
                 )
+                .opacity(isLocked ? 0.65 : 1)
             }
             .buttonStyle(.plain)
+            .disabled(isLocked)
         }
+    }
+}
+
+private struct PaidBadge: View {
+    var body: some View {
+        Text("Paid")
+            .font(Theme.Typography.meta(10))
+            .tracking(1.2)
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Theme.Palette.amberDeep, in: Capsule())
     }
 }
 
 private struct OnboardingScheduleStep: View {
     @Binding var selected: OnboardingScheduleChoice
+    let isPaid: Bool
     let onBack: () -> Void
     let onContinue: () -> Void
 
@@ -1671,31 +1705,37 @@ private struct OnboardingScheduleStep: View {
         ) {
             VStack(spacing: Theme.Spacing.s) {
                 ForEach(OnboardingScheduleChoice.allCases) { choice in
+                    let isLocked = choice.requiresPaid && !isPaid
                     Button {
-                        selected = choice
+                        if !isLocked { selected = choice }
                     } label: {
                         EditorialCard {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(choice.label)
-                                        .font(Theme.Typography.title(18))
-                                        .foregroundStyle(Theme.Palette.ink)
+                                    HStack(spacing: 8) {
+                                        Text(choice.label)
+                                            .font(Theme.Typography.title(18))
+                                            .foregroundStyle(Theme.Palette.ink)
+                                        if isLocked { PaidBadge() }
+                                    }
                                     Text(choice.detail)
                                         .font(Theme.Typography.body(14))
                                         .foregroundStyle(Theme.Palette.inkSoft)
                                 }
                                 Spacer(minLength: 0)
-                                Image(systemName: selected == choice ? "checkmark.circle.fill" : "circle")
+                                Image(systemName: isLocked ? "lock.fill" : (selected == choice ? "checkmark.circle.fill" : "circle"))
                                     .font(.system(size: 22))
-                                    .foregroundStyle(selected == choice ? Theme.Palette.amber : Theme.Palette.rule)
+                                    .foregroundStyle(isLocked ? Theme.Palette.muted : (selected == choice ? Theme.Palette.amber : Theme.Palette.rule))
                             }
                         }
                         .overlay(
                             RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                                .stroke(selected == choice ? Theme.Palette.amber : Color.clear, lineWidth: 2)
+                                .stroke(selected == choice && !isLocked ? Theme.Palette.amber : Color.clear, lineWidth: 2)
                         )
+                        .opacity(isLocked ? 0.65 : 1)
                     }
                     .buttonStyle(.plain)
+                    .disabled(isLocked)
                 }
             }
         }

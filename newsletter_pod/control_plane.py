@@ -487,6 +487,13 @@ class ControlPlaneService:
             dropped_count = len(items) - entitlements.max_items_per_episode
             items = items[-entitlements.max_items_per_episode :]
 
+        # Legacy profiles may store a duration outside the user's current
+        # entitlements (e.g. saved before a tier cap tightened). Clamp at
+        # generation time so the LLM prompt and TTS spend match the tier.
+        profile.desired_duration_minutes = max(
+            entitlements.min_duration_minutes,
+            min(entitlements.max_duration_minutes, profile.desired_duration_minutes),
+        )
         guest_name = self._current_guest_name(profile, user_id)
         ux = self._build_user_ux(profile, guest_name)
         prompt = build_digest_prompt(items, run_date=local_date, ux=ux)
@@ -684,14 +691,14 @@ class ControlPlaneService:
                 updated_at=now,
             )
         )
+        # New users land on the free tier; cap the default delivery schedule
+        # to the free max so the first /v1/me/schedule save doesn't 400.
+        default_weekdays = WEEKDAY_NAMES[: self.settings.free_max_delivery_days]
         self.repository.save_schedule(
             DeliveryScheduleRecord(
                 user_id=user.id,
                 timezone=user.timezone,
-                weekdays=[
-                    "monday", "tuesday", "wednesday", "thursday",
-                    "friday", "saturday", "sunday",
-                ],
+                weekdays=default_weekdays,
                 local_time=self.settings.weekly_target_local,
                 cutoff_time=self.settings.weekly_cutoff_local,
                 enabled=True,
