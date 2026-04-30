@@ -1,7 +1,17 @@
 import Foundation
 
+enum DashboardTab: Hashable {
+    case home
+    case sources
+    case podcast
+    case feed
+    case upgrade
+}
+
 @MainActor
 final class AppViewModel: ObservableObject {
+    static let onboardingCompleteKey = "hasCompletedOnboarding"
+
     @Published var sessionToken: String?
     @Published var user: UserDTO?
     @Published var profile: PodcastProfileDTO?
@@ -15,6 +25,8 @@ final class AppViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var savedMessage: String?
     @Published var activeRunID: String?
+    @Published var showOnboarding: Bool = false
+    @Published var selectedTab: DashboardTab = .home
 
     let apiClient: APIClient
     let purchaseManager: PurchaseManager
@@ -41,6 +53,26 @@ final class AppViewModel: ObservableObject {
             subscription = session.subscription
             try await refresh()
         }
+        evaluateOnboardingTrigger()
+    }
+
+    func evaluateOnboardingTrigger() {
+        guard isAuthenticated else { return }
+        if UserDefaults.standard.bool(forKey: Self.onboardingCompleteKey) { return }
+        if !selectedSources.isEmpty {
+            UserDefaults.standard.set(true, forKey: Self.onboardingCompleteKey)
+            return
+        }
+        showOnboarding = true
+    }
+
+    func resumeOnboarding() {
+        showOnboarding = true
+    }
+
+    func completeOnboarding() {
+        UserDefaults.standard.set(true, forKey: Self.onboardingCompleteKey)
+        showOnboarding = false
     }
 
     func refresh() async throws {
