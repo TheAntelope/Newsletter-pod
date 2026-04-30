@@ -50,12 +50,16 @@ targets:
       - target: NewsletterPod
     settings:
       base:
+        PRODUCT_NAME: NewsletterPodUITests
+        PRODUCT_MODULE_NAME: NewsletterPodUITests
         PRODUCT_BUNDLE_IDENTIFIER: com.newsletterpod.app.uitests
-        TEST_TARGET_NAME: NewsletterPod
         SWIFT_VERSION: "5.10"
         DEVELOPMENT_TEAM: "R7HS2T53Z8"
         CODE_SIGN_STYLE: Automatic
         TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_FILE: ""
+        CODE_SIGN_ENTITLEMENTS: ""
+        GENERATE_INFOPLIST_FILE: "YES"
 schemes:
   NewsletterPod:
     build:
