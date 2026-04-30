@@ -296,4 +296,8 @@ def test_process_user_generation_records_visible_cap(monkeypatch):
     payload = result.json()
     assert payload["run"]["cap_hit"] is True
     assert payload["run"]["dropped_item_count"] == 1
-    assert "item cap" in payload["episode"]["description"]
+    description = payload["episode"]["description"]
+    assert "item cap" in description
+    assert "**Sources**" in description
+    assert "- **Source A** — [Story Two](https://example.com/2)" in description
+    assert "https://example.com/1" not in description

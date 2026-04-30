@@ -59,6 +59,30 @@ def test_prompt_enforces_calm_daily_briefing_with_named_hosts():
     assert "Source: Source C" in prompt
 
 
+def test_prompt_specifies_skim_friendly_show_notes_format():
+    prompt = build_digest_prompt(
+        [
+            SourceItem(
+                source_id="a",
+                source_name="Source A",
+                guid="1",
+                link="https://example.com/a",
+                title="Title A",
+                summary="Summary A",
+                published_at=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc),
+                dedupe_key="1",
+            )
+        ],
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(),
+    )
+
+    assert "shaped for skimming" in prompt
+    assert "3 to 5 single-line bullets" in prompt
+    assert "Do not include URLs in show_notes" in prompt
+    assert "under 700 characters" in prompt
+
+
 def test_prompt_switches_to_thin_day_runtime_guidance():
     items = [
         SourceItem(

@@ -299,47 +299,31 @@ private struct HeroEpisodeCard: View {
 private struct CollapsibleDescription: View {
     let text: String
     @Binding var isExpanded: Bool
-    @State private var availableWidth: CGFloat = 0
 
-    private let collapsedLineLimit = 4
-    private let bodyFont = UIFont.systemFont(ofSize: 15)
+    private let collapsedRowLimit = 5
 
-    private var isTruncated: Bool {
-        guard availableWidth > 0 else { return false }
-        let constraint = CGSize(width: availableWidth, height: .greatestFiniteMagnitude)
-        let bounds = (text as NSString).boundingRect(
-            with: constraint,
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: bodyFont],
-            context: nil
-        )
-        let lineCount = bounds.height / bodyFont.lineHeight
-        return lineCount > CGFloat(collapsedLineLimit) + 0.1
+    private var blocks: [DescriptionBlock] {
+        DescriptionBlock.parse(text)
+    }
+
+    private var visibleBlocks: [DescriptionBlock] {
+        if isExpanded { return blocks }
+        return Array(blocks.prefix(collapsedRowLimit))
+    }
+
+    private var canExpand: Bool {
+        blocks.count > collapsedRowLimit
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            Text(text)
-                .font(Theme.Typography.body(15))
-                .foregroundStyle(Theme.Palette.inkSoft)
-                .lineLimit(isExpanded ? nil : collapsedLineLimit)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear
-                            .onAppear { availableWidth = proxy.size.width }
-                            .onChange(of: proxy.size.width) { _, newValue in
-                                availableWidth = newValue
-                            }
-                    }
-                )
+            ForEach(Array(visibleBlocks.enumerated()), id: \.offset) { _, block in
+                row(for: block)
+            }
 
-            if isTruncated {
+            if canExpand {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        isExpanded.toggle()
-                    }
+                    withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
                 } label: {
                     HStack(spacing: 4) {
                         Text(isExpanded ? "Show less" : "Show more")
@@ -350,8 +334,84 @@ private struct CollapsibleDescription: View {
                     .foregroundStyle(Theme.Palette.amberDeep)
                 }
                 .buttonStyle(.plain)
+                .padding(.top, 2)
             }
         }
+    }
+
+    @ViewBuilder
+    private func row(for block: DescriptionBlock) -> some View {
+        switch block {
+        case .heading(let inline):
+            Text(formatted(inline))
+                .font(Theme.Typography.title(15))
+                .foregroundStyle(Theme.Palette.ink)
+                .padding(.top, 4)
+        case .bullet(let inline):
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("•")
+                    .font(Theme.Typography.body(15).weight(.bold))
+                    .foregroundStyle(Theme.Palette.amber)
+                Text(formatted(inline))
+                    .font(Theme.Typography.body(15))
+                    .foregroundStyle(Theme.Palette.inkSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        case .paragraph(let inline):
+            Text(formatted(inline))
+                .font(Theme.Typography.body(15))
+                .foregroundStyle(Theme.Palette.inkSoft)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func formatted(_ inline: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        if let attributed = try? AttributedString(markdown: inline, options: options) {
+            return attributed
+        }
+        return AttributedString(inline)
+    }
+}
+
+private enum DescriptionBlock {
+    case heading(String)
+    case bullet(String)
+    case paragraph(String)
+
+    static func parse(_ text: String) -> [DescriptionBlock] {
+        var blocks: [DescriptionBlock] = []
+        for raw in text.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            if let bullet = stripBullet(line) {
+                blocks.append(.bullet(bullet))
+            } else if isHeadingOnly(line) {
+                blocks.append(.heading(stripHeading(line)))
+            } else {
+                blocks.append(.paragraph(line))
+            }
+        }
+        return blocks
+    }
+
+    private static func stripBullet(_ line: String) -> String? {
+        if line.hasPrefix("- ") { return String(line.dropFirst(2)) }
+        if line.hasPrefix("* ") { return String(line.dropFirst(2)) }
+        return nil
+    }
+
+    private static func isHeadingOnly(_ line: String) -> Bool {
+        line.hasPrefix("**") && line.hasSuffix("**") && line.count >= 4 &&
+            !line.dropFirst(2).dropLast(2).contains("**")
+    }
+
+    private static func stripHeading(_ line: String) -> String {
+        String(line.dropFirst(2).dropLast(2))
     }
 }
 

@@ -853,24 +853,29 @@ class ControlPlaneService:
         cap_hit: bool,
         dropped_count: int,
     ) -> str:
-        lines: list[str] = []
+        sections: list[str] = []
         notes = (generated_notes or "").strip()
         if notes:
-            lines.append(notes)
-            lines.append("")
+            if len(notes) > 1200:
+                notes = notes[:1200].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+            sections.append(notes)
         if cap_hit:
-            lines.append(
-                f"Note: This episode hit the per-episode item cap. {dropped_count} additional source item(s) were omitted."
+            sections.append(
+                f"_{dropped_count} additional source item(s) were omitted to fit this episode's item cap._"
             )
-            lines.append("")
-        lines.append("Sources")
+
         seen: set[str] = set()
+        source_lines: list[str] = []
         for item in items:
             if item.link in seen:
                 continue
             seen.add(item.link)
-            lines.append(f"- {item.source_name}: {item.link}")
-        return "\n".join(lines)
+            title = (item.title or "").strip() or item.source_name
+            source_lines.append(f"- **{item.source_name}** — [{title}]({item.link})")
+        if source_lines:
+            sections.append("**Sources**\n" + "\n".join(source_lines))
+
+        return "\n\n".join(sections)
 
     def _latest_run_for_user(self, user_id: str) -> Optional[UserRunRecord]:
         schedule = self.repository.get_schedule(user_id)
