@@ -39,6 +39,14 @@ from .user_repository import ControlPlaneRepository
 logger = logging.getLogger(__name__)
 from .utils import link_hash, utc_now
 
+WELCOME_EPISODE_TITLE = "Welcome to ClawCast"
+WELCOME_EPISODE_DESCRIPTION = (
+    "Hi there, and welcome to ClawCast. In this short intro, Vinnie and Demi walk you "
+    "through what ClawCast does, how to set up your sources, and how to get the most out "
+    "of your custom podcast. Once you've finished setting up your show, your first real "
+    "episode will arrive in this feed shortly."
+)
+
 COMPLETED_RUN_STATUSES = {PublishStatus.PUBLISHED.value, PublishStatus.NO_CONTENT.value}
 WEEKDAY_NAMES = [
     "monday",
@@ -221,6 +229,7 @@ class ControlPlaneService:
                 "name": source.name,
                 "rss_url": source.rss_url,
                 "enabled": source.enabled,
+                "topic": source.topic,
             }
             for source in self._catalog.values()
         ]
@@ -739,6 +748,26 @@ class ControlPlaneService:
             )
         )
         self._get_or_create_feed_token(user.id)
+        self._seed_welcome_episode(user.id, now)
+
+    def _seed_welcome_episode(self, user_id: str, now: datetime) -> None:
+        object_name = self.settings.welcome_episode_object_name
+        if not object_name:
+            return
+        version = self.settings.welcome_episode_version or "v1"
+        self.repository.save_user_episode(
+            UserEpisodeRecord(
+                id=f"{user_id[:8]}-welcome-{version}",
+                user_id=user_id,
+                title=WELCOME_EPISODE_TITLE,
+                description=WELCOME_EPISODE_DESCRIPTION,
+                published_at=now,
+                audio_object_name=object_name,
+                audio_mime_type="audio/mpeg",
+                audio_size_bytes=self.settings.welcome_episode_size_bytes,
+                duration_seconds=self.settings.welcome_episode_duration_seconds or None,
+            )
+        )
 
     def _build_custom_source_from_url(self, rss_url: str, user_id: str = "preview") -> UserSourceRecord:
         response = requests.get(rss_url, timeout=20)

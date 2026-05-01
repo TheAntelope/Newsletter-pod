@@ -72,6 +72,63 @@ def _auth_headers(client: TestClient, verifier: FakeAppleVerifier) -> tuple[str,
     return token, {"Authorization": f"Bearer {token}"}
 
 
+def test_welcome_episode_seeded_for_new_user_when_configured():
+    from newsletter_pod.config import Settings
+    from newsletter_pod.control_plane import (
+        WELCOME_EPISODE_DESCRIPTION,
+        WELCOME_EPISODE_TITLE,
+    )
+
+    settings = Settings.from_env()
+    settings.use_inmemory_adapters = True
+    settings.apple_client_id = "com.example.newsletterpod"
+    settings.session_signing_secret = "test-session-secret-32-bytes-long"
+    settings.podcast_api_enabled = False
+    settings.job_trigger_token = None
+    settings.app_base_url = "http://testserver"
+    settings.publish_summary_email_enabled = False
+    settings.welcome_episode_object_name = "static/welcome-v1.mp3"
+    settings.welcome_episode_size_bytes = 12345
+    settings.welcome_episode_duration_seconds = 150
+    settings.welcome_episode_version = "v1"
+    container = _build_container(settings)
+    client = TestClient(create_app(container=container))
+
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier("welcome-user", "welcome@example.com")
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    assert auth.status_code == 200
+    user_id = auth.json()["user"]["id"]
+
+    episodes = container.control_repository.list_recent_user_episodes(user_id, limit=10)
+    assert len(episodes) == 1
+    welcome = episodes[0]
+    assert welcome.title == WELCOME_EPISODE_TITLE
+    assert welcome.description == WELCOME_EPISODE_DESCRIPTION
+    assert welcome.audio_object_name == "static/welcome-v1.mp3"
+    assert welcome.audio_size_bytes == 12345
+    assert welcome.duration_seconds == 150
+    assert welcome.id.endswith("-welcome-v1")
+
+    token_record = container.control_repository.get_feed_token(user_id)
+    assert token_record
+    feed = client.get(f"/feeds/{token_record.token}.xml")
+    assert feed.status_code == 200
+    assert WELCOME_EPISODE_TITLE in feed.text
+
+
+def test_welcome_episode_not_seeded_when_object_name_unset():
+    container, client = _build_app()
+    assert container.settings.welcome_episode_object_name in (None, "")
+
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier("no-welcome-user", "no-welcome@example.com")
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    assert auth.status_code == 200
+    user_id = auth.json()["user"]["id"]
+
+    episodes = container.control_repository.list_recent_user_episodes(user_id, limit=10)
+    assert episodes == []
+
+
 def test_control_plane_auth_profile_sources_and_schedule_limits():
     container, client = _build_app()
     _, headers = _auth_headers(client, FakeAppleVerifier("apple-user-1", "first@example.com"))

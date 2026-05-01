@@ -1,48 +1,397 @@
 sources:
-  # Fully free, ad-supported.
+  # =====================================================================
+  # News
+  # =====================================================================
+  - id: news-npr
+    name: NPR News
+    rss_url: https://feeds.npr.org/1001/rss.xml
+    topic: News
+    enabled: true
+
+  - id: news-bbc
+    name: BBC News
+    rss_url: https://feeds.bbci.co.uk/news/rss.xml
+    topic: News
+    enabled: true
+
+  - id: news-axios
+    name: Axios
+    rss_url: https://api.axios.com/feed/
+    topic: News
+    enabled: true
+
+  - id: news-cbs
+    name: CBS News
+    rss_url: https://www.cbsnews.com/latest/rss/main
+    topic: News
+    enabled: true
+
+  - id: news-cnbc
+    name: CNBC Top News
+    rss_url: https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114
+    topic: News
+    enabled: true
+
+  - id: news-guardian-us
+    name: The Guardian (US)
+    rss_url: https://www.theguardian.com/us/rss
+    topic: News
+    enabled: true
+
+  - id: news-aljazeera
+    name: Al Jazeera
+    rss_url: https://www.aljazeera.com/xml/rss/all.xml
+    topic: News
+    enabled: true
+
+  # =====================================================================
+  # Politics
+  # =====================================================================
+  - id: politics-hcr
+    name: Letters from an American (Heather Cox Richardson)
+    rss_url: https://heathercoxrichardson.substack.com/feed
+    topic: Politics
+    enabled: true
+
+  - id: politics-politico-playbook
+    name: Politico Playbook
+    rss_url: https://rss.politico.com/playbook.xml
+    topic: Politics
+    enabled: true
+
+  - id: politics-slow-boring
+    name: Slow Boring
+    rss_url: https://www.slowboring.com/feed
+    topic: Politics
+    enabled: true
+
+  - id: politics-tangle
+    name: Tangle
+    rss_url: https://www.readtangle.com/feed
+    topic: Politics
+    enabled: true
+
+  - id: politics-bulwark
+    name: The Bulwark
+    rss_url: https://www.thebulwark.com/feed
+    topic: Politics
+    enabled: true
+
+  # =====================================================================
+  # Business
+  # =====================================================================
+  # GeekWire — fully free, ad-supported.
   - id: geekwire-startups
     name: GeekWire Startups
     rss_url: https://www.geekwire.com/startups/feed/
+    topic: Business
     enabled: true
 
-  # Has a paid Wired subscription; RSS delivers article excerpts/summaries.
+  # WIRED — paid subscription; RSS delivers excerpts.
   - id: wired-business
     name: WIRED Business
     rss_url: https://www.wired.com/feed/category/business/latest/rss
+    topic: Business
     enabled: true
 
-  # Fully free, ad-supported.
+  - id: lennys-newsletter
+    name: Lenny's Newsletter
+    rss_url: https://www.lennysnewsletter.com/feed
+    topic: Business
+    enabled: true
+
+  - id: marker
+    name: Marker
+    rss_url: https://marker.medium.com/feed
+    topic: Business
+    enabled: true
+
+  - id: not-boring
+    name: Not Boring (Packy McCormick)
+    rss_url: https://www.notboring.co/feed
+    topic: Business
+    enabled: true
+
+  # =====================================================================
+  # Tech
+  # =====================================================================
+  # TechCrunch — fully free, ad-supported.
   - id: techcrunch
     name: TechCrunch
     rss_url: https://techcrunch.com/feed/
+    topic: Tech
     enabled: true
 
-  # Has a paid Ars Premier tier ($25/yr) for ad-free reading; article content is free.
+  # Ars Technica — paid Premier tier; article content is free.
   - id: ars-technica
     name: Ars Technica
     rss_url: https://feeds.arstechnica.com/arstechnica/index
+    topic: Tech
     enabled: true
 
-  # Fully free, user-submitted links aggregator.
+  # Hacker News — fully free, user-submitted aggregator.
   - id: hacker-news
     name: Hacker News (Front Page)
     rss_url: https://hnrss.org/frontpage
+    topic: Tech
     enabled: true
 
-  # Fully free, ad-supported.
   - id: venturebeat
     name: VentureBeat
     rss_url: https://venturebeat.com/feed/
+    topic: Tech
     enabled: true
 
-  # Has a paid MIT Tech Review subscription with a metered free-article limit per month.
+  # MIT Tech Review — paid subscription with metered free articles.
   - id: mit-technology-review
     name: MIT Technology Review
     rss_url: https://www.technologyreview.com/feed/
+    topic: Tech
     enabled: true
 
-  # Paid newsletter ($12/mo, $120/yr); free RSS only carries the weekly free article — daily Updates are subscriber-only.
+  # Stratechery — paid newsletter ($12/mo); RSS carries the weekly free article.
   - id: stratechery
     name: Stratechery (Ben Thompson)
     rss_url: https://stratechery.com/feed/
+    topic: Tech
+    enabled: true
+
+  - id: platformer
+    name: Platformer
+    rss_url: https://www.platformer.news/feed
+    topic: Tech
+    enabled: true
+
+  - id: pragmatic-engineer
+    name: The Pragmatic Engineer
+    rss_url: https://newsletter.pragmaticengineer.com/feed
+    topic: Tech
+    enabled: true
+
+  - id: benedict-evans
+    name: Benedict Evans
+    rss_url: https://www.ben-evans.com/benedictevans?format=rss
+    topic: Tech
+    enabled: true
+
+  - id: daring-fireball
+    name: Daring Fireball
+    rss_url: https://daringfireball.net/feeds/main
+    topic: Tech
+    enabled: true
+
+  - id: the-verge
+    name: The Verge
+    rss_url: https://www.theverge.com/rss/index.xml
+    topic: Tech
+    enabled: true
+
+  # =====================================================================
+  # Strategy
+  # =====================================================================
+  - id: strategy-andrew-chen
+    name: Andrew Chen
+    rss_url: https://andrewchen.com/feed/
+    topic: Strategy
+    enabled: true
+
+  - id: strategy-future-a16z
+    name: Future (a16z)
+    rss_url: https://future.com/feed/
+    topic: Strategy
+    enabled: true
+
+  - id: strategy-yc-blog
+    name: Y Combinator Blog
+    rss_url: https://www.ycombinator.com/blog/rss
+    topic: Strategy
+    enabled: true
+
+  # =====================================================================
+  # Personal Finance
+  # =====================================================================
+  - id: pf-wealth-of-common-sense
+    name: A Wealth of Common Sense
+    rss_url: https://awealthofcommonsense.com/feed/
+    topic: Personal Finance
+    enabled: true
+
+  - id: pf-money-with-katie
+    name: Money with Katie
+    rss_url: https://moneywithkatie.com/feed
+    topic: Personal Finance
+    enabled: true
+
+  - id: pf-of-dollars-and-data
+    name: Of Dollars and Data
+    rss_url: https://ofdollarsanddata.com/feed/
+    topic: Personal Finance
+    enabled: true
+
+  - id: pf-reformed-broker
+    name: The Reformed Broker
+    rss_url: https://thereformedbroker.com/feed/
+    topic: Personal Finance
+    enabled: true
+
+  # =====================================================================
+  # Science
+  # =====================================================================
+  - id: sci-astral-codex-ten
+    name: Astral Codex Ten
+    rss_url: https://www.astralcodexten.com/feed
+    topic: Science
+    enabled: true
+
+  - id: sci-nautilus
+    name: Nautilus
+    rss_url: https://nautil.us/feed/
+    topic: Science
+    enabled: true
+
+  - id: sci-quanta
+    name: Quanta Magazine
+    rss_url: https://api.quantamagazine.org/feed/
+    topic: Science
+    enabled: true
+
+  - id: sci-scientific-american
+    name: Scientific American
+    rss_url: https://www.scientificamerican.com/platform/syndication/rss/
+    topic: Science
+    enabled: true
+
+  # =====================================================================
+  # Sports
+  # =====================================================================
+  - id: sports-defector
+    name: Defector
+    rss_url: https://defector.com/feed
+    topic: Sports
+    enabled: true
+
+  - id: sports-espn
+    name: ESPN Top Headlines
+    rss_url: https://www.espn.com/espn/rss/news
+    topic: Sports
+    enabled: true
+
+  - id: sports-joeblogs
+    name: JoeBlogs (Joe Posnanski)
+    rss_url: https://joeposnanski.substack.com/feed
+    topic: Sports
+    enabled: true
+
+  - id: sports-the-athletic
+    name: The Athletic (Latest)
+    rss_url: https://theathletic.com/rss-feed/
+    topic: Sports
+    enabled: true
+
+  # =====================================================================
+  # Culture
+  # =====================================================================
+  - id: culture-study
+    name: Culture Study (Anne Helen Petersen)
+    rss_url: https://annehelen.substack.com/feed
+    topic: Culture
+    enabled: true
+
+  - id: culture-ankler
+    name: The Ankler
+    rss_url: https://theankler.com/feed
+    topic: Culture
+    enabled: true
+
+  - id: culture-newyorker
+    name: The New Yorker
+    rss_url: https://www.newyorker.com/feed/everything
+    topic: Culture
+    enabled: true
+
+  - id: culture-atlantic
+    name: The Atlantic — Culture
+    rss_url: https://www.theatlantic.com/feed/channel/culture/
+    topic: Culture
+    enabled: true
+
+  # =====================================================================
+  # Health & Wellness
+  # =====================================================================
+  - id: health-nyt-well
+    name: NYT Well
+    rss_url: https://rss.nytimes.com/services/xml/rss/nyt/Well.xml
+    topic: Health & Wellness
+    enabled: true
+
+  - id: health-peter-attia
+    name: Peter Attia
+    rss_url: https://peterattiamd.com/feed/
+    topic: Health & Wellness
+    enabled: true
+
+  - id: health-huberman
+    name: Huberman Lab
+    rss_url: https://feeds.megaphone.fm/hubermanlab
+    topic: Health & Wellness
+    enabled: true
+
+  - id: health-healthline
+    name: Healthline News
+    rss_url: https://www.healthline.com/rss/health-news
+    topic: Health & Wellness
+    enabled: true
+
+  - id: health-tim-ferriss
+    name: The Blog of Tim Ferriss
+    rss_url: https://tim.blog/feed/
+    topic: Health & Wellness
+    enabled: true
+
+  # =====================================================================
+  # Food & Travel
+  # =====================================================================
+  - id: ft-atlas-obscura
+    name: Atlas Obscura
+    rss_url: https://www.atlasobscura.com/feeds/latest
+    topic: Food & Travel
+    enabled: true
+
+  - id: ft-eater
+    name: Eater
+    rss_url: https://www.eater.com/rss/index.xml
+    topic: Food & Travel
+    enabled: true
+
+  - id: ft-bittman
+    name: The Bittman Project
+    rss_url: https://www.bittmanproject.com/feed
+    topic: Food & Travel
+    enabled: true
+
+  - id: ft-saveur
+    name: Saveur
+    rss_url: https://www.saveur.com/feed/
+    topic: Food & Travel
+    enabled: true
+
+  # =====================================================================
+  # Romantasy
+  # =====================================================================
+  - id: romantasy-aar
+    name: All About Romance
+    rss_url: https://allaboutromance.com/feed/
+    topic: Romantasy
+    enabled: true
+
+  - id: romantasy-bookriot
+    name: Book Riot
+    rss_url: https://bookriot.com/feed/
+    topic: Romantasy
+    enabled: true
+
+  - id: romantasy-smartbitches
+    name: Smart Bitches, Trashy Books
+    rss_url: https://smartbitchestrashybooks.com/feed/
+    topic: Romantasy
     enabled: true

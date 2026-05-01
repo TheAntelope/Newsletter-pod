@@ -21,6 +21,7 @@ class SourceDefinition(BaseModel):
     name: str
     rss_url: str
     enabled: bool = True
+    topic: Optional[str] = None
 
 
 class SourceItem(BaseModel):

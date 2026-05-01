@@ -56,13 +56,13 @@ class Settings(BaseSettings):
     elevenlabs_api_key: Optional[str] = Field(default=None, alias="ELEVENLABS_API_KEY")
     elevenlabs_model: str = Field(default="eleven_multilingual_v2", alias="ELEVENLABS_MODEL")
     elevenlabs_voice_primary_id: str = Field(
-        default="hYjzO0gkYN6FIXTHyEpi", alias="ELEVENLABS_VOICE_PRIMARY_ID"
+        default="suMMgpGbVcnihP1CcgFS", alias="ELEVENLABS_VOICE_PRIMARY_ID"
     )
     elevenlabs_voice_primary_name: str = Field(
         default="Vinnie Chase", alias="ELEVENLABS_VOICE_PRIMARY_NAME"
     )
     elevenlabs_voice_secondary_id: str = Field(
-        default="suMMgpGbVcnihP1CcgFS", alias="ELEVENLABS_VOICE_SECONDARY_ID"
+        default="RKCbSROXui75bk1SVpy8", alias="ELEVENLABS_VOICE_SECONDARY_ID"
     )
     elevenlabs_voice_secondary_name: str = Field(
         default="Demi Dreams", alias="ELEVENLABS_VOICE_SECONDARY_NAME"
@@ -125,6 +125,13 @@ class Settings(BaseSettings):
     inbound_email_domain: str = Field(default="theclawcast.com", alias="INBOUND_EMAIL_DOMAIN")
     mailgun_webhook_signing_key: Optional[str] = Field(default=None, alias="MAILGUN_WEBHOOK_SIGNING_KEY")
     mailgun_api_key: Optional[str] = Field(default=None, alias="MAILGUN_API_KEY")
+
+    # Welcome episode: pre-recorded MP3 seeded into every new user's feed at signup.
+    # Set object_name + size + duration to enable; leave object_name empty to disable.
+    welcome_episode_object_name: Optional[str] = Field(default=None, alias="WELCOME_EPISODE_OBJECT_NAME")
+    welcome_episode_size_bytes: int = Field(default=0, alias="WELCOME_EPISODE_SIZE_BYTES")
+    welcome_episode_duration_seconds: int = Field(default=0, alias="WELCOME_EPISODE_DURATION_SECONDS")
+    welcome_episode_version: str = Field(default="v1", alias="WELCOME_EPISODE_VERSION")
 
     @classmethod
     def from_env(cls) -> "Settings":
