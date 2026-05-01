@@ -633,6 +633,18 @@ struct SourcesView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    NewsletterEmailCard()
+                }
+                .listRowInsets(EdgeInsets(top: 12, leading: 0, bottom: 12, trailing: 0))
+                .listRowBackground(Color.clear)
+
+                if let address = viewModel.user?.inboundAddress, !address.isEmpty {
+                    Section("Recent Newsletters") {
+                        InboundItemsList()
+                    }
+                }
+
                 Section("Catalog Sources") {
                     ForEach(viewModel.catalogSources) { source in
                         Toggle(source.name, isOn: Binding(
@@ -677,6 +689,12 @@ struct SourcesView: View {
             }
             .navigationTitle("Sources")
             .editorialBackground()
+            .refreshable {
+                await viewModel.loadInboundItems()
+            }
+            .task {
+                await viewModel.loadInboundItems()
+            }
             .onAppear {
                 selectedCatalogIDs = Set(
                     viewModel.selectedSources
@@ -689,6 +707,110 @@ struct SourcesView: View {
                 customURLs = custom.isEmpty ? [""] : custom
             }
         }
+    }
+}
+
+private struct NewsletterEmailCard: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @State private var didCopy = false
+
+    var body: some View {
+        EditorialCard {
+            HStack(spacing: Theme.Spacing.s) {
+                MetaLabel(text: "Newsletter Email")
+                Spacer()
+                if didCopy {
+                    Label("Copied", systemImage: "checkmark.circle.fill")
+                        .font(Theme.Typography.meta())
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                        .transition(.opacity)
+                }
+            }
+
+            if let address = viewModel.user?.inboundAddress, !address.isEmpty {
+                Text(address)
+                    .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Theme.Palette.ink)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+
+                Text("Use this address to subscribe to any newsletter (Substack, Beehiiv, Stratechery…). New issues land here and we mix them into your next episode.")
+                    .font(Theme.Typography.body(14))
+                    .foregroundStyle(Theme.Palette.muted)
+
+                Button {
+                    UIPasteboard.general.string = address
+                    withAnimation { didCopy = true }
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        withAnimation { didCopy = false }
+                    }
+                } label: {
+                    Label("Copy address", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.amberFilled)
+            } else {
+                Text("Generating your private address…")
+                    .font(Theme.Typography.body(14))
+                    .foregroundStyle(Theme.Palette.muted)
+            }
+        }
+        .padding(.horizontal, Theme.Spacing.m)
+    }
+}
+
+private struct InboundItemsList: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        if viewModel.inboundItems.isEmpty {
+            HStack(spacing: Theme.Spacing.s) {
+                Image(systemName: "tray")
+                    .foregroundStyle(Theme.Palette.muted)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Nothing yet")
+                        .font(Theme.Typography.body())
+                        .foregroundStyle(Theme.Palette.ink)
+                    Text("Forwarded newsletters will appear here within seconds of arriving.")
+                        .font(Theme.Typography.body(13))
+                        .foregroundStyle(Theme.Palette.muted)
+                }
+            }
+            .padding(.vertical, 4)
+        } else {
+            ForEach(viewModel.inboundItems) { item in
+                InboundItemRow(item: item)
+            }
+        }
+    }
+}
+
+private struct InboundItemRow: View {
+    let item: InboundItemDTO
+
+    private static let timestampFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(item.subject)
+                .font(Theme.Typography.body(15).weight(.semibold))
+                .foregroundStyle(Theme.Palette.ink)
+                .lineLimit(2)
+            HStack(spacing: 6) {
+                Text(item.displaySender)
+                    .lineLimit(1)
+                Text("·")
+                Text(Self.timestampFormatter.localizedString(for: item.receivedAt, relativeTo: Date()))
+            }
+            .font(Theme.Typography.body(12))
+            .foregroundStyle(Theme.Palette.muted)
+        }
+        .padding(.vertical, 4)
     }
 }
 

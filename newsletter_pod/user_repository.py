@@ -142,6 +142,10 @@ class ControlPlaneRepository(ABC):
     def get_inbound_item(self, item_id: str) -> Optional[InboundEmailItem]:
         raise NotImplementedError
 
+    @abstractmethod
+    def list_recent_inbound_items(self, user_id: str, limit: int) -> list[InboundEmailItem]:
+        raise NotImplementedError
+
 
 class InMemoryControlPlaneRepository(ControlPlaneRepository):
     def __init__(self) -> None:
@@ -265,6 +269,11 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
 
     def get_inbound_item(self, item_id: str) -> Optional[InboundEmailItem]:
         return self._inbound_items.get(item_id)
+
+    def list_recent_inbound_items(self, user_id: str, limit: int) -> list[InboundEmailItem]:
+        items = [item for item in self._inbound_items.values() if item.user_id == user_id]
+        items.sort(key=lambda item: item.received_at, reverse=True)
+        return items[:limit]
 
 
 class FirestoreControlPlaneRepository(ControlPlaneRepository):
@@ -443,3 +452,13 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         if not doc.exists:
             return None
         return InboundEmailItem.model_validate(doc.to_dict())
+
+    def list_recent_inbound_items(self, user_id: str, limit: int) -> list[InboundEmailItem]:
+        docs = list(
+            self._inbound_items
+                .where("user_id", "==", user_id)
+                .order_by("received_at", direction=firestore.Query.DESCENDING)
+                .limit(limit)
+                .stream()
+        )
+        return [InboundEmailItem.model_validate(doc.to_dict()) for doc in docs]

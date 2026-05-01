@@ -21,6 +21,8 @@ final class AppViewModel: ObservableObject {
     @Published var catalogSources: [CatalogSourceDTO] = []
     @Published var selectedSources: [UserSourceDTO] = []
     @Published var feed: FeedEnvelope?
+    @Published var inboundItems: [InboundItemDTO] = []
+    @Published var isLoadingInbound = false
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var savedMessage: String?
@@ -50,7 +52,8 @@ final class AppViewModel: ObservableObject {
             id: "ui-test-user",
             email: nil,
             displayName: "Listener",
-            timezone: TimeZone.current.identifier
+            timezone: TimeZone.current.identifier,
+            inboundAddress: "uitest@theclawcast.com"
         )
         subscription = SubscriptionDTO(
             userID: "ui-test-user",
@@ -248,6 +251,19 @@ final class AppViewModel: ObservableObject {
             } catch {
                 // Transient poll failure — keep trying.
             }
+        }
+    }
+
+    func loadInboundItems() async {
+        if isUITestMode { return }
+        guard let sessionToken else { return }
+        isLoadingInbound = true
+        defer { isLoadingInbound = false }
+        do {
+            let envelope = try await apiClient.fetchInboundItems(token: sessionToken)
+            inboundItems = envelope.items
+        } catch {
+            // Non-fatal: leave existing items in place.
         }
     }
 

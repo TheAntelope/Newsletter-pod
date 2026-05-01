@@ -25,9 +25,34 @@ final class APIClient {
         self.session = session
         self.decoder = JSONDecoder()
         self.encoder = JSONEncoder()
-        self.decoder.dateDecodingStrategy = .iso8601
+        self.decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+            if let date = APIClient.iso8601WithFractional.date(from: value) {
+                return date
+            }
+            if let date = APIClient.iso8601Plain.date(from: value) {
+                return date
+            }
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Could not parse date: \(value)"
+            )
+        }
         self.encoder.dateEncodingStrategy = .iso8601
     }
+
+    private static let iso8601WithFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let iso8601Plain: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 
     func signInWithApple(identityToken: String, givenName: String? = nil) async throws -> SessionEnvelope {
         try await request(
@@ -113,6 +138,10 @@ final class APIClient {
 
     func fetchFeed(token: String) async throws -> FeedEnvelope {
         try await request(path: "/v1/me/feed", method: "GET", body: Optional<Int>.none, token: token)
+    }
+
+    func fetchInboundItems(token: String) async throws -> InboundItemsEnvelope {
+        try await request(path: "/v1/me/inbound-items", method: "GET", body: Optional<Int>.none, token: token)
     }
 
     func generateNow(token: String) async throws -> RunStartEnvelope {

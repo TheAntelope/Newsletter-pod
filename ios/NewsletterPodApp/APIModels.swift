@@ -64,12 +64,14 @@ struct UserDTO: Codable {
     let email: String?
     let displayName: String
     let timezone: String
+    let inboundAddress: String?
 
     private enum CodingKeys: String, CodingKey {
         case id
         case email
         case displayName = "display_name"
         case timezone
+        case inboundAddress = "inbound_address"
     }
 
     var hasFriendlyName: Bool {
@@ -229,6 +231,41 @@ struct UserRunDTO: Codable {
 struct RunStartEnvelope: Codable {
     let run: UserRunDTO
     let started: Bool
+}
+
+struct InboundItemsEnvelope: Codable {
+    let inboundAddress: String?
+    let items: [InboundItemDTO]
+
+    private enum CodingKeys: String, CodingKey {
+        case inboundAddress = "inbound_address"
+        case items
+    }
+}
+
+struct InboundItemDTO: Codable, Identifiable, Hashable {
+    let id: String
+    let fromEmail: String
+    let fromName: String?
+    let senderDomain: String
+    let subject: String
+    let articleURL: String?
+    let receivedAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case fromEmail = "from_email"
+        case fromName = "from_name"
+        case senderDomain = "sender_domain"
+        case subject
+        case articleURL = "article_url"
+        case receivedAt = "received_at"
+    }
+
+    var displaySender: String {
+        if let name = fromName, !name.isEmpty { return name }
+        return senderDomain
+    }
 }
 
 struct RunStatusEnvelope: Codable {

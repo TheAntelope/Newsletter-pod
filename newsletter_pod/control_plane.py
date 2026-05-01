@@ -14,6 +14,7 @@ import requests
 from .auth import AppleIdentityVerifier, SessionManager
 from .config import Settings, load_sources
 from .costing import estimate_generation_cost
+from .inbound import ensure_user_inbound_alias
 from .ingestion import RSSIngestionService
 from .mailer import Mailer
 from .models import PodcastUxConfig, PublishStatus, SourceDefinition, SourceItemRef
@@ -144,12 +145,13 @@ class ControlPlaneService:
         if existing_user is None:
             self._persist_default_records(user)
 
+        ensure_user_inbound_alias(self.repository, user)
         token, session = self.session_manager.issue(user.id)
         return {
             "session_token": token,
             "session": session.model_dump(mode="json"),
             "is_new_user": is_new,
-            "user": user.model_dump(mode="json"),
+            "user": self._user_payload(user),
             "subscription": self._get_subscription(user.id).model_dump(mode="json"),
         }
 
@@ -162,18 +164,40 @@ class ControlPlaneService:
 
     def get_me(self, user_id: str) -> dict[str, Any]:
         user = self._require_user(user_id)
+        ensure_user_inbound_alias(self.repository, user)
         subscription = self._get_subscription(user_id)
         entitlements = self._entitlements_for(subscription)
         return {
-            "user": user.model_dump(mode="json"),
+            "user": self._user_payload(user),
             "profile": self._get_profile(user_id).model_dump(mode="json"),
             "schedule": self._get_schedule(user_id).model_dump(mode="json"),
             "subscription": subscription.model_dump(mode="json"),
             "entitlements": entitlements.model_dump(mode="json"),
         }
 
+    def list_inbound_items(self, user_id: str, limit: int = 20) -> dict[str, Any]:
+        user = self._require_user(user_id)
+        ensure_user_inbound_alias(self.repository, user)
+        items = self.repository.list_recent_inbound_items(user_id, limit)
+        return {
+            "inbound_address": self._inbound_address_for(user),
+            "items": [item.model_dump(mode="json") for item in items],
+        }
+
+    def _user_payload(self, user: UserRecord) -> dict[str, Any]:
+        payload = user.model_dump(mode="json")
+        payload["inbound_address"] = self._inbound_address_for(user)
+        return payload
+
+    def _inbound_address_for(self, user: UserRecord) -> Optional[str]:
+        alias = user.inbound_alias
+        if not alias:
+            return None
+        return f"{alias}@{self.settings.inbound_email_domain}"
+
     def update_me(self, user_id: str, display_name: Optional[str], timezone_name: Optional[str]) -> dict[str, Any]:
         user = self._require_user(user_id)
+        ensure_user_inbound_alias(self.repository, user)
         if display_name is not None:
             user.display_name = display_name.strip() or user.display_name
         if timezone_name is not None:

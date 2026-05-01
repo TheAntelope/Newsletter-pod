@@ -218,6 +218,79 @@ def test_ensure_user_inbound_alias_generates_unique_value():
     assert again == alias  # idempotent
 
 
+def test_get_me_lazy_allocates_alias_and_exposes_inbound_address():
+    from newsletter_pod.config import Settings
+
+    settings = Settings.from_env()
+    settings.use_inmemory_adapters = True
+    settings.apple_client_id = "com.example"
+    settings.session_signing_secret = "test-session-secret-32-bytes-long"
+    settings.podcast_api_enabled = False
+    settings.job_trigger_token = None
+    settings.app_base_url = "http://testserver"
+    settings.publish_summary_email_enabled = False
+    settings.inbound_email_domain = "theclawcast.com"
+    settings.mailgun_webhook_signing_key = SIGNING_KEY
+    container = _build_container(settings)
+
+    class _FakeAppleVerifier:
+        def verify(self, identity_token: str):
+            return type("Identity", (), {"subject": "apple-1", "email": "a@b.com"})()
+
+    container.control_plane.apple_identity_verifier = _FakeAppleVerifier()
+
+    client = TestClient(create_app(container=container))
+    auth = client.post("/v1/auth/apple", json={"identity_token": "tok"}).json()
+    headers = {"Authorization": f"Bearer {auth['session_token']}"}
+
+    # Auth response already carries the alias + address.
+    assert auth["user"]["inbound_alias"]
+    assert auth["user"]["inbound_address"].endswith("@theclawcast.com")
+    assert auth["user"]["inbound_address"].split("@", 1)[0] == auth["user"]["inbound_alias"]
+
+    me = client.get("/v1/me", headers=headers).json()
+    assert me["user"]["inbound_alias"] == auth["user"]["inbound_alias"]
+    assert me["user"]["inbound_address"] == auth["user"]["inbound_address"]
+
+
+def test_inbound_items_endpoint_returns_recent_items_for_user():
+    container, repo, user, client = _build_app_with_user()
+
+    # Authenticate as this user so we can hit the protected endpoint.
+    class _FakeVerifier:
+        def verify(self, identity_token: str):
+            return type("Identity", (), {"subject": user.apple_subject, "email": user.email})()
+
+    container.control_plane.apple_identity_verifier = _FakeVerifier()
+    auth = client.post("/v1/auth/apple", json={"identity_token": "tok"}).json()
+    headers = {"Authorization": f"Bearer {auth['session_token']}"}
+
+    # Two stored emails, one foreign (different user).
+    payload_a = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender="news@a.com",
+        subject="From A",
+        body="hello",
+        message_id="<a@a.com>",
+    )
+    payload_b = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender="news@b.com",
+        subject="From B",
+        body="world",
+        message_id="<b@b.com>",
+    )
+    assert client.post("/webhooks/mailgun/inbound", data=payload_a).json()["status"] == "stored"
+    assert client.post("/webhooks/mailgun/inbound", data=payload_b).json()["status"] == "stored"
+
+    response = client.get("/v1/me/inbound-items", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["inbound_address"] == "a7f2bk9q@theclawcast.com"
+    subjects = [item["subject"] for item in body["items"]]
+    assert set(subjects) == {"From A", "From B"}
+
+
 def test_handler_rejects_when_signing_key_missing():
     container, repo, user, _ = _build_app_with_user()
     handler = InboundEmailHandler(
