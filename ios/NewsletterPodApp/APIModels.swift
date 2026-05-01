@@ -127,6 +127,7 @@ struct CatalogSourceDTO: Codable, Identifiable, Hashable {
     let name: String
     let rssURL: String
     let enabled: Bool
+    let topic: String?
 
     var id: String { sourceID }
 
@@ -135,6 +136,7 @@ struct CatalogSourceDTO: Codable, Identifiable, Hashable {
         case name
         case rssURL = "rss_url"
         case enabled
+        case topic
     }
 }
 

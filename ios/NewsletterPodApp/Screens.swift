@@ -818,8 +818,8 @@ private struct InboundItemRow: View {
 
 struct PodcastSetupView: View {
     static let voiceOptions: [(id: String, name: String)] = [
-        ("hYjzO0gkYN6FIXTHyEpi", "Vinnie Chase"),
-        ("suMMgpGbVcnihP1CcgFS", "Demi Dreams"),
+        ("suMMgpGbVcnihP1CcgFS", "Vinnie Chase"),
+        ("RKCbSROXui75bk1SVpy8", "Demi Dreams"),
     ]
 
     @EnvironmentObject private var viewModel: AppViewModel
@@ -1317,36 +1317,52 @@ struct OnboardingStarterPack: Identifiable {
     let icon: String
     let sourceIDs: [String]
 
-    static let all: [OnboardingStarterPack] = [
-        OnboardingStarterPack(
-            id: "tech-daily",
-            name: "Tech daily",
-            summary: "TechCrunch, Hacker News, GeekWire.",
-            icon: "bolt.fill",
-            sourceIDs: ["techcrunch", "hacker-news", "geekwire-startups"]
-        ),
-        OnboardingStarterPack(
-            id: "deep-reads",
-            name: "Deep reads",
-            summary: "Ars Technica, MIT Technology Review, WIRED Business.",
-            icon: "book.fill",
-            sourceIDs: ["ars-technica", "mit-technology-review", "wired-business"]
-        ),
-        OnboardingStarterPack(
-            id: "strategy",
-            name: "Strategy & business",
-            summary: "Stratechery, WIRED Business, VentureBeat.",
-            icon: "chart.line.uptrend.xyaxis",
-            sourceIDs: ["stratechery", "wired-business", "venturebeat"]
-        ),
-        OnboardingStarterPack(
-            id: "mix",
-            name: "Mix it up",
-            summary: "A balanced rotation across news, analysis, and deep tech.",
-            icon: "sparkles",
-            sourceIDs: ["hacker-news", "techcrunch", "ars-technica", "mit-technology-review"]
-        ),
+    // SF Symbols per topic. Unknown topics fall back to "sparkles".
+    private static let iconByTopic: [String: String] = [
+        "News": "newspaper.fill",
+        "Politics": "building.columns.fill",
+        "Business": "chart.line.uptrend.xyaxis",
+        "Tech": "cpu.fill",
+        "Strategy": "target",
+        "Personal Finance": "dollarsign.circle.fill",
+        "Science": "atom",
+        "Sports": "sportscourt.fill",
+        "Culture": "theatermasks.fill",
+        "Health & Wellness": "heart.fill",
+        "Food & Travel": "airplane",
+        "Romantasy": "heart.text.square.fill",
     ]
+
+    /// Curated balanced mix used by the "Inspire me" shortcut. Listed in priority
+    /// order; only topics actually present in the live catalog are used.
+    static let inspireMeTopics: [String] = ["News", "Tech", "Culture", "Personal Finance"]
+
+    /// Build topic-grouped starter packs from the live source catalog.
+    /// Topics appear in the order their first source is encountered, matching `sources.yml` order.
+    static func packs(from catalog: [CatalogSourceDTO]) -> [OnboardingStarterPack] {
+        var topicOrder: [String] = []
+        var bucket: [String: [CatalogSourceDTO]] = [:]
+        for source in catalog where source.enabled {
+            guard let topic = source.topic, !topic.isEmpty else { continue }
+            if bucket[topic] == nil {
+                topicOrder.append(topic)
+                bucket[topic] = []
+            }
+            bucket[topic]?.append(source)
+        }
+        return topicOrder.map { topic in
+            let sources = bucket[topic] ?? []
+            let preview = sources.prefix(3).map(\.name).joined(separator: ", ")
+            let summary = sources.count > 3 ? "\(preview), + \(sources.count - 3) more" : preview
+            return OnboardingStarterPack(
+                id: topic,
+                name: topic,
+                summary: summary,
+                icon: iconByTopic[topic] ?? "sparkles",
+                sourceIDs: sources.map(\.sourceID)
+            )
+        }
+    }
 }
 
 struct OnboardingShowPreset: Identifiable {
@@ -1516,8 +1532,9 @@ struct OnboardingFlowView: View {
     }
 
     private func saveSourcesFromPacks() async {
+        let packs = OnboardingStarterPack.packs(from: viewModel.catalogSources)
         let ids = Set(
-            OnboardingStarterPack.all
+            packs
                 .filter { selectedPackIDs.contains($0.id) }
                 .flatMap { $0.sourceIDs }
         )
@@ -1663,8 +1680,9 @@ private struct OnboardingSourcesStep: View {
     let onContinue: () -> Void
 
     var body: some View {
+        let packs = OnboardingStarterPack.packs(from: viewModel.catalogSources)
         OnboardingStepShell(
-            title: "Pick a starter pack.",
+            title: "Pick your topics.",
             subtitle: "Choose one or more — you can fine-tune individual feeds later on the Sources tab.",
             primaryLabel: viewModel.isLoading ? "Saving…" : "Continue",
             primaryDisabled: selected.isEmpty || viewModel.isLoading,
@@ -1672,7 +1690,8 @@ private struct OnboardingSourcesStep: View {
             onBack: onBack
         ) {
             VStack(spacing: Theme.Spacing.m) {
-                ForEach(OnboardingStarterPack.all) { pack in
+                InspireMeButton(onTap: { applyInspireMe(packs: packs) })
+                ForEach(packs) { pack in
                     PackCard(
                         pack: pack,
                         isSelected: selected.contains(pack.id),
@@ -1688,6 +1707,48 @@ private struct OnboardingSourcesStep: View {
             selected.remove(id)
         } else {
             selected.insert(id)
+        }
+    }
+
+    private func applyInspireMe(packs: [OnboardingStarterPack]) {
+        let availableIDs = Set(packs.map(\.id))
+        let curated = OnboardingStarterPack.inspireMeTopics.filter { availableIDs.contains($0) }
+        guard !curated.isEmpty else { return }
+        selected = Set(curated)
+    }
+
+    private struct InspireMeButton: View {
+        let onTap: () -> Void
+
+        var body: some View {
+            Button(action: onTap) {
+                EditorialCard {
+                    HStack(alignment: .center, spacing: Theme.Spacing.m) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.amberDeep)
+                            .frame(width: 32)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Inspire me")
+                                .font(Theme.Typography.title(18))
+                                .foregroundStyle(Theme.Palette.ink)
+                            Text("Our recommended mix — News, Tech, Culture, and Personal Finance.")
+                                .font(Theme.Typography.body(14))
+                                .foregroundStyle(Theme.Palette.inkSoft)
+                                .multilineTextAlignment(.leading)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "wand.and.stars")
+                            .font(.system(size: 22))
+                            .foregroundStyle(Theme.Palette.amber)
+                    }
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                        .stroke(Theme.Palette.amber, lineWidth: 2)
+                )
+            }
+            .buttonStyle(.plain)
         }
     }
 
