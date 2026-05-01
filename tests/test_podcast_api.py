@@ -127,12 +127,12 @@ def test_elevenlabs_tts_uses_user_voice_id(monkeypatch):
     generated = client.generate(
         prompt="Source content",
         title="Daily Briefing",
-        voice_id="suMMgpGbVcnihP1CcgFS",
+        voice_id="RKCbSROXui75bk1SVpy8",
     )
 
     assert generated.audio_bytes == b"mp3-bytes"
     tts_call = calls[1]
-    assert tts_call[0].endswith("/v1/text-to-speech/suMMgpGbVcnihP1CcgFS")
+    assert tts_call[0].endswith("/v1/text-to-speech/RKCbSROXui75bk1SVpy8")
     assert tts_call[1]["model_id"] == "eleven_multilingual_v2"
     assert tts_call[2]["xi-api-key"] == "el-key"
 
@@ -186,8 +186,8 @@ def test_elevenlabs_routes_segments_to_two_voices_by_speaker(monkeypatch):
         elevenlabs_model="eleven_multilingual_v2",
     )
 
-    primary_id = "hYjzO0gkYN6FIXTHyEpi"
-    secondary_id = "suMMgpGbVcnihP1CcgFS"
+    primary_id = "suMMgpGbVcnihP1CcgFS"
+    secondary_id = "RKCbSROXui75bk1SVpy8"
     generated = client.generate(
         prompt="Source content",
         title="Daily Briefing",
