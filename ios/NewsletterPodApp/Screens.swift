@@ -1073,47 +1073,69 @@ struct PodcastSetupView: View {
 
 struct ScheduleSection: View {
     @EnvironmentObject private var viewModel: AppViewModel
-    @State private var timezone = TimeZone.current.identifier
     @State private var selectedDays: Set<String> = ["monday"]
+    @State private var deliveryTime: Date = OnboardingScheduleStep.defaultDeliveryTime()
+
+    private static let dayInitials = ["M", "T", "W", "T", "F", "S", "S"]
 
     var body: some View {
-        Section("Weekly Delivery") {
-            TextField("Timezone", text: $timezone)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-
-            ForEach(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"], id: \.self) { day in
-                Toggle(day.capitalized, isOn: Binding(
-                    get: { selectedDays.contains(day) },
-                    set: { isSelected in
+        Section("Delivery schedule") {
+            HStack(spacing: 6) {
+                ForEach(Array(OnboardingScheduleStep.canonicalWeekdayOrder.enumerated()), id: \.offset) { idx, day in
+                    let isSelected = selectedDays.contains(day)
+                    Button {
                         if isSelected {
-                            selectedDays.insert(day)
-                        } else {
                             selectedDays.remove(day)
+                        } else {
+                            selectedDays.insert(day)
                         }
+                    } label: {
+                        Text(Self.dayInitials[idx])
+                            .font(Theme.Typography.title(15).weight(.semibold))
+                            .frame(width: 32, height: 32)
+                            .background(isSelected ? Theme.Palette.amber : Color.clear, in: Circle())
+                            .foregroundStyle(isSelected ? Color.white : Theme.Palette.ink)
+                            .overlay(
+                                Circle().stroke(isSelected ? Theme.Palette.amber : Theme.Palette.rule, lineWidth: 1.5)
+                            )
                     }
-                ))
+                    .buttonStyle(.plain)
+                }
             }
+            .padding(.vertical, 4)
+
+            DatePicker(
+                "Time",
+                selection: $deliveryTime,
+                displayedComponents: .hourAndMinute
+            )
+            .tint(Theme.Palette.amberDeep)
 
             Button("Save delivery schedule") {
                 Task {
+                    let weekdays = OnboardingScheduleStep.canonicalWeekdayOrder.filter { selectedDays.contains($0) }
+                    let timezone = viewModel.user?.timezone ?? TimeZone.current.identifier
                     await viewModel.saveSchedule(
                         timezone: timezone,
-                        weekdays: Array(selectedDays).sorted()
+                        weekdays: weekdays,
+                        localTime: OnboardingScheduleStep.formattedHHmm(deliveryTime)
                     )
                 }
             }
             .buttonStyle(.amberOutlined)
             .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
+            .disabled(selectedDays.isEmpty)
 
-            Text("Episodes target 7:00 AM local time with retries through 11:00 AM.")
+            Text("Episodes are delivered in your device's timezone (\(TimeZone.current.identifier)).")
                 .font(.caption)
                 .foregroundStyle(Theme.Palette.muted)
         }
         .onAppear {
-            timezone = viewModel.schedule?.timezone ?? TimeZone.current.identifier
             selectedDays = Set(viewModel.schedule?.weekdays ?? ["monday"])
+            if let parsed = OnboardingScheduleStep.parseHHmm(viewModel.schedule?.localTime) {
+                deliveryTime = parsed
+            }
         }
     }
 }
@@ -2180,6 +2202,23 @@ private struct OnboardingScheduleStep: View {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "HH:mm"
         return formatter.string(from: date)
+    }
+
+    /// Parse an "HH:mm" string into a Date on today's calendar day, for seeding
+    /// the time picker from the user's stored schedule. Returns nil on bad input.
+    static func parseHHmm(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        let parts = value.split(separator: ":")
+        guard parts.count == 2,
+              let hour = Int(parts[0]),
+              let minute = Int(parts[1]),
+              (0...23).contains(hour),
+              (0...59).contains(minute)
+        else { return nil }
+        var components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        components.hour = hour
+        components.minute = minute
+        return Calendar.current.date(from: components)
     }
 
     private var continueDisabled: Bool {
