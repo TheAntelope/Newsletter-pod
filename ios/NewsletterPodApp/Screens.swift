@@ -282,6 +282,10 @@ private struct HeroEpisodeCard: View {
                 }
                 .font(Theme.Typography.body(13))
                 .foregroundStyle(Theme.Palette.muted)
+
+                if let transcript = latest.transcriptText, !transcript.isEmpty {
+                    CollapsibleTranscript(text: transcript)
+                }
             } else if viewModel.isGenerating {
                 HStack(alignment: .top, spacing: Theme.Spacing.m) {
                     ProgressView().tint(Theme.Palette.amberDeep)
@@ -464,6 +468,39 @@ private struct CollapsibleDescription: View {
             attributed[run.range].underlineStyle = .single
         }
         return attributed
+    }
+}
+
+private struct CollapsibleTranscript: View {
+    let text: String
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+            } label: {
+                HStack {
+                    Text("Transcript")
+                        .font(Theme.Typography.body(14).weight(.semibold))
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                    Spacer()
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Text(text)
+                    .font(Theme.Typography.body(14))
+                    .foregroundStyle(Theme.Palette.inkSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        }
     }
 }
 

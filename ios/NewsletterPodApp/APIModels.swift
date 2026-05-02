@@ -200,6 +200,7 @@ struct UserEpisodeDTO: Codable {
     let processedItemCount: Int
     let droppedItemCount: Int
     let capHit: Bool
+    let transcriptText: String?
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -209,6 +210,7 @@ struct UserEpisodeDTO: Codable {
         case processedItemCount = "processed_item_count"
         case droppedItemCount = "dropped_item_count"
         case capHit = "cap_hit"
+        case transcriptText = "transcript_text"
     }
 }
 
