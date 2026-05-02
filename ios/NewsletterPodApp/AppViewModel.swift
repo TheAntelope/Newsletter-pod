@@ -19,6 +19,7 @@ final class AppViewModel: ObservableObject {
     @Published var subscription: SubscriptionDTO?
     @Published var entitlements: EntitlementsDTO?
     @Published var catalogSources: [CatalogSourceDTO] = []
+    @Published var catalogVoices: [CatalogVoiceDTO] = []
     @Published var selectedSources: [UserSourceDTO] = []
     @Published var feed: FeedEnvelope?
     @Published var inboundItems: [InboundItemDTO] = []
@@ -117,11 +118,13 @@ final class AppViewModel: ObservableObject {
         guard let sessionToken else { return }
         async let me = apiClient.fetchMe(token: sessionToken)
         async let catalog = apiClient.fetchCatalog()
+        async let voices = apiClient.fetchVoiceCatalog()
         async let sources = apiClient.fetchSources(token: sessionToken)
         async let feed = apiClient.fetchFeed(token: sessionToken)
 
         let meValue = try await me
         let catalogValue = try await catalog
+        let voicesValue = try await voices
         let sourcesValue = try await sources
         let feedValue = try await feed
 
@@ -131,6 +134,7 @@ final class AppViewModel: ObservableObject {
         subscription = meValue.subscription
         entitlements = meValue.entitlements
         catalogSources = catalogValue.sources
+        catalogVoices = voicesValue.voices
         selectedSources = sourcesValue.sources
         self.feed = feedValue
         resumeGenerationPollingIfNeeded()
@@ -282,10 +286,15 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func saveSchedule(timezone: String, weekdays: [String]) async {
+    func saveSchedule(timezone: String, weekdays: [String], localTime: String? = nil) async {
         guard let sessionToken else { return }
         await load {
-            let response = try await apiClient.updateSchedule(token: sessionToken, timezone: timezone, weekdays: weekdays)
+            let response = try await apiClient.updateSchedule(
+                token: sessionToken,
+                timezone: timezone,
+                weekdays: weekdays,
+                localTime: localTime
+            )
             schedule = response.schedule
             entitlements = response.entitlements
             flashSaved("Schedule saved")

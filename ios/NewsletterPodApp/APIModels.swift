@@ -31,6 +31,10 @@ struct CatalogEnvelope: Codable {
     let sources: [CatalogSourceDTO]
 }
 
+struct VoiceCatalogEnvelope: Codable {
+    let voices: [CatalogVoiceDTO]
+}
+
 struct PodcastConfigEnvelope: Codable {
     let profile: PodcastProfileDTO
     let entitlements: EntitlementsDTO
@@ -138,6 +142,13 @@ struct CatalogSourceDTO: Codable, Identifiable, Hashable {
         case enabled
         case topic
     }
+}
+
+struct CatalogVoiceDTO: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let gender: String
+    let description: String
 }
 
 struct UserSourceDTO: Codable, Identifiable, Hashable {

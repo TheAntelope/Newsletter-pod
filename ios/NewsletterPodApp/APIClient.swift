@@ -80,6 +80,10 @@ final class APIClient {
         try await request(path: "/v1/sources/catalog", method: "GET", body: Optional<Int>.none, token: nil)
     }
 
+    func fetchVoiceCatalog() async throws -> VoiceCatalogEnvelope {
+        try await request(path: "/v1/voices/catalog", method: "GET", body: Optional<Int>.none, token: nil)
+    }
+
     func fetchSources(token: String) async throws -> SourcesEnvelope {
         try await request(path: "/v1/me/sources", method: "GET", body: Optional<Int>.none, token: token)
     }
@@ -127,11 +131,11 @@ final class APIClient {
         try await request(path: "/v1/me/schedule", method: "GET", body: Optional<Int>.none, token: token)
     }
 
-    func updateSchedule(token: String, timezone: String, weekdays: [String]) async throws -> ScheduleEnvelope {
+    func updateSchedule(token: String, timezone: String, weekdays: [String], localTime: String?) async throws -> ScheduleEnvelope {
         try await request(
             path: "/v1/me/schedule",
             method: "PATCH",
-            body: UpdateScheduleBody(timezone: timezone, weekdays: weekdays),
+            body: UpdateScheduleBody(timezone: timezone, weekdays: weekdays, local_time: localTime),
             token: token
         )
     }
@@ -254,4 +258,5 @@ private struct UpdatePodcastConfigBody: Encodable {
 private struct UpdateScheduleBody: Encodable {
     let timezone: String
     let weekdays: [String]
+    let local_time: String?
 }

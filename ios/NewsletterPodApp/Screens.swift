@@ -1025,6 +1025,8 @@ struct PodcastSetupView: View {
                         .foregroundStyle(Theme.Palette.muted)
                 }
 
+                ScheduleSection()
+
                 Section {
                     Button("Save podcast settings") {
                         Task {
@@ -1566,7 +1568,21 @@ struct OnboardingFlowView: View {
     @State private var step: Int = 0
     @State private var selectedPackIDs: Set<String> = ["tech-daily"]
     @State private var selectedShowPresetID: String = "twohost"
-    @State private var selectedSchedule: OnboardingScheduleChoice = .weekdays
+    @State private var selectedAnchorVoiceID: String? = nil
+    @State private var selectedCommentatorVoiceID: String? = nil
+    @State private var selectedWeekdays: Set<String> = Set(OnboardingScheduleChoice.weekdays.weekdays)
+    @State private var selectedDeliveryTime: Date = OnboardingScheduleStep.defaultDeliveryTime()
+
+    /// True when the user picked the solo-host preset; the Voices step is skipped
+    /// since there's no commentator role to assign.
+    private var isSoloHostPreset: Bool {
+        OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID })?.formatPreset == "solo_host"
+    }
+
+    private var totalSteps: Int {
+        // Welcome, Sources, Show, [Voices], Schedule, Done
+        isSoloHostPreset ? 5 : 6
+    }
 
     var body: some View {
         NavigationStack {
@@ -1576,10 +1592,10 @@ struct OnboardingFlowView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    OnboardingProgressDots(current: step, total: 5)
+                    OnboardingProgressDots(current: step, total: totalSteps)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    if step < 4 {
+                    if step < totalSteps - 1 {
                         Button("Skip") { viewModel.completeOnboarding() }
                             .foregroundStyle(Theme.Palette.muted)
                     }
@@ -1618,19 +1634,33 @@ struct OnboardingFlowView: View {
                 onContinue: {
                     Task {
                         await saveShowPreset()
-                        step = 3
+                        // Solo-host has no commentator role, so skip the Voices step.
+                        step = isSoloHostPreset ? 4 : 3
                     }
                 }
             )
         case 3:
-            OnboardingScheduleStep(
-                selected: $selectedSchedule,
-                isPaid: viewModel.isPaid,
+            OnboardingVoicesStep(
+                anchorVoiceID: $selectedAnchorVoiceID,
+                commentatorVoiceID: $selectedCommentatorVoiceID,
                 onBack: { step = 2 },
                 onContinue: {
                     Task {
-                        await saveSchedule()
+                        await saveVoicesSelection()
                         step = 4
+                    }
+                }
+            )
+        case 4:
+            OnboardingScheduleStep(
+                selectedWeekdays: $selectedWeekdays,
+                deliveryTime: $selectedDeliveryTime,
+                maxDeliveryDays: viewModel.entitlements?.maxDeliveryDays ?? 5,
+                onBack: { step = isSoloHostPreset ? 2 : 3 },
+                onContinue: {
+                    Task {
+                        await saveSchedule()
+                        step = 5
                     }
                 }
             )
@@ -1659,6 +1689,8 @@ struct OnboardingFlowView: View {
     private func saveShowPreset() async {
         guard let preset = OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID }) else { return }
         let title = (viewModel.profile?.title.isEmpty == false) ? viewModel.profile!.title : "ClawCast"
+        // Voice is set by the Voices step on the next screen — keep whatever's already on
+        // the profile (default Vinnie) so we don't blow away an in-progress voice choice.
         let voiceID = viewModel.profile?.voiceID ?? PodcastSetupView.voiceOptions[0].id
         await viewModel.savePodcastConfig(
             title: title,
@@ -1671,9 +1703,28 @@ struct OnboardingFlowView: View {
         )
     }
 
+    private func saveVoicesSelection() async {
+        // The anchor's voice ID becomes the profile's primary voice. The commentator
+        // is auto-derived at TTS time as "the other configured ElevenLabs voice".
+        guard let anchorID = selectedAnchorVoiceID,
+              let preset = OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID }) else { return }
+        let title = viewModel.profile?.title.isEmpty == false ? viewModel.profile!.title : "ClawCast"
+        await viewModel.savePodcastConfig(
+            title: title,
+            formatPreset: preset.formatPreset,
+            primaryHost: preset.primaryHost,
+            secondaryHost: preset.secondaryHost,
+            guestNames: [],
+            desiredDurationMinutes: preset.durationMinutes,
+            voiceID: anchorID
+        )
+    }
+
     private func saveSchedule() async {
         let timezone = viewModel.user?.timezone ?? TimeZone.current.identifier
-        await viewModel.saveSchedule(timezone: timezone, weekdays: selectedSchedule.weekdays)
+        let weekdays = OnboardingScheduleStep.canonicalWeekdayOrder.filter { selectedWeekdays.contains($0) }
+        let localTime = OnboardingScheduleStep.formattedHHmm(selectedDeliveryTime)
+        await viewModel.saveSchedule(timezone: timezone, weekdays: weekdays, localTime: localTime)
     }
 }
 
@@ -1997,56 +2048,238 @@ private struct PaidBadge: View {
     }
 }
 
-private struct OnboardingScheduleStep: View {
-    @Binding var selected: OnboardingScheduleChoice
-    let isPaid: Bool
+private struct OnboardingVoicesStep: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @Binding var anchorVoiceID: String?
+    @Binding var commentatorVoiceID: String?
     let onBack: () -> Void
     let onContinue: () -> Void
+
+    /// Voice list to render. Falls back to the legacy 2-voice static list when the
+    /// catalog hasn't loaded yet (e.g. cold app start) so the picker is never empty.
+    private var voices: [CatalogVoiceDTO] {
+        if !viewModel.catalogVoices.isEmpty { return viewModel.catalogVoices }
+        return PodcastSetupView.voiceOptions.map {
+            CatalogVoiceDTO(id: $0.id, name: $0.name, gender: "neutral", description: "")
+        }
+    }
+
+    private var continueDisabled: Bool {
+        anchorVoiceID == nil || commentatorVoiceID == nil || anchorVoiceID == commentatorVoiceID || viewModel.isLoading
+    }
+
+    var body: some View {
+        OnboardingStepShell(
+            title: "Pick your two voices.",
+            subtitle: "One reads as the anchor, the other plays color commentator. You can change these any time on the Podcast tab.",
+            primaryLabel: viewModel.isLoading ? "Saving…" : "Continue",
+            primaryDisabled: continueDisabled,
+            onPrimary: onContinue,
+            onBack: onBack
+        ) {
+            VStack(spacing: Theme.Spacing.m) {
+                voiceSlot(
+                    label: "Anchor",
+                    selectedID: anchorVoiceID,
+                    excludeID: commentatorVoiceID,
+                    onSelect: { anchorVoiceID = $0 }
+                )
+                voiceSlot(
+                    label: "Commentator",
+                    selectedID: commentatorVoiceID,
+                    excludeID: anchorVoiceID,
+                    onSelect: { commentatorVoiceID = $0 }
+                )
+            }
+            .onAppear { applyDefaultsIfEmpty() }
+            .onChange(of: viewModel.catalogVoices) { _, _ in applyDefaultsIfEmpty() }
+        }
+    }
+
+    /// Pre-fill anchor + commentator with the user's current profile voice and any
+    /// other available voice on first appearance, so a user who taps Continue
+    /// without changing anything still gets a valid two-voice setup.
+    private func applyDefaultsIfEmpty() {
+        let available = voices.map(\.id)
+        guard !available.isEmpty else { return }
+        if anchorVoiceID == nil {
+            anchorVoiceID = viewModel.profile?.voiceID.flatMap { available.contains($0) ? $0 : nil } ?? available.first
+        }
+        if commentatorVoiceID == nil {
+            commentatorVoiceID = available.first(where: { $0 != anchorVoiceID }) ?? available.last
+        }
+    }
+
+    @ViewBuilder
+    private func voiceSlot(label: String, selectedID: String?, excludeID: String?, onSelect: @escaping (String) -> Void) -> some View {
+        let selectedVoice = voices.first(where: { $0.id == selectedID })
+        EditorialCard {
+            HStack(alignment: .center, spacing: Theme.Spacing.m) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(label)
+                        .font(Theme.Typography.body(13).weight(.semibold))
+                        .foregroundStyle(Theme.Palette.muted)
+                    Text(selectedVoice?.name ?? "Choose a voice")
+                        .font(Theme.Typography.title(18))
+                        .foregroundStyle(Theme.Palette.ink)
+                    if let description = selectedVoice?.description, !description.isEmpty {
+                        Text(description)
+                            .font(Theme.Typography.body(13))
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                    }
+                }
+                Spacer(minLength: 0)
+                Menu {
+                    ForEach(voices) { voice in
+                        Button {
+                            onSelect(voice.id)
+                        } label: {
+                            if voice.id == excludeID {
+                                Label("\(voice.name) (already chosen)", systemImage: "circle.slash")
+                            } else if voice.id == selectedID {
+                                Label(voice.name, systemImage: "checkmark")
+                            } else {
+                                Text(voice.name)
+                            }
+                        }
+                        .disabled(voice.id == excludeID)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Change")
+                            .font(Theme.Typography.body(14).weight(.semibold))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(Theme.Palette.amberDeep)
+                }
+            }
+        }
+    }
+}
+
+private struct OnboardingScheduleStep: View {
+    @Binding var selectedWeekdays: Set<String>
+    @Binding var deliveryTime: Date
+    let maxDeliveryDays: Int
+    let onBack: () -> Void
+    let onContinue: () -> Void
+
+    static let canonicalWeekdayOrder = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    private static let dayInitials = ["M", "T", "W", "T", "F", "S", "S"]
+
+    static func defaultDeliveryTime() -> Date {
+        var components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        components.hour = 7
+        components.minute = 0
+        return Calendar.current.date(from: components) ?? Date()
+    }
+
+    static func formattedHHmm(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    private var continueDisabled: Bool {
+        selectedWeekdays.isEmpty || selectedWeekdays.count > maxDeliveryDays
+    }
 
     var body: some View {
         OnboardingStepShell(
             title: "When should it land?",
-            subtitle: "Episodes target 7:00 AM in your local timezone (\(TimeZone.current.identifier)).",
+            subtitle: "Pick the days you want a new episode and the time it should arrive (in your device's timezone).",
             primaryLabel: "Continue",
-            primaryDisabled: false,
+            primaryDisabled: continueDisabled,
             onPrimary: onContinue,
             onBack: onBack
         ) {
-            VStack(spacing: Theme.Spacing.s) {
-                ForEach(OnboardingScheduleChoice.allCases) { choice in
-                    let isLocked = choice.requiresPaid && !isPaid
-                    Button {
-                        if !isLocked { selected = choice }
-                    } label: {
-                        EditorialCard {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack(spacing: 8) {
-                                        Text(choice.label)
-                                            .font(Theme.Typography.title(18))
-                                            .foregroundStyle(Theme.Palette.ink)
-                                        if isLocked { PaidBadge() }
-                                    }
-                                    Text(choice.detail)
-                                        .font(Theme.Typography.body(14))
-                                        .foregroundStyle(Theme.Palette.inkSoft)
-                                }
-                                Spacer(minLength: 0)
-                                Image(systemName: isLocked ? "lock.fill" : (selected == choice ? "checkmark.circle.fill" : "circle"))
-                                    .font(.system(size: 22))
-                                    .foregroundStyle(isLocked ? Theme.Palette.muted : (selected == choice ? Theme.Palette.amber : Theme.Palette.rule))
-                            }
-                        }
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                                .stroke(selected == choice && !isLocked ? Theme.Palette.amber : Color.clear, lineWidth: 2)
-                        )
-                        .opacity(isLocked ? 0.65 : 1)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isLocked)
+            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                shortcutsRow
+                daysSection
+                timeSection
+                if selectedWeekdays.count > maxDeliveryDays {
+                    Text("Your plan allows up to \(maxDeliveryDays) delivery days. Deselect a few or upgrade.")
+                        .font(Theme.Typography.body(13))
+                        .foregroundStyle(Theme.Palette.amberDeep)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var shortcutsRow: some View {
+        HStack(spacing: Theme.Spacing.s) {
+            shortcut(label: "Daily", days: Set(Self.canonicalWeekdayOrder))
+            shortcut(label: "Weekdays", days: Set(Self.canonicalWeekdayOrder.prefix(5)))
+            shortcut(label: "Mondays", days: ["monday"])
+        }
+    }
+
+    private func shortcut(label: String, days: Set<String>) -> some View {
+        let exceedsCap = days.count > maxDeliveryDays
+        let isActive = selectedWeekdays == days
+        return Button {
+            if !exceedsCap { selectedWeekdays = days }
+        } label: {
+            Text(label)
+                .font(Theme.Typography.body(14).weight(.semibold))
+                .padding(.horizontal, Theme.Spacing.m)
+                .padding(.vertical, 8)
+                .background(isActive ? Theme.Palette.amber : Theme.Palette.rule.opacity(0.3), in: Capsule())
+                .foregroundStyle(isActive ? Color.white : Theme.Palette.ink)
+                .opacity(exceedsCap ? 0.45 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(exceedsCap)
+    }
+
+    @ViewBuilder
+    private var daysSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            Text("Days")
+                .font(Theme.Typography.body(13).weight(.semibold))
+                .foregroundStyle(Theme.Palette.muted)
+            HStack(spacing: 8) {
+                ForEach(Array(Self.canonicalWeekdayOrder.enumerated()), id: \.offset) { idx, day in
+                    let isSelected = selectedWeekdays.contains(day)
+                    Button {
+                        if isSelected {
+                            selectedWeekdays.remove(day)
+                        } else {
+                            selectedWeekdays.insert(day)
+                        }
+                    } label: {
+                        Text(Self.dayInitials[idx])
+                            .font(Theme.Typography.title(15).weight(.semibold))
+                            .frame(width: 36, height: 36)
+                            .background(isSelected ? Theme.Palette.amber : Color.clear, in: Circle())
+                            .foregroundStyle(isSelected ? Color.white : Theme.Palette.ink)
+                            .overlay(
+                                Circle().stroke(isSelected ? Theme.Palette.amber : Theme.Palette.rule, lineWidth: 1.5)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var timeSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            Text("Time")
+                .font(Theme.Typography.body(13).weight(.semibold))
+                .foregroundStyle(Theme.Palette.muted)
+            DatePicker(
+                "",
+                selection: $deliveryTime,
+                displayedComponents: .hourAndMinute
+            )
+            .datePickerStyle(.compact)
+            .labelsHidden()
+            .tint(Theme.Palette.amberDeep)
         }
     }
 }
