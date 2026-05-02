@@ -525,46 +525,55 @@ private struct SourcesSummaryCard: View {
     @EnvironmentObject private var viewModel: AppViewModel
 
     var body: some View {
-        EditorialCard {
-            HStack {
-                MetaLabel(text: "Your sources")
-                Spacer()
-                Text("\(viewModel.selectedSources.count) / \(viewModel.entitlements?.maxSources ?? 0)")
-                    .font(Theme.Typography.meta())
-                    .foregroundStyle(Theme.Palette.muted)
-            }
+        Button {
+            viewModel.selectedTab = .sources
+        } label: {
+            EditorialCard {
+                HStack {
+                    MetaLabel(text: "Your sources")
+                    Spacer()
+                    Text("\(viewModel.selectedSources.count) / \(viewModel.entitlements?.maxSources ?? 0)")
+                        .font(Theme.Typography.meta())
+                        .foregroundStyle(Theme.Palette.muted)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.muted)
+                }
 
-            if viewModel.selectedSources.isEmpty {
-                Text("Pick at least one source on the Sources tab to start receiving episodes.")
-                    .font(Theme.Typography.body(15))
-                    .foregroundStyle(Theme.Palette.inkSoft)
-            } else {
-                VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                    ForEach(viewModel.selectedSources.prefix(4)) { source in
-                        HStack(spacing: Theme.Spacing.s) {
-                            Circle()
-                                .fill(Theme.Palette.amber)
-                                .frame(width: 6, height: 6)
-                            Text(source.name)
-                                .font(Theme.Typography.body(15))
-                                .foregroundStyle(Theme.Palette.ink)
-                                .lineLimit(1)
-                            Spacer()
-                            if source.isCustom {
-                                Text("Custom")
-                                    .font(Theme.Typography.meta(10))
-                                    .foregroundStyle(Theme.Palette.muted)
+                if viewModel.selectedSources.isEmpty {
+                    Text("Pick at least one source on the Sources tab to start receiving episodes.")
+                        .font(Theme.Typography.body(15))
+                        .foregroundStyle(Theme.Palette.inkSoft)
+                } else {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                        ForEach(viewModel.selectedSources.prefix(4)) { source in
+                            HStack(spacing: Theme.Spacing.s) {
+                                Circle()
+                                    .fill(Theme.Palette.amber)
+                                    .frame(width: 6, height: 6)
+                                Text(source.name)
+                                    .font(Theme.Typography.body(15))
+                                    .foregroundStyle(Theme.Palette.ink)
+                                    .lineLimit(1)
+                                Spacer()
+                                if source.isCustom {
+                                    Text("Custom")
+                                        .font(Theme.Typography.meta(10))
+                                        .foregroundStyle(Theme.Palette.muted)
+                                }
                             }
                         }
-                    }
-                    if viewModel.selectedSources.count > 4 {
-                        Text("+\(viewModel.selectedSources.count - 4) more")
-                            .font(Theme.Typography.body(13))
-                            .foregroundStyle(Theme.Palette.muted)
+                        if viewModel.selectedSources.count > 4 {
+                            Text("+\(viewModel.selectedSources.count - 4) more")
+                                .font(Theme.Typography.body(13))
+                                .foregroundStyle(Theme.Palette.muted)
+                        }
                     }
                 }
             }
         }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens the Sources tab")
     }
 }
 
