@@ -1050,6 +1050,7 @@ struct PodcastSetupView: View {
 
             }
             .navigationTitle("Podcast Setup")
+            .navigationBarTitleDisplayMode(.inline)
             .editorialBackground()
             .onAppear {
                 displayName = viewModel.user?.displayName ?? ""
