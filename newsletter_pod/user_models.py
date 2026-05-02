@@ -93,6 +93,7 @@ class UserEpisodeRecord(BaseModel):
     dropped_item_count: int = 0
     cap_hit: bool = False
     guest_name: Optional[str] = None
+    transcript_text: Optional[str] = None
 
 
 class UserRunRecord(BaseModel):

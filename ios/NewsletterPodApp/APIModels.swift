@@ -274,3 +274,51 @@ struct RunStatusEnvelope: Codable {
     let run: UserRunDTO
     let episode: UserEpisodeDTO?
 }
+
+struct EpisodesEnvelope: Codable {
+    let episodes: [LibraryEpisodeDTO]
+}
+
+struct SourceItemRefDTO: Codable, Hashable, Identifiable {
+    let sourceID: String
+    let sourceName: String
+    let title: String
+    let link: String
+    let guid: String?
+
+    var id: String { guid ?? link }
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceID = "source_id"
+        case sourceName = "source_name"
+        case title
+        case link
+        case guid
+    }
+}
+
+struct LibraryEpisodeDTO: Codable, Identifiable, Hashable {
+    let id: String
+    let title: String
+    let description: String
+    let publishedAt: Date
+    let durationSeconds: Int?
+    let processedItemCount: Int
+    let droppedItemCount: Int
+    let capHit: Bool
+    let sourceItemRefs: [SourceItemRefDTO]
+    let transcriptText: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case description
+        case publishedAt = "published_at"
+        case durationSeconds = "duration_seconds"
+        case processedItemCount = "processed_item_count"
+        case droppedItemCount = "dropped_item_count"
+        case capHit = "cap_hit"
+        case sourceItemRefs = "source_item_refs"
+        case transcriptText = "transcript_text"
+    }
+}

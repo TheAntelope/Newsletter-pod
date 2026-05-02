@@ -144,6 +144,10 @@ final class APIClient {
         try await request(path: "/v1/me/inbound-items", method: "GET", body: Optional<Int>.none, token: token)
     }
 
+    func fetchEpisodes(token: String) async throws -> EpisodesEnvelope {
+        try await request(path: "/v1/me/episodes", method: "GET", body: Optional<Int>.none, token: token)
+    }
+
     func generateNow(token: String) async throws -> RunStartEnvelope {
         try await request(path: "/v1/me/generate", method: "POST", body: Optional<Int>.none, token: token)
     }

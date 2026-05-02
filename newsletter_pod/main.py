@@ -268,6 +268,12 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         assert container.control_plane is not None
         return container.control_plane.list_inbound_items(user.id)
 
+    @app.get("/v1/me/episodes")
+    def list_my_episodes(authorization: str | None = Header(default=None)) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        return container.control_plane.list_user_episodes(user.id)
+
     @app.post("/v1/me/generate", status_code=status.HTTP_202_ACCEPTED)
     def generate_episode_now(
         background_tasks: BackgroundTasks,

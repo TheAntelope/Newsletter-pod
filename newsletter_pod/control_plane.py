@@ -383,6 +383,12 @@ class ControlPlaneService:
             "entitlements": self._entitlements_for(subscription).model_dump(mode="json"),
         }
 
+    def list_user_episodes(self, user_id: str, limit: int = 50) -> dict[str, Any]:
+        episodes = self.repository.list_recent_user_episodes(user_id, limit=limit)
+        return {
+            "episodes": [episode.model_dump(mode="json") for episode in episodes],
+        }
+
     def apply_app_store_notification(self, payload: dict[str, Any]) -> dict[str, Any]:
         event = BillingEventRecord(
             id=uuid4().hex,
@@ -552,6 +558,9 @@ class ControlPlaneService:
             mime_type=generated.mime_type,
         )
         show_notes = self._build_show_notes(generated.show_notes, items, cap_hit, dropped_count)
+        transcript_text = generated.transcript or "\n\n".join(
+            f"{segment.speaker}: {segment.text}" for segment in generated.audio_segments
+        )
         episode = UserEpisodeRecord(
             id=episode_id,
             user_id=user_id,
@@ -576,13 +585,11 @@ class ControlPlaneService:
             dropped_item_count=dropped_count,
             cap_hit=cap_hit,
             guest_name=guest_name,
+            transcript_text=transcript_text or None,
         )
         self.repository.save_user_episode(episode)
         self.repository.update_user_source_cursors(user_id, ingestion.cursor_updates)
 
-        transcript_text = generated.transcript or "\n\n".join(
-            f"{segment.speaker}: {segment.text}" for segment in generated.audio_segments
-        )
         cost_estimate = estimate_generation_cost(
             prompt_text=prompt,
             transcript_text=transcript_text,

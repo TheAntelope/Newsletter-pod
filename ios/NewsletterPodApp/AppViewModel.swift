@@ -23,6 +23,8 @@ final class AppViewModel: ObservableObject {
     @Published var feed: FeedEnvelope?
     @Published var inboundItems: [InboundItemDTO] = []
     @Published var isLoadingInbound = false
+    @Published var libraryEpisodes: [LibraryEpisodeDTO] = []
+    @Published var isLoadingEpisodes = false
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var savedMessage: String?
@@ -262,6 +264,19 @@ final class AppViewModel: ObservableObject {
         do {
             let envelope = try await apiClient.fetchInboundItems(token: sessionToken)
             inboundItems = envelope.items
+        } catch {
+            // Non-fatal: leave existing items in place.
+        }
+    }
+
+    func loadEpisodes() async {
+        if isUITestMode { return }
+        guard let sessionToken else { return }
+        isLoadingEpisodes = true
+        defer { isLoadingEpisodes = false }
+        do {
+            let envelope = try await apiClient.fetchEpisodes(token: sessionToken)
+            libraryEpisodes = envelope.episodes
         } catch {
             // Non-fatal: leave existing items in place.
         }

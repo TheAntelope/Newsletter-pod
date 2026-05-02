@@ -150,6 +150,7 @@ struct HomeView: View {
                     HeroEpisodeCard()
                     AboutPodcastCard()
                     SourcesSummaryCard()
+                    LibraryEntryCard()
                     SetupChecklistCard()
                     SendFeedbackLink()
                 }
@@ -160,6 +161,35 @@ struct HomeView: View {
             .navigationTitle("Your Briefing")
             .editorialBackground()
         }
+    }
+}
+
+private struct LibraryEntryCard: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        NavigationLink {
+            LibraryView()
+                .environmentObject(viewModel)
+        } label: {
+            EditorialCard {
+                HStack {
+                    MetaLabel(text: "Episode library")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.muted)
+                }
+                Text("Browse your past episodes")
+                    .font(Theme.Typography.title(18))
+                    .foregroundStyle(Theme.Palette.ink)
+                Text("Titles, sources, and transcripts for everything we've made for you. Open any episode in Apple Podcasts to listen.")
+                    .font(Theme.Typography.body(14))
+                    .foregroundStyle(Theme.Palette.inkSoft)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens your episode library")
     }
 }
 
@@ -2046,5 +2076,176 @@ private struct OnboardingDoneStep: View {
             }
         }
         onFinish()
+    }
+}
+
+// MARK: - Library
+
+struct LibraryView: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                if viewModel.isLoadingEpisodes && viewModel.libraryEpisodes.isEmpty {
+                    HStack {
+                        Spacer()
+                        ProgressView().tint(Theme.Palette.amberDeep)
+                        Spacer()
+                    }
+                    .padding(.top, Theme.Spacing.xl)
+                } else if viewModel.libraryEpisodes.isEmpty {
+                    EditorialCard {
+                        MetaLabel(text: "Nothing here yet")
+                        Text("Your episodes will appear here once they're generated.")
+                            .font(Theme.Typography.body(15))
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                    }
+                } else {
+                    ForEach(viewModel.libraryEpisodes) { episode in
+                        LibraryEpisodeRow(episode: episode)
+                    }
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.l)
+            .padding(.top, Theme.Spacing.s)
+            .padding(.bottom, Theme.Spacing.xl)
+        }
+        .navigationTitle("Library")
+        .navigationBarTitleDisplayMode(.inline)
+        .editorialBackground()
+        .task {
+            if viewModel.libraryEpisodes.isEmpty {
+                await viewModel.loadEpisodes()
+            }
+        }
+        .refreshable {
+            await viewModel.loadEpisodes()
+        }
+    }
+}
+
+private struct LibraryEpisodeRow: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    let episode: LibraryEpisodeDTO
+    @State private var isTranscriptExpanded = false
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
+
+    var body: some View {
+        EditorialCard {
+            MetaLabel(text: dateLabel)
+            Text(episode.title)
+                .font(Theme.Typography.title(20))
+                .foregroundStyle(Theme.Palette.ink)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: Theme.Spacing.m) {
+                if let duration = episode.durationSeconds {
+                    Label(formatDuration(duration), systemImage: "clock")
+                }
+                Label("\(episode.processedItemCount) items", systemImage: "doc.text")
+            }
+            .font(Theme.Typography.body(13))
+            .foregroundStyle(Theme.Palette.muted)
+
+            if !episode.sourceItemRefs.isEmpty {
+                EditorialDivider()
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    Text("Sources")
+                        .font(Theme.Typography.meta(11))
+                        .tracking(1.2)
+                        .foregroundStyle(Theme.Palette.muted)
+                    ForEach(uniqueSourceNames, id: \.self) { name in
+                        HStack(alignment: .top, spacing: Theme.Spacing.s) {
+                            Circle()
+                                .fill(Theme.Palette.amber)
+                                .frame(width: 6, height: 6)
+                                .padding(.top, 6)
+                            Text(name)
+                                .font(Theme.Typography.body(14))
+                                .foregroundStyle(Theme.Palette.inkSoft)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+            }
+
+            if let transcript = episode.transcriptText, !transcript.isEmpty {
+                EditorialDivider()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { isTranscriptExpanded.toggle() }
+                } label: {
+                    HStack {
+                        Text("Transcript")
+                            .font(Theme.Typography.body(14).weight(.semibold))
+                            .foregroundStyle(Theme.Palette.amberDeep)
+                        Spacer()
+                        Image(systemName: isTranscriptExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.amberDeep)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if isTranscriptExpanded {
+                    Text(transcript)
+                        .font(Theme.Typography.body(14))
+                        .foregroundStyle(Theme.Palette.inkSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+            }
+
+            EditorialDivider()
+            Button {
+                openInApplePodcasts()
+            } label: {
+                Label("Open in Apple Podcasts", systemImage: "play.fill")
+            }
+            .buttonStyle(.amberOutlined)
+            .disabled(viewModel.feed?.feedURL == nil)
+        }
+    }
+
+    private var dateLabel: String {
+        Self.dateFormatter.string(from: episode.publishedAt)
+    }
+
+    private var uniqueSourceNames: [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for ref in episode.sourceItemRefs {
+            if seen.insert(ref.sourceName).inserted {
+                ordered.append(ref.sourceName)
+            }
+        }
+        return ordered
+    }
+
+    private func formatDuration(_ seconds: Int) -> String {
+        let minutes = max(1, Int((Double(seconds) / 60.0).rounded()))
+        return "\(minutes) min"
+    }
+
+    private func openInApplePodcasts() {
+        guard let urlString = viewModel.feed?.feedURL,
+              let url = URL(string: urlString),
+              let host = url.host else { return }
+        var components = URLComponents()
+        components.scheme = "podcast"
+        components.host = host
+        components.path = url.path
+        if let podcastURL = components.url {
+            UIApplication.shared.open(podcastURL) { ok in
+                if !ok { UIApplication.shared.open(url) }
+            }
+        }
     }
 }
