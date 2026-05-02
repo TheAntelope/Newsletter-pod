@@ -151,6 +151,7 @@ struct HomeView: View {
                     AboutPodcastCard()
                     SourcesSummaryCard()
                     SetupChecklistCard()
+                    SendFeedbackLink()
                 }
                 .padding(.horizontal, Theme.Spacing.l)
                 .padding(.top, Theme.Spacing.s)
@@ -158,6 +159,38 @@ struct HomeView: View {
             }
             .navigationTitle("Your Briefing")
             .editorialBackground()
+        }
+    }
+}
+
+private struct SendFeedbackLink: View {
+    private static let address = "vincemartin1991@gmail.com"
+    private static let subject = "ClawCast feedback"
+
+    var body: some View {
+        HStack {
+            Spacer()
+            Button {
+                openMailto()
+            } label: {
+                Label("Send feedback", systemImage: "envelope")
+                    .font(Theme.Typography.body(13).weight(.medium))
+                    .foregroundStyle(Theme.Palette.muted)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens your mail app to email feedback")
+            Spacer()
+        }
+        .padding(.top, Theme.Spacing.s)
+    }
+
+    private func openMailto() {
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = Self.address
+        components.queryItems = [URLQueryItem(name: "subject", value: Self.subject)]
+        if let url = components.url {
+            UIApplication.shared.open(url)
         }
     }
 }
