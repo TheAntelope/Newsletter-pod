@@ -456,10 +456,14 @@ private struct CollapsibleDescription: View {
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .inlineOnlyPreservingWhitespace
         )
-        if let attributed = try? AttributedString(markdown: inline, options: options) {
-            return attributed
+        guard var attributed = try? AttributedString(markdown: inline, options: options) else {
+            return AttributedString(inline)
         }
-        return AttributedString(inline)
+        for run in attributed.runs where run.link != nil {
+            attributed[run.range].foregroundColor = Theme.Palette.amberDeep
+            attributed[run.range].underlineStyle = .single
+        }
+        return attributed
     }
 }
 
