@@ -1749,17 +1749,30 @@ private struct OnboardingWelcomeStep: View {
     var body: some View {
         OnboardingStepShell(
             title: greeting,
-            subtitle: "Here's how ClawCast works — about 30 seconds, then we'll start your first episode.",
-            primaryLabel: "Let's set it up",
+            subtitle: "Here's how ClawCast works — tap the button below to get started.",
+            primaryLabel: "Set up my podcast",
             primaryDisabled: false,
             onPrimary: onContinue,
             onBack: nil
         ) {
-            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                bullet(icon: "tray.full", title: "Pick your sources", text: "Curated packs of feeds, or pick your own.")
-                bullet(icon: "waveform", title: "We generate audio", text: "Hosts read the latest items in your show.")
-                bullet(icon: "antenna.radiowaves.left.and.right", title: "Listen in Apple Podcasts", text: "A private feed lands every delivery day.")
+            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                bullet(
+                    number: "1",
+                    title: "Pick your sources",
+                    text: "Curated topics, or pick your own feeds."
+                )
+                bullet(
+                    number: "2",
+                    title: "We generate the audio",
+                    text: "Hosts read the latest items in your show."
+                )
+                bullet(
+                    number: "3",
+                    title: "Listen in Apple Podcasts",
+                    text: "A private feed lands on your delivery days."
+                )
             }
+            .padding(.horizontal, Theme.Spacing.s)
         }
     }
 
@@ -1767,21 +1780,20 @@ private struct OnboardingWelcomeStep: View {
         firstName.isEmpty ? "Welcome to ClawCast." : "Hi \(firstName) — welcome to ClawCast."
     }
 
-    private func bullet(icon: String, title: String, text: String) -> some View {
-        EditorialCard {
-            HStack(alignment: .top, spacing: Theme.Spacing.m) {
-                Image(systemName: icon)
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.amberDeep)
-                    .frame(width: 32)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(Theme.Typography.title(17))
-                        .foregroundStyle(Theme.Palette.ink)
-                    Text(text)
-                        .font(Theme.Typography.body(14))
-                        .foregroundStyle(Theme.Palette.inkSoft)
-                }
+    /// Numbered info row, intentionally NOT wrapped in EditorialCard so it doesn't read as tappable.
+    private func bullet(number: String, title: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.m) {
+            Text(number)
+                .font(Theme.Typography.title(20).weight(.semibold))
+                .foregroundStyle(Theme.Palette.amberDeep)
+                .frame(width: 28, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(Theme.Typography.title(17))
+                    .foregroundStyle(Theme.Palette.ink)
+                Text(text)
+                    .font(Theme.Typography.body(14))
+                    .foregroundStyle(Theme.Palette.inkSoft)
             }
         }
     }
