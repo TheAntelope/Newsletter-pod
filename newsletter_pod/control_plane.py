@@ -12,7 +12,7 @@ import feedparser
 import requests
 
 from .auth import AppleIdentityVerifier, SessionManager
-from .config import Settings, load_sources
+from .config import Settings, load_sources, load_voices
 from .costing import estimate_generation_cost
 from .inbound import ensure_user_inbound_alias
 from .ingestion import RSSIngestionService
@@ -138,6 +138,7 @@ class ControlPlaneService:
 
     def __post_init__(self) -> None:
         self._catalog = {source.id: source for source in load_sources(self.settings.sources_file)}
+        self._voice_catalog = {voice.id: voice for voice in load_voices(self.settings.voices_file)}
 
     def authenticate_with_apple(
         self,
@@ -232,6 +233,17 @@ class ControlPlaneService:
                 "topic": source.topic,
             }
             for source in self._catalog.values()
+        ]
+
+    def get_voice_catalog(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": voice.id,
+                "name": voice.name,
+                "gender": voice.gender,
+                "description": voice.description,
+            }
+            for voice in self._voice_catalog.values()
         ]
 
     def validate_custom_source(self, rss_url: str) -> dict[str, Any]:
@@ -348,7 +360,13 @@ class ControlPlaneService:
             "entitlements": self._entitlements_for(self._get_subscription(user_id)).model_dump(mode="json"),
         }
 
-    def update_schedule(self, user_id: str, timezone_name: Optional[str], weekdays: Optional[list[str]]) -> dict[str, Any]:
+    def update_schedule(
+        self,
+        user_id: str,
+        timezone_name: Optional[str],
+        weekdays: Optional[list[str]],
+        local_time: Optional[str] = None,
+    ) -> dict[str, Any]:
         schedule = self._get_schedule(user_id)
         entitlements = self._entitlements_for(self._get_subscription(user_id))
 
@@ -364,6 +382,8 @@ class ControlPlaneService:
             if not normalized:
                 raise ControlPlaneError("At least one delivery day is required")
             schedule.weekdays = normalized
+        if local_time is not None:
+            schedule.local_time = _normalize_local_time(local_time)
 
         schedule.updated_at = utc_now()
         self.repository.save_schedule(schedule)
@@ -1009,6 +1029,22 @@ def _normalize_weekday(value: str) -> str:
     if normalized not in WEEKDAY_NAMES:
         raise ControlPlaneError(f"Invalid weekday: {value}")
     return normalized
+
+
+def _normalize_local_time(value: str) -> str:
+    """Validate and normalize a HH:MM 24-hour time string."""
+    raw = value.strip()
+    parts = raw.split(":")
+    if len(parts) != 2:
+        raise ControlPlaneError(f"Invalid local time (expected HH:MM): {value}")
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError as exc:
+        raise ControlPlaneError(f"Invalid local time (expected HH:MM): {value}") from exc
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ControlPlaneError(f"Invalid local time (out of range): {value}")
+    return f"{hour:02d}:{minute:02d}"
 
 
 def _validate_format_preset(value: str) -> None:

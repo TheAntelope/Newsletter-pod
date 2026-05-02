@@ -9,7 +9,7 @@ from google.cloud import secretmanager
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .models import PodcastUxConfig, SourceDefinition
+from .models import PodcastUxConfig, SourceDefinition, VoiceDefinition
 
 
 class Settings(BaseSettings):
@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     apple_client_id: Optional[str] = Field(default=None, alias="APPLE_CLIENT_ID")
 
     sources_file: str = Field(default="sources.yml", alias="SOURCES_FILE")
+    voices_file: str = Field(default="voices.yml", alias="VOICES_FILE")
 
     podcast_title: str = Field(default="Daily Newsletter Digest", alias="PODCAST_TITLE")
     podcast_description: str = Field(
@@ -175,6 +176,17 @@ def load_sources(path: str) -> list[SourceDefinition]:
     raw_sources = data.get("sources", [])
     sources = [SourceDefinition.model_validate(item) for item in raw_sources]
     return [source for source in sources if source.enabled]
+
+
+def load_voices(path: str) -> list[VoiceDefinition]:
+    voices_path = Path(path)
+    if not voices_path.exists():
+        return []
+
+    data = yaml.safe_load(voices_path.read_text(encoding="utf-8")) or {}
+    raw_voices = data.get("voices", [])
+    voices = [VoiceDefinition.model_validate(item) for item in raw_voices]
+    return [voice for voice in voices if voice.enabled]
 
 
 def _resolve_secret_reference(value: Optional[str]) -> Optional[str]:

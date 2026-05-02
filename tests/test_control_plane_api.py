@@ -72,6 +72,46 @@ def _auth_headers(client: TestClient, verifier: FakeAppleVerifier) -> tuple[str,
     return token, {"Authorization": f"Bearer {token}"}
 
 
+def test_schedule_patch_accepts_local_time():
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("schedule-time-user", "tz@example.com"))
+
+    # Default schedule was seeded by signup; patch local_time to a custom value.
+    # Free tier is capped at free_max_delivery_days (=1 in tests), so use one weekday.
+    resp = client.patch(
+        "/v1/me/schedule",
+        json={"timezone": "America/Chicago", "weekdays": ["monday"], "local_time": "06:30"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    schedule = resp.json()["schedule"]
+    assert schedule["local_time"] == "06:30"
+    assert schedule["weekdays"] == ["monday"]
+
+    # Non-numeric or out-of-range values should fail validation.
+    bad = client.patch("/v1/me/schedule", json={"local_time": "25:00"}, headers=headers)
+    assert bad.status_code == 400
+    bad2 = client.patch("/v1/me/schedule", json={"local_time": "garbage"}, headers=headers)
+    assert bad2.status_code == 400
+
+
+def test_voice_catalog_returns_only_enabled_voices():
+    container, client = _build_app()
+    catalog = client.get("/v1/voices/catalog")
+    assert catalog.status_code == 200
+    voices = catalog.json()["voices"]
+    # voices.yml ships with 2 enabled (Vinnie + Demi) and 8 disabled placeholders.
+    # Loader filters the disabled ones out, so the catalog should never expose them.
+    assert len(voices) >= 2
+    ids = {v["id"] for v in voices}
+    assert "suMMgpGbVcnihP1CcgFS" in ids  # Vinnie
+    assert "RKCbSROXui75bk1SVpy8" in ids  # Demi
+    for placeholder in ("TODO_VOICE_M1", "TODO_VOICE_F1"):
+        assert placeholder not in ids
+    for voice in voices:
+        assert {"id", "name", "gender", "description"} <= set(voice.keys())
+
+
 def test_welcome_episode_seeded_for_new_user_when_configured():
     from newsletter_pod.config import Settings
     from newsletter_pod.control_plane import (

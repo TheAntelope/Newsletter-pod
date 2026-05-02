@@ -1,0 +1,76 @@
+# Voice catalog. The `id` field is the ElevenLabs voice ID — same value
+# stored on PodcastProfileRecord.voice_id. To add a new voice:
+#   1. Replace the TODO_VOICE_* placeholder id with the real ElevenLabs voice ID.
+#   2. Replace the placeholder name with the human-friendly voice name.
+#   3. Set enabled to true.
+# Loader filters out enabled: false entries, so disabled placeholders never reach
+# the iOS picker. No app deploy needed when toggling a voice on/off — backend
+# revision rollout picks up the change.
+
+voices:
+  # ============================================================
+  # Active voices (in production today)
+  # ============================================================
+  - id: suMMgpGbVcnihP1CcgFS
+    name: Vinnie Chase
+    gender: male
+    description: Confident and clear; default anchor.
+    enabled: true
+
+  - id: RKCbSROXui75bk1SVpy8
+    name: Demi Dreams
+    gender: female
+    description: Warm and conversational; default commentator.
+    enabled: true
+
+  # ============================================================
+  # Placeholder slots — fill in elevenlabs_id + name, flip enabled to true.
+  # Target mix: 4 male / 4 female (8 premium voices on top of Vinnie + Demi).
+  # ============================================================
+  - id: TODO_VOICE_M1
+    name: Premium voice (male, slot 1)
+    gender: male
+    description: ""
+    enabled: false
+
+  - id: TODO_VOICE_M2
+    name: Premium voice (male, slot 2)
+    gender: male
+    description: ""
+    enabled: false
+
+  - id: TODO_VOICE_M3
+    name: Premium voice (male, slot 3)
+    gender: male
+    description: ""
+    enabled: false
+
+  - id: TODO_VOICE_M4
+    name: Premium voice (male, slot 4)
+    gender: male
+    description: ""
+    enabled: false
+
+  - id: TODO_VOICE_F1
+    name: Premium voice (female, slot 1)
+    gender: female
+    description: ""
+    enabled: false
+
+  - id: TODO_VOICE_F2
+    name: Premium voice (female, slot 2)
+    gender: female
+    description: ""
+    enabled: false
+
+  - id: TODO_VOICE_F3
+    name: Premium voice (female, slot 3)
+    gender: female
+    description: ""
+    enabled: false
+
+  - id: TODO_VOICE_F4
+    name: Premium voice (female, slot 4)
+    gender: female
+    description: ""
+    enabled: false

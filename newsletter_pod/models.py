@@ -24,6 +24,14 @@ class SourceDefinition(BaseModel):
     topic: Optional[str] = None
 
 
+class VoiceDefinition(BaseModel):
+    id: str
+    name: str
+    gender: str = "neutral"
+    description: str = ""
+    enabled: bool = True
+
+
 class SourceItem(BaseModel):
     source_id: str
     source_name: str

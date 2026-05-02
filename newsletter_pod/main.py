@@ -60,6 +60,7 @@ class UpdatePodcastConfigRequest(BaseModel):
 class UpdateScheduleRequest(BaseModel):
     timezone: Optional[str] = None
     weekdays: Optional[list[str]] = None
+    local_time: Optional[str] = None
 
 
 class BillingNotificationRequest(BaseModel):
@@ -180,6 +181,11 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         assert container.control_plane is not None
         return {"sources": container.control_plane.get_source_catalog()}
 
+    @app.get("/v1/voices/catalog")
+    def get_voice_catalog() -> dict:
+        assert container.control_plane is not None
+        return {"voices": container.control_plane.get_voice_catalog()}
+
     @app.post("/v1/sources/validate")
     def validate_source(request_payload: ValidateSourceRequest, authorization: str | None = Header(default=None)) -> dict:
         _require_session_user(container, authorization)
@@ -252,6 +258,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 user.id,
                 timezone_name=request_payload.timezone,
                 weekdays=request_payload.weekdays,
+                local_time=request_payload.local_time,
             )
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
