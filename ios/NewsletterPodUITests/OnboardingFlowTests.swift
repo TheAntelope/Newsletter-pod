@@ -32,7 +32,7 @@ final class OnboardingFlowTests: XCTestCase {
     }
 
     func testOnboardingHappyPath() throws {
-        // Step 1 of 5 — Welcome
+        // Step 1 of 6 — Welcome
         let welcome = app.staticTexts["Welcome to ClawCast."]
         XCTAssertTrue(
             welcome.waitForExistence(timeout: 8),
@@ -40,31 +40,37 @@ final class OnboardingFlowTests: XCTestCase {
         )
         attach("01-welcome")
 
-        tapPrimary(label: "Let's set it up")
+        tapPrimary(label: "Set up my podcast")
 
-        // Step 2 of 5 — Pick a starter pack
+        // Step 2 of 6 — Pick your topics
         XCTAssertTrue(
-            app.staticTexts["Pick a starter pack."].waitForExistence(timeout: 5),
+            app.staticTexts["Pick your topics."].waitForExistence(timeout: 5),
             "Sources step did not appear"
         )
         attach("02-sources")
         tapPrimary(label: "Continue")
 
-        // Step 3 of 5 — Show shape
+        // Step 3 of 6 — Show shape
         // The label varies across copy iterations; just wait for any Continue.
         waitForAnyContinue()
         attach("03-show-shape")
         tapPrimary(label: "Continue")
 
-        // Step 4 of 5 — Schedule
+        // Step 4 of 6 — Voices (skipped if user picked the solo-host preset; the
+        // default preset is two_hosts so this step shows up in the happy path).
         waitForAnyContinue()
-        attach("04-schedule")
+        attach("04-voices")
         tapPrimary(label: "Continue")
 
-        // Step 5 of 5 — Done
+        // Step 5 of 6 — Schedule
+        waitForAnyContinue()
+        attach("05-schedule")
+        tapPrimary(label: "Continue")
+
+        // Step 6 of 6 — Done
         // Allow up to 10s for the optional auto-generate kickoff to settle.
         Thread.sleep(forTimeInterval: 1.5)
-        attach("05-done")
+        attach("06-done")
     }
 
     func testWelcomeGreetingDropsEmailPrefixUser() throws {
