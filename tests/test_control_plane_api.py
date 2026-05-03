@@ -109,7 +109,7 @@ def test_voice_catalog_returns_only_enabled_voices():
     for placeholder in ("TODO_VOICE_M1", "TODO_VOICE_F1"):
         assert placeholder not in ids
     for voice in voices:
-        assert {"id", "name", "gender", "description"} <= set(voice.keys())
+        assert {"id", "name", "gender", "description", "preview_url"} <= set(voice.keys())
 
 
 def test_welcome_episode_seeded_for_new_user_when_configured():

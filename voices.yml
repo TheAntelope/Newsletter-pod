@@ -2,7 +2,9 @@
 # stored on PodcastProfileRecord.voice_id. To add a new voice:
 #   1. Replace the TODO_VOICE_* placeholder id with the real ElevenLabs voice ID.
 #   2. Replace the placeholder name with the human-friendly voice name.
-#   3. Set enabled to true.
+#   3. (Optional) Set preview_url to a hosted MP3 sample so the onboarding
+#      voice picker can play it on tap. Leave blank to skip in-app preview.
+#   4. Set enabled to true.
 # Loader filters out enabled: false entries, so disabled placeholders never reach
 # the iOS picker. No app deploy needed when toggling a voice on/off — backend
 # revision rollout picks up the change.
@@ -15,12 +17,14 @@ voices:
     name: Vinnie Chase
     gender: male
     description: Confident and clear; default anchor.
+    preview_url: ""
     enabled: true
 
   - id: RKCbSROXui75bk1SVpy8
     name: Demi Dreams
     gender: female
     description: Warm and conversational; default commentator.
+    preview_url: ""
     enabled: true
 
   # ============================================================

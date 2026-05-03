@@ -149,6 +149,15 @@ struct CatalogVoiceDTO: Codable, Identifiable, Hashable {
     let name: String
     let gender: String
     let description: String
+    let previewURL: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case gender
+        case description
+        case previewURL = "preview_url"
+    }
 }
 
 struct UserSourceDTO: Codable, Identifiable, Hashable {

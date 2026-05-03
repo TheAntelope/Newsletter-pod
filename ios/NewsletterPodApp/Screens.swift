@@ -1,7 +1,59 @@
 import AuthenticationServices
+import AVFoundation
 import StoreKit
 import SwiftUI
 import UIKit
+
+@MainActor
+final class VoicePreviewPlayer: ObservableObject {
+    @Published private(set) var playingVoiceID: String?
+
+    private var player: AVPlayer?
+    private var endObserver: NSObjectProtocol?
+
+    deinit {
+        if let observer = endObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    func toggle(voice: CatalogVoiceDTO) {
+        if playingVoiceID == voice.id {
+            stop()
+            return
+        }
+        guard let urlString = voice.previewURL,
+              !urlString.isEmpty,
+              let url = URL(string: urlString)
+        else {
+            stop()
+            return
+        }
+        stop()
+        let item = AVPlayerItem(url: url)
+        let newPlayer = AVPlayer(playerItem: item)
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.stop() }
+        }
+        player = newPlayer
+        playingVoiceID = voice.id
+        newPlayer.play()
+    }
+
+    func stop() {
+        player?.pause()
+        player = nil
+        playingVoiceID = nil
+        if let observer = endObserver {
+            NotificationCenter.default.removeObserver(observer)
+            endObserver = nil
+        }
+    }
+}
 
 struct RootView: View {
     @EnvironmentObject private var viewModel: AppViewModel
@@ -2072,17 +2124,22 @@ private struct PaidBadge: View {
 
 private struct OnboardingVoicesStep: View {
     @EnvironmentObject private var viewModel: AppViewModel
+    @StateObject private var preview = VoicePreviewPlayer()
     @Binding var anchorVoiceID: String?
     @Binding var commentatorVoiceID: String?
     let onBack: () -> Void
     let onContinue: () -> Void
+
+    enum Slot: String { case anchor = "Anchor", commentator = "Commentator" }
+
+    @State private var activeSlot: Slot = .anchor
 
     /// Voice list to render. Falls back to the legacy 2-voice static list when the
     /// catalog hasn't loaded yet (e.g. cold app start) so the picker is never empty.
     private var voices: [CatalogVoiceDTO] {
         if !viewModel.catalogVoices.isEmpty { return viewModel.catalogVoices }
         return PodcastSetupView.voiceOptions.map {
-            CatalogVoiceDTO(id: $0.id, name: $0.name, gender: "neutral", description: "")
+            CatalogVoiceDTO(id: $0.id, name: $0.name, gender: "neutral", description: "", previewURL: nil)
         }
     }
 
@@ -2093,28 +2150,24 @@ private struct OnboardingVoicesStep: View {
     var body: some View {
         OnboardingStepShell(
             title: "Pick your two voices.",
-            subtitle: "One reads as the anchor, the other plays color commentator. You can change these any time on the Podcast tab.",
+            subtitle: "Tap a voice to hear a sample, then assign one as the anchor and one as the commentator. You can change these any time on the Podcast tab.",
             primaryLabel: viewModel.isLoading ? "Saving…" : "Continue",
             primaryDisabled: continueDisabled,
             onPrimary: onContinue,
             onBack: onBack
         ) {
-            VStack(spacing: Theme.Spacing.m) {
-                voiceSlot(
-                    label: "Anchor",
-                    selectedID: anchorVoiceID,
-                    excludeID: commentatorVoiceID,
-                    onSelect: { anchorVoiceID = $0 }
-                )
-                voiceSlot(
-                    label: "Commentator",
-                    selectedID: commentatorVoiceID,
-                    excludeID: anchorVoiceID,
-                    onSelect: { commentatorVoiceID = $0 }
-                )
+            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                slotSummary
+                Divider().background(Theme.Palette.rule.opacity(0.4))
+                VStack(spacing: Theme.Spacing.s) {
+                    ForEach(voices) { voice in
+                        voiceCard(voice)
+                    }
+                }
             }
             .onAppear { applyDefaultsIfEmpty() }
             .onChange(of: viewModel.catalogVoices) { _, _ in applyDefaultsIfEmpty() }
+            .onDisappear { preview.stop() }
         }
     }
 
@@ -2133,49 +2186,129 @@ private struct OnboardingVoicesStep: View {
     }
 
     @ViewBuilder
-    private func voiceSlot(label: String, selectedID: String?, excludeID: String?, onSelect: @escaping (String) -> Void) -> some View {
-        let selectedVoice = voices.first(where: { $0.id == selectedID })
-        EditorialCard {
+    private var slotSummary: some View {
+        HStack(spacing: Theme.Spacing.s) {
+            slotChip(slot: .anchor, voiceID: anchorVoiceID)
+            slotChip(slot: .commentator, voiceID: commentatorVoiceID)
+        }
+    }
+
+    private func slotChip(slot: Slot, voiceID: String?) -> some View {
+        let voice = voices.first(where: { $0.id == voiceID })
+        let isActive = activeSlot == slot
+        return Button {
+            activeSlot = slot
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(slot.rawValue.uppercased())
+                    .font(Theme.Typography.meta(11))
+                    .tracking(1.1)
+                    .foregroundStyle(isActive ? Theme.Palette.amberDeep : Theme.Palette.muted)
+                Text(voice?.name ?? "Tap a voice below")
+                    .font(Theme.Typography.body(15).weight(.semibold))
+                    .foregroundStyle(Theme.Palette.ink)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 10)
+            .padding(.horizontal, Theme.Spacing.m)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isActive ? Theme.Palette.amber.opacity(0.18) : Theme.Palette.rule.opacity(0.18))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(isActive ? Theme.Palette.amberDeep : Color.clear, lineWidth: 1.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func voiceCard(_ voice: CatalogVoiceDTO) -> some View {
+        let isAnchor = anchorVoiceID == voice.id
+        let isCommentator = commentatorVoiceID == voice.id
+        let isPlaying = preview.playingVoiceID == voice.id
+        let hasPreview = !(voice.previewURL ?? "").isEmpty
+
+        Button {
+            assign(voice: voice, to: activeSlot)
+            preview.toggle(voice: voice)
+        } label: {
             HStack(alignment: .center, spacing: Theme.Spacing.m) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(label)
-                        .font(Theme.Typography.body(13).weight(.semibold))
-                        .foregroundStyle(Theme.Palette.muted)
-                    Text(selectedVoice?.name ?? "Choose a voice")
-                        .font(Theme.Typography.title(18))
+                ZStack {
+                    Circle()
+                        .fill(isPlaying ? Theme.Palette.amberDeep : Theme.Palette.amber.opacity(0.25))
+                        .frame(width: 36, height: 36)
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(isPlaying ? Color.white : Theme.Palette.amberDeep)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(voice.name)
+                        .font(Theme.Typography.title(17))
                         .foregroundStyle(Theme.Palette.ink)
-                    if let description = selectedVoice?.description, !description.isEmpty {
-                        Text(description)
+                    if !voice.description.isEmpty {
+                        Text(voice.description)
                             .font(Theme.Typography.body(13))
                             .foregroundStyle(Theme.Palette.inkSoft)
+                    } else if !hasPreview {
+                        Text("Sample unavailable")
+                            .font(Theme.Typography.body(12))
+                            .foregroundStyle(Theme.Palette.muted)
                     }
                 }
                 Spacer(minLength: 0)
-                Menu {
-                    ForEach(voices) { voice in
-                        Button {
-                            onSelect(voice.id)
-                        } label: {
-                            if voice.id == excludeID {
-                                Label("\(voice.name) (already chosen)", systemImage: "circle.slash")
-                            } else if voice.id == selectedID {
-                                Label(voice.name, systemImage: "checkmark")
-                            } else {
-                                Text(voice.name)
-                            }
-                        }
-                        .disabled(voice.id == excludeID)
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("Change")
-                            .font(Theme.Typography.body(14).weight(.semibold))
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .foregroundStyle(Theme.Palette.amberDeep)
+                if isAnchor {
+                    assignmentBadge(text: "ANCHOR")
+                }
+                if isCommentator {
+                    assignmentBadge(text: "COMMENTATOR")
                 }
             }
+            .padding(.vertical, Theme.Spacing.s)
+            .padding(.horizontal, Theme.Spacing.m)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Theme.Palette.creamDeep)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(
+                        (isAnchor || isCommentator) ? Theme.Palette.amberDeep : Theme.Palette.rule.opacity(0.4),
+                        lineWidth: (isAnchor || isCommentator) ? 1.5 : 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func assignmentBadge(text: String) -> some View {
+        Text(text)
+            .font(Theme.Typography.meta(10))
+            .tracking(1.1)
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Theme.Palette.amberDeep, in: Capsule())
+    }
+
+    /// Assign the voice to the active slot. If it is already in the other slot,
+    /// swap so both slots stay filled and never duplicate.
+    private func assign(voice: CatalogVoiceDTO, to slot: Slot) {
+        switch slot {
+        case .anchor:
+            if commentatorVoiceID == voice.id {
+                commentatorVoiceID = anchorVoiceID
+            }
+            anchorVoiceID = voice.id
+            activeSlot = .commentator
+        case .commentator:
+            if anchorVoiceID == voice.id {
+                anchorVoiceID = commentatorVoiceID
+            }
+            commentatorVoiceID = voice.id
+            activeSlot = .anchor
         }
     }
 }
@@ -2331,7 +2464,7 @@ private struct OnboardingDoneStep: View {
     var body: some View {
         OnboardingStepShell(
             title: "You're set.",
-            subtitle: "Your first episode is being made now — about 3-5 minutes. Subscribe in Apple Podcasts so it lands automatically when ready.",
+            subtitle: "Open Apple Podcasts to subscribe — your first episode is being made now (about 3-5 minutes) and will land automatically when it's ready.",
             primaryLabel: "Open Apple Podcasts",
             primaryDisabled: viewModel.feed?.feedURL == nil,
             onPrimary: openInApplePodcasts,
@@ -2358,14 +2491,6 @@ private struct OnboardingDoneStep: View {
                         Spacer(minLength: 0)
                     }
                 }
-
-                Button {
-                    UIPasteboard.general.string = viewModel.feed?.feedURL
-                } label: {
-                    Label("Copy feed link", systemImage: "doc.on.doc")
-                }
-                .buttonStyle(.amberOutlined)
-                .disabled(viewModel.feed?.feedURL == nil)
 
                 Button {
                     onFinish()
