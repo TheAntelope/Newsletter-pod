@@ -2503,6 +2503,13 @@ private struct OnboardingDoneStep: View {
                 .padding(.top, Theme.Spacing.s)
             }
         }
+        // TODO: Kick generateNow() off earlier in onboarding (e.g. right after
+        // the Schedule step saves) so by the time the user lands on this Done
+        // screen, the first episode is already partway through generation and
+        // the wait feels closer to instant. Tradeoff: if the user backs up and
+        // changes sources/voices afterward, the in-flight episode reflects the
+        // older config — handle by either cancel-and-restart on config change
+        // or accepting the first episode may not match the final picks.
         .task {
             guard !didTriggerGeneration else { return }
             didTriggerGeneration = true

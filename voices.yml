@@ -13,6 +13,10 @@ voices:
   # ============================================================
   # Active voices (in production today)
   # ============================================================
+  # TODO: Populate preview_url for the active voices below with hosted MP3
+  # samples (e.g. GCS, same bucket as the welcome episode). The onboarding
+  # voice picker plays the sample on tap when this is set; cards fall back
+  # to "Sample unavailable" while it's blank.
   - id: suMMgpGbVcnihP1CcgFS
     name: Vinnie Chase
     gender: male
