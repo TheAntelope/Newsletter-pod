@@ -27,23 +27,23 @@ voices:
   # Placeholder slots — fill in elevenlabs_id + name, flip enabled to true.
   # Target mix: 4 male / 4 female (8 premium voices on top of Vinnie + Demi).
   # ============================================================
-  - id: TODO_VOICE_M1
-    name: Premium voice (male, slot 1)
+  - id: 5e3JKXK83vvgQqBcdUol
+    name: Chaz Cobalt
     gender: male
-    description: ""
-    enabled: false
+    description: Confident drive-time DJ; warm and a little swaggery.
+    enabled: true
 
-  - id: TODO_VOICE_M2
-    name: Premium voice (male, slot 2)
+  - id: Fxt4GZnlXkUGMtWSYIcm
+    name: Rocky Reverb
     gender: male
-    description: ""
-    enabled: false
+    description: Late-night radio energy; smooth, low, and unhurried.
+    enabled: true
 
-  - id: TODO_VOICE_M3
-    name: Premium voice (male, slot 3)
+  - id: rPMkKgdwgIwqv4fXgR6N
+    name: Marlon Midnight
     gender: male
-    description: ""
-    enabled: false
+    description: Deep and reflective; the voice for a long drive.
+    enabled: true
 
   - id: TODO_VOICE_M4
     name: Premium voice (male, slot 4)
@@ -51,23 +51,23 @@ voices:
     description: ""
     enabled: false
 
-  - id: TODO_VOICE_F1
-    name: Premium voice (female, slot 1)
+  - id: eXpIbVcVbLo8ZJQDlDnl
+    name: Lola Lumen
     gender: female
-    description: ""
-    enabled: false
+    description: Bright and quick-witted; the friend who always has the gossip.
+    enabled: true
 
-  - id: TODO_VOICE_F2
-    name: Premium voice (female, slot 2)
+  - id: GaCzJ7BKVn8XQp1mZYIn
+    name: Stella Static
     gender: female
-    description: ""
-    enabled: false
+    description: Cool and a little edgy; pirate-radio cool.
+    enabled: true
 
-  - id: TODO_VOICE_F3
-    name: Premium voice (female, slot 3)
+  - id: 0S5oIfi8zOZixuSj8K6n
+    name: Ruby Rebel
     gender: female
-    description: ""
-    enabled: false
+    description: Bold and punchy; reads the headlines like she means it.
+    enabled: true
 
   - id: TODO_VOICE_F4
     name: Premium voice (female, slot 4)
