@@ -803,11 +803,10 @@ struct SourcesView: View {
                                     .foregroundStyle(Theme.Palette.amberDeep)
                                     .frame(width: 22)
                                 Text(group.name)
-                                    .foregroundStyle(Theme.Palette.ink)
                                 Spacer()
                                 Text("\(selectedCount(in: group.sources)) of \(group.sources.count)")
                                     .font(Theme.Typography.meta)
-                                    .foregroundStyle(Theme.Palette.muted)
+                                    .foregroundStyle(.secondary)
                                     .monospacedDigit()
                             }
                         }
