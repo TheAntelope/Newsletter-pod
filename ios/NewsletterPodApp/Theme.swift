@@ -13,19 +13,18 @@ enum Theme {
         static let cardShadow = Color.black.opacity(0.06)
     }
 
+    // Type ramp. Six base tiers + two emphasis variants. All text is sentence
+    // case; only `MetaLabel` uppercases (eyebrow style). Mono and SF Symbol
+    // sizing is intentionally outside this ramp.
     enum Typography {
-        static func display(_ size: CGFloat = 34) -> Font {
-            .system(size: size, weight: .bold, design: .serif)
-        }
-        static func title(_ size: CGFloat = 22) -> Font {
-            .system(size: size, weight: .semibold, design: .serif)
-        }
-        static func body(_ size: CGFloat = 16) -> Font {
-            .system(size: size, weight: .regular, design: .default)
-        }
-        static func meta(_ size: CGFloat = 12) -> Font {
-            .system(size: size, weight: .semibold, design: .default)
-        }
+        static let display: Font = .system(size: 32, weight: .bold, design: .serif)
+        static let title: Font = .system(size: 22, weight: .semibold, design: .serif)
+        static let subtitle: Font = .system(size: 17, weight: .semibold, design: .serif)
+        static let body: Font = .system(size: 15, weight: .regular, design: .default)
+        static let bodyStrong: Font = .system(size: 15, weight: .semibold, design: .default)
+        static let callout: Font = .system(size: 13, weight: .regular, design: .default)
+        static let calloutStrong: Font = .system(size: 13, weight: .semibold, design: .default)
+        static let meta: Font = .system(size: 11, weight: .semibold, design: .default)
     }
 
     enum Spacing {
@@ -60,7 +59,7 @@ struct MetaLabel: View {
     let text: String
     var body: some View {
         Text(text.uppercased())
-            .font(Theme.Typography.meta())
+            .font(Theme.Typography.meta)
             .tracking(1.4)
             .foregroundStyle(Theme.Palette.amberDeep)
     }
@@ -133,7 +132,7 @@ struct ChecklistRow: View {
                 .foregroundStyle(isComplete ? Theme.Palette.amber : Theme.Palette.muted)
                 .font(.system(size: 18))
             Text(label)
-                .font(Theme.Typography.body())
+                .font(Theme.Typography.body)
                 .foregroundStyle(isComplete ? Theme.Palette.muted : Theme.Palette.ink)
                 .strikethrough(isComplete, color: Theme.Palette.muted)
             Spacer()

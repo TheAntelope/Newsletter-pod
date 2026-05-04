@@ -27,14 +27,14 @@ struct RootView: View {
             VStack(spacing: 8) {
                 if let errorMessage = viewModel.errorMessage {
                     Text(errorMessage)
-                        .font(.caption)
+                        .font(Theme.Typography.callout)
                         .foregroundStyle(.white)
                         .padding(10)
                         .background(Theme.Palette.amberDeep.opacity(0.95), in: Capsule())
                 }
                 if let savedMessage = viewModel.savedMessage {
                     Label(savedMessage, systemImage: "checkmark.circle.fill")
-                        .font(.caption.weight(.semibold))
+                        .font(Theme.Typography.calloutStrong)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
@@ -60,11 +60,11 @@ struct SignInView: View {
                 Spacer()
                 MetaLabel(text: "ClawCast")
                 Text("Your daily\nbriefing, on tap.")
-                    .font(Theme.Typography.display(40))
+                    .font(Theme.Typography.display)
                     .foregroundStyle(Theme.Palette.ink)
                     .lineSpacing(2)
                 Text("Pick your sources and format. We turn them into a private podcast you listen to in Apple Podcasts.")
-                    .font(Theme.Typography.body(17))
+                    .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Palette.muted)
 
                 SignInWithAppleButton(.signIn) { request in
@@ -181,10 +181,10 @@ private struct LibraryEntryCard: View {
                         .foregroundStyle(Theme.Palette.muted)
                 }
                 Text("Browse your past episodes")
-                    .font(Theme.Typography.title(18))
+                    .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.Palette.ink)
                 Text("Titles, sources, and transcripts for everything we've made for you. Open any episode in Apple Podcasts to listen.")
-                    .font(Theme.Typography.body(14))
+                    .font(Theme.Typography.callout)
                     .foregroundStyle(Theme.Palette.inkSoft)
             }
         }
@@ -204,7 +204,7 @@ private struct SendFeedbackLink: View {
                 openMailto()
             } label: {
                 Label("Send feedback", systemImage: "envelope")
-                    .font(Theme.Typography.body(13).weight(.medium))
+                    .font(Theme.Typography.calloutStrong)
                     .foregroundStyle(Theme.Palette.muted)
             }
             .buttonStyle(.plain)
@@ -230,7 +230,7 @@ private struct GreetingHeader: View {
 
     var body: some View {
         Text(greeting)
-            .font(Theme.Typography.display(28))
+            .font(Theme.Typography.display)
             .foregroundStyle(Theme.Palette.ink)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityAddTraits(.isHeader)
@@ -267,7 +267,7 @@ private struct HeroEpisodeCard: View {
         EditorialCard {
             MetaLabel(text: episodeBadge)
             Text(episodeTitle)
-                .font(Theme.Typography.title(26))
+                .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Palette.ink)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -280,7 +280,7 @@ private struct HeroEpisodeCard: View {
                     }
                     Label("\(latest.processedItemCount) items", systemImage: "doc.text")
                 }
-                .font(Theme.Typography.body(13))
+                .font(Theme.Typography.callout)
                 .foregroundStyle(Theme.Palette.muted)
 
                 if let transcript = latest.transcriptText, !transcript.isEmpty {
@@ -291,16 +291,16 @@ private struct HeroEpisodeCard: View {
                     ProgressView().tint(Theme.Palette.amberDeep)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Your first episode is being made.")
-                            .font(Theme.Typography.body(15).weight(.semibold))
+                            .font(Theme.Typography.bodyStrong)
                             .foregroundStyle(Theme.Palette.ink)
                         Text("About 3–5 minutes. You can close the app and come back later — it will land in Apple Podcasts when ready.")
-                            .font(Theme.Typography.body(14))
+                            .font(Theme.Typography.callout)
                             .foregroundStyle(Theme.Palette.inkSoft)
                     }
                 }
             } else if viewModel.selectedSources.isEmpty {
                 Text("Tap below for a guided setup — pick sources, choose a format, and we'll start your first episode.")
-                    .font(Theme.Typography.body(15))
+                    .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Palette.inkSoft)
 
                 Button {
@@ -311,7 +311,7 @@ private struct HeroEpisodeCard: View {
                 .buttonStyle(.amberFilled)
             } else {
                 Text("Your sources are set. Tap Generate below to make your first episode now, or wait for your scheduled delivery.")
-                    .font(Theme.Typography.body(15))
+                    .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Palette.inkSoft)
             }
 
@@ -419,7 +419,7 @@ private struct CollapsibleDescription: View {
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                             .font(.system(size: 11, weight: .semibold))
                     }
-                    .font(Theme.Typography.body(13).weight(.semibold))
+                    .font(Theme.Typography.calloutStrong)
                     .foregroundStyle(Theme.Palette.amberDeep)
                 }
                 .buttonStyle(.plain)
@@ -433,23 +433,23 @@ private struct CollapsibleDescription: View {
         switch block {
         case .heading(let inline):
             Text(formatted(inline))
-                .font(Theme.Typography.title(15))
+                .font(Theme.Typography.subtitle)
                 .foregroundStyle(Theme.Palette.ink)
                 .padding(.top, 4)
         case .bullet(let inline):
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("•")
-                    .font(Theme.Typography.body(15).weight(.bold))
+                    .font(Theme.Typography.bodyStrong)
                     .foregroundStyle(Theme.Palette.amber)
                 Text(formatted(inline))
-                    .font(Theme.Typography.body(15))
+                    .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Palette.inkSoft)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         case .paragraph(let inline):
             Text(formatted(inline))
-                .font(Theme.Typography.body(15))
+                .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Palette.inkSoft)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -482,7 +482,7 @@ private struct CollapsibleTranscript: View {
             } label: {
                 HStack {
                     Text("Transcript")
-                        .font(Theme.Typography.body(14).weight(.semibold))
+                        .font(Theme.Typography.calloutStrong)
                         .foregroundStyle(Theme.Palette.amberDeep)
                     Spacer()
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
@@ -495,7 +495,7 @@ private struct CollapsibleTranscript: View {
 
             if isExpanded {
                 Text(text)
-                    .font(Theme.Typography.body(14))
+                    .font(Theme.Typography.callout)
                     .foregroundStyle(Theme.Palette.inkSoft)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -549,7 +549,7 @@ private struct AboutPodcastCard: View {
         EditorialCard {
             MetaLabel(text: "About this podcast")
             Text(viewModel.profile?.title ?? "ClawCast")
-                .font(Theme.Typography.title(20))
+                .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Palette.ink)
 
             VStack(alignment: .leading, spacing: Theme.Spacing.s) {
@@ -562,11 +562,11 @@ private struct AboutPodcastCard: View {
                 } label: {
                     HStack {
                         Text("Delivery")
-                            .font(Theme.Typography.body(14))
+                            .font(Theme.Typography.callout)
                             .foregroundStyle(Theme.Palette.muted)
                         Spacer()
                         Text(deliveryLabel)
-                            .font(Theme.Typography.body(14).weight(.medium))
+                            .font(Theme.Typography.calloutStrong)
                             .foregroundStyle(Theme.Palette.ink)
                         Image(systemName: "chevron.right")
                             .font(.system(size: 12, weight: .semibold))
@@ -615,11 +615,11 @@ private struct AboutPodcastCard: View {
     private func infoRow(label: String, value: String) -> some View {
         HStack {
             Text(label)
-                .font(Theme.Typography.body(14))
+                .font(Theme.Typography.callout)
                 .foregroundStyle(Theme.Palette.muted)
             Spacer()
             Text(value)
-                .font(Theme.Typography.body(14).weight(.medium))
+                .font(Theme.Typography.calloutStrong)
                 .foregroundStyle(Theme.Palette.ink)
         }
     }
@@ -637,7 +637,7 @@ private struct SourcesSummaryCard: View {
                     MetaLabel(text: "Your sources")
                     Spacer()
                     Text("\(viewModel.selectedSources.count) / \(viewModel.entitlements?.maxSources ?? 0)")
-                        .font(Theme.Typography.meta())
+                        .font(Theme.Typography.meta)
                         .foregroundStyle(Theme.Palette.muted)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 12, weight: .semibold))
@@ -646,7 +646,7 @@ private struct SourcesSummaryCard: View {
 
                 if viewModel.selectedSources.isEmpty {
                     Text("Pick at least one source on the Sources tab to start receiving episodes.")
-                        .font(Theme.Typography.body(15))
+                        .font(Theme.Typography.body)
                         .foregroundStyle(Theme.Palette.inkSoft)
                 } else {
                     VStack(alignment: .leading, spacing: Theme.Spacing.s) {
@@ -656,20 +656,20 @@ private struct SourcesSummaryCard: View {
                                     .fill(Theme.Palette.amber)
                                     .frame(width: 6, height: 6)
                                 Text(source.name)
-                                    .font(Theme.Typography.body(15))
+                                    .font(Theme.Typography.body)
                                     .foregroundStyle(Theme.Palette.ink)
                                     .lineLimit(1)
                                 Spacer()
                                 if source.isCustom {
                                     Text("Custom")
-                                        .font(Theme.Typography.meta(10))
+                                        .font(Theme.Typography.meta)
                                         .foregroundStyle(Theme.Palette.muted)
                                 }
                             }
                         }
                         if viewModel.selectedSources.count > 4 {
                             Text("+\(viewModel.selectedSources.count - 4) more")
-                                .font(Theme.Typography.body(13))
+                                .font(Theme.Typography.callout)
                                 .foregroundStyle(Theme.Palette.muted)
                         }
                     }
@@ -834,7 +834,7 @@ private struct NewsletterEmailCard: View {
                 Spacer()
                 if didCopy {
                     Label("Copied", systemImage: "checkmark.circle.fill")
-                        .font(Theme.Typography.meta())
+                        .font(Theme.Typography.meta)
                         .foregroundStyle(Theme.Palette.amberDeep)
                         .transition(.opacity)
                 }
@@ -849,7 +849,7 @@ private struct NewsletterEmailCard: View {
                     .minimumScaleFactor(0.7)
 
                 Text("Use this address to subscribe to any newsletter (Substack, Beehiiv, Stratechery…). New issues land here and we mix them into your next episode.")
-                    .font(Theme.Typography.body(14))
+                    .font(Theme.Typography.callout)
                     .foregroundStyle(Theme.Palette.muted)
 
                 Button {
@@ -865,7 +865,7 @@ private struct NewsletterEmailCard: View {
                 .buttonStyle(.amberFilled)
             } else {
                 Text("Generating your private address…")
-                    .font(Theme.Typography.body(14))
+                    .font(Theme.Typography.callout)
                     .foregroundStyle(Theme.Palette.muted)
             }
         }
@@ -883,10 +883,10 @@ private struct InboundItemsList: View {
                     .foregroundStyle(Theme.Palette.muted)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Nothing yet")
-                        .font(Theme.Typography.body())
+                        .font(Theme.Typography.body)
                         .foregroundStyle(Theme.Palette.ink)
                     Text("Forwarded newsletters will appear here within seconds of arriving.")
-                        .font(Theme.Typography.body(13))
+                        .font(Theme.Typography.callout)
                         .foregroundStyle(Theme.Palette.muted)
                 }
             }
@@ -911,7 +911,7 @@ private struct InboundItemRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(item.subject)
-                .font(Theme.Typography.body(15).weight(.semibold))
+                .font(Theme.Typography.bodyStrong)
                 .foregroundStyle(Theme.Palette.ink)
                 .lineLimit(2)
             HStack(spacing: 6) {
@@ -920,7 +920,7 @@ private struct InboundItemRow: View {
                 Text("·")
                 Text(Self.timestampFormatter.localizedString(for: item.receivedAt, relativeTo: Date()))
             }
-            .font(Theme.Typography.body(12))
+            .font(Theme.Typography.callout)
             .foregroundStyle(Theme.Palette.muted)
         }
         .padding(.vertical, 4)
@@ -1091,7 +1091,7 @@ struct ScheduleSection: View {
                         }
                     } label: {
                         Text(Self.dayInitials[idx])
-                            .font(Theme.Typography.title(15).weight(.semibold))
+                            .font(Theme.Typography.subtitle)
                             .frame(width: 32, height: 32)
                             .background(isSelected ? Theme.Palette.amber : Color.clear, in: Circle())
                             .foregroundStyle(isSelected ? Color.white : Theme.Palette.ink)
@@ -1128,7 +1128,7 @@ struct ScheduleSection: View {
             .disabled(selectedDays.isEmpty)
 
             Text("Episodes are delivered in your device's timezone (\(TimeZone.current.identifier)).")
-                .font(.caption)
+                .font(Theme.Typography.callout)
                 .foregroundStyle(Theme.Palette.muted)
         }
         .onAppear {
@@ -1175,10 +1175,10 @@ struct FeedAccessView: View {
                     EditorialCard {
                         MetaLabel(text: "Step 1")
                         Text("Add to Apple Podcasts")
-                            .font(Theme.Typography.title(22))
+                            .font(Theme.Typography.title)
                             .foregroundStyle(Theme.Palette.ink)
                         Text("Tap below to open Apple Podcasts with your private feed pre-loaded.")
-                            .font(Theme.Typography.body(15))
+                            .font(Theme.Typography.body)
                             .foregroundStyle(Theme.Palette.inkSoft)
 
                         Button {
@@ -1193,7 +1193,7 @@ struct FeedAccessView: View {
                     EditorialCard {
                         MetaLabel(text: "Step 2 · Manual")
                         Text("Or add by URL")
-                            .font(Theme.Typography.title(20))
+                            .font(Theme.Typography.title)
                             .foregroundStyle(Theme.Palette.ink)
 
                         Text(viewModel.feed?.feedURL ?? "Sign in to generate your private feed.")
@@ -1215,7 +1215,7 @@ struct FeedAccessView: View {
                         .disabled(viewModel.feed?.feedURL == nil)
 
                         Text("In Apple Podcasts: Library → … menu → Follow a Show by URL → paste.")
-                            .font(.caption)
+                            .font(Theme.Typography.callout)
                             .foregroundStyle(Theme.Palette.muted)
                     }
 
@@ -1224,12 +1224,12 @@ struct FeedAccessView: View {
                             MetaLabel(text: "Latest run")
                             HStack {
                                 Text(latestRun.status.capitalized)
-                                    .font(Theme.Typography.title(18))
+                                    .font(Theme.Typography.subtitle)
                                     .foregroundStyle(Theme.Palette.ink)
                                 Spacer()
                                 if latestRun.capHit {
                                     Text("Cap hit")
-                                        .font(Theme.Typography.meta(10))
+                                        .font(Theme.Typography.meta)
                                         .foregroundStyle(Theme.Palette.amberDeep)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
@@ -1237,7 +1237,7 @@ struct FeedAccessView: View {
                                 }
                             }
                             Text(latestRun.message)
-                                .font(Theme.Typography.body(14))
+                                .font(Theme.Typography.callout)
                                 .foregroundStyle(Theme.Palette.inkSoft)
                         }
                     }
@@ -1297,12 +1297,12 @@ struct PaywallView: View {
         EditorialCard {
             MetaLabel(text: viewModel.isPaid ? "You're on Paid" : "Go further")
             Text(viewModel.isPaid ? "You're all set" : "Unlock the full briefing")
-                .font(Theme.Typography.title(26))
+                .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Palette.ink)
             Text(viewModel.isPaid
                  ? "Your subscription is active. Manage it in Settings → Apple ID → Subscriptions."
                  : "More sources, more delivery days, longer episodes. Cancel anytime.")
-                .font(Theme.Typography.body(15))
+                .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Palette.inkSoft)
         }
     }
@@ -1323,17 +1323,17 @@ struct PaywallView: View {
     private func comparisonRow(label: String, free: String, paid: String) -> some View {
         HStack {
             Text(label)
-                .font(Theme.Typography.body(15))
+                .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Palette.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
             VStack(spacing: 2) {
-                Text("Free").font(Theme.Typography.meta(10)).foregroundStyle(Theme.Palette.muted)
-                Text(free).font(Theme.Typography.body(14)).foregroundStyle(Theme.Palette.inkSoft)
+                Text("Free").font(Theme.Typography.meta).foregroundStyle(Theme.Palette.muted)
+                Text(free).font(Theme.Typography.callout).foregroundStyle(Theme.Palette.inkSoft)
             }
             .frame(width: 80)
             VStack(spacing: 2) {
-                Text("Paid").font(Theme.Typography.meta(10)).foregroundStyle(Theme.Palette.amberDeep)
-                Text(paid).font(Theme.Typography.body(14).weight(.semibold)).foregroundStyle(Theme.Palette.ink)
+                Text("Paid").font(Theme.Typography.meta).foregroundStyle(Theme.Palette.amberDeep)
+                Text(paid).font(Theme.Typography.calloutStrong).foregroundStyle(Theme.Palette.ink)
             }
             .frame(width: 100)
         }
@@ -1350,10 +1350,10 @@ struct PaywallView: View {
             EditorialCard {
                 MetaLabel(text: "Plans unavailable")
                 Text("We couldn't load subscription plans from the App Store.")
-                    .font(Theme.Typography.body(15))
+                    .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Palette.ink)
                 Text("Make sure these product IDs are configured in App Store Connect:")
-                    .font(Theme.Typography.body(13))
+                    .font(Theme.Typography.callout)
                     .foregroundStyle(Theme.Palette.muted)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("• \(AppConfiguration.monthlyProductID)")
@@ -1378,7 +1378,7 @@ struct PaywallView: View {
         EditorialCard {
             MetaLabel(text: "Purchase status")
             Text(message)
-                .font(Theme.Typography.body(14))
+                .font(Theme.Typography.callout)
                 .foregroundStyle(Theme.Palette.inkSoft)
         }
     }
@@ -1386,7 +1386,7 @@ struct PaywallView: View {
     private var legalFooter: some View {
         VStack(spacing: 6) {
             Text("Subscriptions auto-renew until cancelled. Manage or cancel in Settings → Apple ID → Subscriptions.")
-                .font(.caption)
+                .font(Theme.Typography.callout)
                 .foregroundStyle(Theme.Palette.muted)
                 .multilineTextAlignment(.center)
             HStack(spacing: 16) {
@@ -1401,7 +1401,7 @@ struct PaywallView: View {
                     }
                 }
             }
-            .font(.caption)
+            .font(Theme.Typography.callout)
             .tint(Theme.Palette.amberDeep)
         }
         .frame(maxWidth: .infinity)
@@ -1418,17 +1418,17 @@ private struct PlanCard: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(product.displayName)
-                        .font(Theme.Typography.title(20))
+                        .font(Theme.Typography.title)
                         .foregroundStyle(Theme.Palette.ink)
                     if !product.description.isEmpty {
                         Text(product.description)
-                            .font(Theme.Typography.body(13))
+                            .font(Theme.Typography.callout)
                             .foregroundStyle(Theme.Palette.muted)
                     }
                 }
                 Spacer()
                 Text(product.displayPrice)
-                    .font(Theme.Typography.title(18))
+                    .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.Palette.amberDeep)
             }
 
@@ -1780,11 +1780,11 @@ private struct OnboardingStepShell<Content: View>: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.s) {
                         Text(title)
-                            .font(Theme.Typography.display(32))
+                            .font(Theme.Typography.display)
                             .foregroundStyle(Theme.Palette.ink)
                             .fixedSize(horizontal: false, vertical: true)
                         Text(subtitle)
-                            .font(Theme.Typography.body(16))
+                            .font(Theme.Typography.body)
                             .foregroundStyle(Theme.Palette.inkSoft)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1857,15 +1857,15 @@ private struct OnboardingWelcomeStep: View {
     private func bullet(number: String, title: String, text: String) -> some View {
         HStack(alignment: .top, spacing: Theme.Spacing.m) {
             Text(number)
-                .font(Theme.Typography.title(20).weight(.semibold))
+                .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Palette.amberDeep)
                 .frame(width: 28, alignment: .leading)
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(Theme.Typography.title(17))
+                    .font(Theme.Typography.subtitle)
                     .foregroundStyle(Theme.Palette.ink)
                 Text(text)
-                    .font(Theme.Typography.body(14))
+                    .font(Theme.Typography.callout)
                     .foregroundStyle(Theme.Palette.inkSoft)
             }
         }
@@ -1929,10 +1929,10 @@ private struct OnboardingSourcesStep: View {
                             .frame(width: 32)
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Inspire me")
-                                .font(Theme.Typography.title(18))
+                                .font(Theme.Typography.subtitle)
                                 .foregroundStyle(Theme.Palette.ink)
                             Text("Our recommended mix — News, Tech, Culture, and Personal Finance.")
-                                .font(Theme.Typography.body(14))
+                                .font(Theme.Typography.callout)
                                 .foregroundStyle(Theme.Palette.inkSoft)
                                 .multilineTextAlignment(.leading)
                         }
@@ -1966,10 +1966,10 @@ private struct OnboardingSourcesStep: View {
                             .frame(width: 32)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(pack.name)
-                                .font(Theme.Typography.title(18))
+                                .font(Theme.Typography.subtitle)
                                 .foregroundStyle(Theme.Palette.ink)
                             Text(pack.summary)
-                                .font(Theme.Typography.body(14))
+                                .font(Theme.Typography.callout)
                                 .foregroundStyle(Theme.Palette.inkSoft)
                                 .multilineTextAlignment(.leading)
                         }
@@ -2030,14 +2030,14 @@ private struct OnboardingShowStep: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 8) {
                                 Text(preset.name)
-                                    .font(Theme.Typography.title(18))
+                                    .font(Theme.Typography.subtitle)
                                     .foregroundStyle(Theme.Palette.ink)
                                 if isLocked {
                                     PaidBadge()
                                 }
                             }
                             Text(preset.tagline)
-                                .font(Theme.Typography.body(14))
+                                .font(Theme.Typography.callout)
                                 .foregroundStyle(Theme.Palette.inkSoft)
                         }
                         Spacer(minLength: 0)
@@ -2061,7 +2061,7 @@ private struct OnboardingShowStep: View {
 private struct PaidBadge: View {
     var body: some View {
         Text("Paid")
-            .font(Theme.Typography.meta(10))
+            .font(Theme.Typography.meta)
             .tracking(1.2)
             .foregroundStyle(Color.white)
             .padding(.horizontal, 8)
@@ -2139,14 +2139,14 @@ private struct OnboardingVoicesStep: View {
             HStack(alignment: .center, spacing: Theme.Spacing.m) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(label)
-                        .font(Theme.Typography.body(13).weight(.semibold))
+                        .font(Theme.Typography.calloutStrong)
                         .foregroundStyle(Theme.Palette.muted)
                     Text(selectedVoice?.name ?? "Choose a voice")
-                        .font(Theme.Typography.title(18))
+                        .font(Theme.Typography.subtitle)
                         .foregroundStyle(Theme.Palette.ink)
                     if let description = selectedVoice?.description, !description.isEmpty {
                         Text(description)
-                            .font(Theme.Typography.body(13))
+                            .font(Theme.Typography.callout)
                             .foregroundStyle(Theme.Palette.inkSoft)
                     }
                 }
@@ -2169,7 +2169,7 @@ private struct OnboardingVoicesStep: View {
                 } label: {
                     HStack(spacing: 4) {
                         Text("Change")
-                            .font(Theme.Typography.body(14).weight(.semibold))
+                            .font(Theme.Typography.calloutStrong)
                         Image(systemName: "chevron.down")
                             .font(.system(size: 12, weight: .semibold))
                     }
@@ -2240,7 +2240,7 @@ private struct OnboardingScheduleStep: View {
                 timeSection
                 if selectedWeekdays.count > maxDeliveryDays {
                     Text("Your plan allows up to \(maxDeliveryDays) delivery days. Deselect a few or upgrade.")
-                        .font(Theme.Typography.body(13))
+                        .font(Theme.Typography.callout)
                         .foregroundStyle(Theme.Palette.amberDeep)
                 }
             }
@@ -2263,7 +2263,7 @@ private struct OnboardingScheduleStep: View {
             if !exceedsCap { selectedWeekdays = days }
         } label: {
             Text(label)
-                .font(Theme.Typography.body(14).weight(.semibold))
+                .font(Theme.Typography.calloutStrong)
                 .padding(.horizontal, Theme.Spacing.m)
                 .padding(.vertical, 8)
                 .background(isActive ? Theme.Palette.amber : Theme.Palette.rule.opacity(0.3), in: Capsule())
@@ -2278,7 +2278,7 @@ private struct OnboardingScheduleStep: View {
     private var daysSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
             Text("Days")
-                .font(Theme.Typography.body(13).weight(.semibold))
+                .font(Theme.Typography.calloutStrong)
                 .foregroundStyle(Theme.Palette.muted)
             HStack(spacing: 8) {
                 ForEach(Array(Self.canonicalWeekdayOrder.enumerated()), id: \.offset) { idx, day in
@@ -2291,7 +2291,7 @@ private struct OnboardingScheduleStep: View {
                         }
                     } label: {
                         Text(Self.dayInitials[idx])
-                            .font(Theme.Typography.title(15).weight(.semibold))
+                            .font(Theme.Typography.subtitle)
                             .frame(width: 36, height: 36)
                             .background(isSelected ? Theme.Palette.amber : Color.clear, in: Circle())
                             .foregroundStyle(isSelected ? Color.white : Theme.Palette.ink)
@@ -2309,7 +2309,7 @@ private struct OnboardingScheduleStep: View {
     private var timeSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
             Text("Time")
-                .font(Theme.Typography.body(13).weight(.semibold))
+                .font(Theme.Typography.calloutStrong)
                 .foregroundStyle(Theme.Palette.muted)
             DatePicker(
                 "",
@@ -2349,10 +2349,10 @@ private struct OnboardingDoneStep: View {
                         }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(viewModel.isGenerating ? "Generating your first episode…" : "Episode requested")
-                                .font(Theme.Typography.title(17))
+                                .font(Theme.Typography.subtitle)
                                 .foregroundStyle(Theme.Palette.ink)
                             Text("You can close this and come back later.")
-                                .font(Theme.Typography.body(13))
+                                .font(Theme.Typography.callout)
                                 .foregroundStyle(Theme.Palette.inkSoft)
                         }
                         Spacer(minLength: 0)
@@ -2371,7 +2371,7 @@ private struct OnboardingDoneStep: View {
                     onFinish()
                 } label: {
                     Text("Go to dashboard")
-                        .font(Theme.Typography.body(14).weight(.semibold))
+                        .font(Theme.Typography.calloutStrong)
                         .foregroundStyle(Theme.Palette.muted)
                 }
                 .buttonStyle(.plain)
@@ -2424,7 +2424,7 @@ struct LibraryView: View {
                     EditorialCard {
                         MetaLabel(text: "Nothing here yet")
                         Text("Your episodes will appear here once they're generated.")
-                            .font(Theme.Typography.body(15))
+                            .font(Theme.Typography.body)
                             .foregroundStyle(Theme.Palette.inkSoft)
                     }
                 } else {
@@ -2467,7 +2467,7 @@ private struct LibraryEpisodeRow: View {
         EditorialCard {
             MetaLabel(text: dateLabel)
             Text(episode.title)
-                .font(Theme.Typography.title(20))
+                .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Palette.ink)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -2477,14 +2477,14 @@ private struct LibraryEpisodeRow: View {
                 }
                 Label("\(episode.processedItemCount) items", systemImage: "doc.text")
             }
-            .font(Theme.Typography.body(13))
+            .font(Theme.Typography.callout)
             .foregroundStyle(Theme.Palette.muted)
 
             if !episode.sourceItemRefs.isEmpty {
                 EditorialDivider()
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                     Text("Sources")
-                        .font(Theme.Typography.meta(11))
+                        .font(Theme.Typography.meta)
                         .tracking(1.2)
                         .foregroundStyle(Theme.Palette.muted)
                     ForEach(uniqueSourceNames, id: \.self) { name in
@@ -2494,7 +2494,7 @@ private struct LibraryEpisodeRow: View {
                                 .frame(width: 6, height: 6)
                                 .padding(.top, 6)
                             Text(name)
-                                .font(Theme.Typography.body(14))
+                                .font(Theme.Typography.callout)
                                 .foregroundStyle(Theme.Palette.inkSoft)
                             Spacer(minLength: 0)
                         }
@@ -2509,7 +2509,7 @@ private struct LibraryEpisodeRow: View {
                 } label: {
                     HStack {
                         Text("Transcript")
-                            .font(Theme.Typography.body(14).weight(.semibold))
+                            .font(Theme.Typography.calloutStrong)
                             .foregroundStyle(Theme.Palette.amberDeep)
                         Spacer()
                         Image(systemName: isTranscriptExpanded ? "chevron.up" : "chevron.down")
@@ -2522,7 +2522,7 @@ private struct LibraryEpisodeRow: View {
 
                 if isTranscriptExpanded {
                     Text(transcript)
-                        .font(Theme.Typography.body(14))
+                        .font(Theme.Typography.callout)
                         .foregroundStyle(Theme.Palette.inkSoft)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
