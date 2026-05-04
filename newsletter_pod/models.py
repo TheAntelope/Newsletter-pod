@@ -29,6 +29,7 @@ class VoiceDefinition(BaseModel):
     name: str
     gender: str = "neutral"
     description: str = ""
+    preview_url: str = ""
     enabled: bool = True
 
 

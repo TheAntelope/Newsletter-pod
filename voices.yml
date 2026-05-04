@@ -1,9 +1,14 @@
 # Voice catalog. The `id` field is the ElevenLabs voice ID — same value
 # stored on PodcastProfileRecord.voice_id. To add a new voice: append a new
 # entry with its ElevenLabs voice ID, human-friendly name, gender,
-# description, and enabled: true. Loader filters out enabled: false entries
-# so disabled rows never reach the iOS picker. No app deploy needed when
-# toggling a voice on/off — backend revision rollout picks up the change.
+# description, preview_url, and enabled: true. Loader filters out
+# enabled: false entries so disabled rows never reach the iOS picker. No
+# app deploy needed when toggling a voice on/off — backend revision
+# rollout picks up the change.
+#
+# preview_url: public MP3 of the voice introducing itself, played when
+# the user taps the picker card during onboarding. Render with
+# `python scripts/render_voice_samples.py`.
 
 voices:
   # ============================================================
@@ -13,12 +18,14 @@ voices:
     name: Vinnie Chase
     gender: male
     description: Confident and clear; default anchor.
+    preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/suMMgpGbVcnihP1CcgFS.mp3
     enabled: true
 
   - id: RKCbSROXui75bk1SVpy8
     name: Demi Dreams
     gender: female
     description: Warm and conversational; default commentator.
+    preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/RKCbSROXui75bk1SVpy8.mp3
     enabled: true
 
   # ============================================================
@@ -28,34 +35,40 @@ voices:
     name: Chaz Cobalt
     gender: male
     description: Confident drive-time DJ; warm and a little swaggery.
+    preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/5e3JKXK83vvgQqBcdUol.mp3
     enabled: true
 
   - id: Fxt4GZnlXkUGMtWSYIcm
     name: Rocky Reverb
     gender: male
     description: Late-night radio energy; smooth, low, and unhurried.
+    preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/Fxt4GZnlXkUGMtWSYIcm.mp3
     enabled: true
 
   - id: rPMkKgdwgIwqv4fXgR6N
     name: Marlon Midnight
     gender: male
     description: Deep and reflective; the voice for a long drive.
+    preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/rPMkKgdwgIwqv4fXgR6N.mp3
     enabled: true
 
   - id: eXpIbVcVbLo8ZJQDlDnl
     name: Lola Lumen
     gender: female
     description: Bright and quick-witted; the friend who always has the gossip.
+    preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/eXpIbVcVbLo8ZJQDlDnl.mp3
     enabled: true
 
   - id: GaCzJ7BKVn8XQp1mZYIn
     name: Stella Static
     gender: female
     description: Cool and a little edgy; pirate-radio cool.
+    preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/GaCzJ7BKVn8XQp1mZYIn.mp3
     enabled: true
 
   - id: 0S5oIfi8zOZixuSj8K6n
     name: Ruby Rebel
     gender: female
     description: Bold and punchy; reads the headlines like she means it.
+    preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/0S5oIfi8zOZixuSj8K6n.mp3
     enabled: true

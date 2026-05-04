@@ -107,7 +107,7 @@ def test_voice_catalog_returns_only_enabled_voices():
     assert "suMMgpGbVcnihP1CcgFS" in ids  # Vinnie
     assert "RKCbSROXui75bk1SVpy8" in ids  # Demi
     for voice in voices:
-        assert {"id", "name", "gender", "description"} <= set(voice.keys())
+        assert {"id", "name", "gender", "description", "preview_url"} <= set(voice.keys())
 
 
 def test_welcome_episode_seeded_for_new_user_when_configured():

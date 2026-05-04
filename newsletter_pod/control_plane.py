@@ -242,6 +242,7 @@ class ControlPlaneService:
                 "name": voice.name,
                 "gender": voice.gender,
                 "description": voice.description,
+                "preview_url": voice.preview_url,
             }
             for voice in self._voice_catalog.values()
         ]

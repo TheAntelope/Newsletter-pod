@@ -1,4 +1,5 @@
 import AuthenticationServices
+import AVFoundation
 import StoreKit
 import SwiftUI
 import UIKit
@@ -2070,6 +2071,59 @@ private struct PaidBadge: View {
     }
 }
 
+@MainActor
+private final class VoiceSamplePlayer: ObservableObject {
+    @Published private(set) var playingVoiceID: String?
+    private var player: AVPlayer?
+    private var endObserver: NSObjectProtocol?
+
+    func play(_ voice: CatalogVoiceDTO) {
+        guard let urlString = voice.previewURL,
+              !urlString.isEmpty,
+              let url = URL(string: urlString) else { return }
+
+        // Duck other audio (e.g. Spotify) while the sample plays; on
+        // deactivate it un-ducks automatically so the user's music resumes.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.duckOthers])
+        try? AVAudioSession.sharedInstance().setActive(true)
+
+        if let observer = endObserver {
+            NotificationCenter.default.removeObserver(observer)
+            endObserver = nil
+        }
+
+        let item = AVPlayerItem(url: url)
+        let newPlayer = AVPlayer(playerItem: item)
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handlePlaybackEnded() }
+        }
+
+        player = newPlayer
+        playingVoiceID = voice.id
+        newPlayer.play()
+    }
+
+    func stop() {
+        player?.pause()
+        player = nil
+        if let observer = endObserver {
+            NotificationCenter.default.removeObserver(observer)
+            endObserver = nil
+        }
+        playingVoiceID = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    }
+
+    private func handlePlaybackEnded() {
+        playingVoiceID = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    }
+}
+
 private struct OnboardingVoicesStep: View {
     @EnvironmentObject private var viewModel: AppViewModel
     @Binding var anchorVoiceID: String?
@@ -2077,12 +2131,14 @@ private struct OnboardingVoicesStep: View {
     let onBack: () -> Void
     let onContinue: () -> Void
 
+    @StateObject private var samplePlayer = VoiceSamplePlayer()
+
     /// Voice list to render. Falls back to the legacy 2-voice static list when the
     /// catalog hasn't loaded yet (e.g. cold app start) so the picker is never empty.
     private var voices: [CatalogVoiceDTO] {
         if !viewModel.catalogVoices.isEmpty { return viewModel.catalogVoices }
         return PodcastSetupView.voiceOptions.map {
-            CatalogVoiceDTO(id: $0.id, name: $0.name, gender: "neutral", description: "")
+            CatalogVoiceDTO(id: $0.id, name: $0.name, gender: "neutral", description: "", previewURL: nil)
         }
     }
 
@@ -2115,6 +2171,7 @@ private struct OnboardingVoicesStep: View {
             }
             .onAppear { applyDefaultsIfEmpty() }
             .onChange(of: viewModel.catalogVoices) { _, _ in applyDefaultsIfEmpty() }
+            .onDisappear { samplePlayer.stop() }
         }
     }
 
@@ -2135,22 +2192,44 @@ private struct OnboardingVoicesStep: View {
     @ViewBuilder
     private func voiceSlot(label: String, selectedID: String?, excludeID: String?, onSelect: @escaping (String) -> Void) -> some View {
         let selectedVoice = voices.first(where: { $0.id == selectedID })
+        let isPlaying = selectedVoice?.id != nil && samplePlayer.playingVoiceID == selectedVoice?.id
+        let canPreview = (selectedVoice?.previewURL?.isEmpty == false)
         EditorialCard {
             HStack(alignment: .center, spacing: Theme.Spacing.m) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(label)
-                        .font(Theme.Typography.calloutStrong)
-                        .foregroundStyle(Theme.Palette.muted)
-                    Text(selectedVoice?.name ?? "Choose a voice")
-                        .font(Theme.Typography.subtitle)
-                        .foregroundStyle(Theme.Palette.ink)
-                    if let description = selectedVoice?.description, !description.isEmpty {
-                        Text(description)
-                            .font(Theme.Typography.callout)
-                            .foregroundStyle(Theme.Palette.inkSoft)
+                Button {
+                    if let voice = selectedVoice { samplePlayer.play(voice) }
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(label)
+                            .font(Theme.Typography.calloutStrong)
+                            .foregroundStyle(Theme.Palette.muted)
+                        HStack(spacing: 6) {
+                            Text(selectedVoice?.name ?? "Choose a voice")
+                                .font(Theme.Typography.subtitle)
+                                .foregroundStyle(Theme.Palette.ink)
+                            if isPlaying {
+                                Image(systemName: "speaker.wave.2.fill")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(Theme.Palette.amberDeep)
+                                    .transition(.opacity)
+                            } else if canPreview {
+                                Image(systemName: "play.circle.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(Theme.Palette.amber.opacity(0.7))
+                            }
+                        }
+                        if let description = selectedVoice?.description, !description.isEmpty {
+                            Text(description)
+                                .font(Theme.Typography.callout)
+                                .foregroundStyle(Theme.Palette.inkSoft)
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                Spacer(minLength: 0)
+                .buttonStyle(.plain)
+                .disabled(!canPreview)
+
                 Menu {
                     ForEach(voices) { voice in
                         Button {
