@@ -328,14 +328,6 @@ private struct HeroEpisodeCard: View {
                 .disabled(viewModel.feed?.feedURL == nil)
 
                 Button {
-                    UIPasteboard.general.string = viewModel.feed?.feedURL
-                } label: {
-                    Label("Copy feed link", systemImage: "doc.on.doc")
-                }
-                .buttonStyle(.amberOutlined)
-                .disabled(viewModel.feed?.feedURL == nil)
-
-                Button {
                     Task { await viewModel.generateNow() }
                 } label: {
                     if viewModel.isGenerating {
@@ -744,6 +736,37 @@ struct SourcesView: View {
     @State private var selectedCatalogIDs: Set<String> = []
     @State private var customURLs: [String] = [""]
 
+    private struct TopicGroup: Identifiable {
+        let name: String
+        let icon: String
+        let sources: [CatalogSourceDTO]
+        var id: String { name }
+    }
+
+    private var catalogTopicGroups: [TopicGroup] {
+        var topicOrder: [String] = []
+        var bucket: [String: [CatalogSourceDTO]] = [:]
+        for source in viewModel.catalogSources {
+            let topic = (source.topic?.isEmpty == false) ? source.topic! : "Other"
+            if bucket[topic] == nil {
+                topicOrder.append(topic)
+                bucket[topic] = []
+            }
+            bucket[topic]?.append(source)
+        }
+        return topicOrder.map { topic in
+            TopicGroup(
+                name: topic,
+                icon: OnboardingStarterPack.icon(forTopic: topic),
+                sources: bucket[topic] ?? []
+            )
+        }
+    }
+
+    private func selectedCount(in sources: [CatalogSourceDTO]) -> Int {
+        sources.reduce(0) { $0 + (selectedCatalogIDs.contains($1.sourceID) ? 1 : 0) }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -760,17 +783,34 @@ struct SourcesView: View {
                 }
 
                 Section("Catalog Sources") {
-                    ForEach(viewModel.catalogSources) { source in
-                        Toggle(source.name, isOn: Binding(
-                            get: { selectedCatalogIDs.contains(source.sourceID) },
-                            set: { isSelected in
-                                if isSelected {
-                                    selectedCatalogIDs.insert(source.sourceID)
-                                } else {
-                                    selectedCatalogIDs.remove(source.sourceID)
-                                }
+                    ForEach(catalogTopicGroups) { group in
+                        DisclosureGroup {
+                            ForEach(group.sources) { source in
+                                Toggle(source.name, isOn: Binding(
+                                    get: { selectedCatalogIDs.contains(source.sourceID) },
+                                    set: { isSelected in
+                                        if isSelected {
+                                            selectedCatalogIDs.insert(source.sourceID)
+                                        } else {
+                                            selectedCatalogIDs.remove(source.sourceID)
+                                        }
+                                    }
+                                ))
                             }
-                        ))
+                        } label: {
+                            HStack(spacing: Theme.Spacing.s) {
+                                Image(systemName: group.icon)
+                                    .foregroundStyle(Theme.Palette.amberDeep)
+                                    .frame(width: 22)
+                                Text(group.name)
+                                    .foregroundStyle(Theme.Palette.ink)
+                                Spacer()
+                                Text("\(selectedCount(in: group.sources)) of \(group.sources.count)")
+                                    .font(Theme.Typography.meta)
+                                    .foregroundStyle(Theme.Palette.muted)
+                                    .monospacedDigit()
+                            }
+                        }
                     }
                 }
 
@@ -946,12 +986,17 @@ struct PodcastSetupView: View {
     @State private var durationMinutes = 3.0
     @State private var voiceID: String = PodcastSetupView.voiceOptions[0].id
 
-    private var hostOption: (id: String, name: String) {
-        PodcastSetupView.voiceOptions.first(where: { $0.id == voiceID }) ?? PodcastSetupView.voiceOptions[0]
+    /// Full voice catalog with the legacy 2-voice list as fallback when the
+    /// server catalog hasn't loaded yet. Mirrors `OnboardingVoicesStep`.
+    private var voices: [CatalogVoiceDTO] {
+        if !viewModel.catalogVoices.isEmpty { return viewModel.catalogVoices }
+        return PodcastSetupView.voiceOptions.map {
+            CatalogVoiceDTO(id: $0.id, name: $0.name, gender: "neutral", description: "", previewURL: nil)
+        }
     }
 
-    private var commentatorOption: (id: String, name: String) {
-        PodcastSetupView.voiceOptions.first(where: { $0.id != voiceID }) ?? PodcastSetupView.voiceOptions[1]
+    private var hostOption: CatalogVoiceDTO? {
+        voices.first(where: { $0.id == voiceID }) ?? voices.first
     }
 
     var body: some View {
@@ -994,25 +1039,39 @@ struct PodcastSetupView: View {
                 }
 
                 Section("Voices") {
-                    HStack {
-                        Text(formatPreset == "solo_host" ? "Narrator" : "Host")
-                        Spacer()
-                        Text(hostOption.name)
-                            .foregroundStyle(Theme.Palette.muted)
+                    Menu {
+                        ForEach(voices) { voice in
+                            Button {
+                                voiceID = voice.id
+                            } label: {
+                                if voice.id == voiceID {
+                                    Label(voice.name, systemImage: "checkmark")
+                                } else {
+                                    Text(voice.name)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text(formatPreset == "solo_host" ? "Narrator" : "Host")
+                                .foregroundStyle(Theme.Palette.ink)
+                            Spacer()
+                            Text(hostOption?.name ?? "Choose a voice")
+                                .foregroundStyle(Theme.Palette.muted)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Theme.Palette.amberDeep)
+                        }
+                    }
+                    if let description = hostOption?.description, !description.isEmpty {
+                        Text(description)
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.inkSoft)
                     }
                     if formatPreset != "solo_host" {
-                        HStack {
-                            Text("Commentator")
-                            Spacer()
-                            Text(commentatorOption.name)
-                                .foregroundStyle(Theme.Palette.muted)
-                        }
-                        Button("Swap voices") {
-                            voiceID = commentatorOption.id
-                        }
-                        .buttonStyle(.amberOutlined)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
+                        Text("Commentator voice is paired automatically.")
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.muted)
                     }
                 }
 
@@ -1063,11 +1122,18 @@ struct PodcastSetupView: View {
                 secondaryHost = viewModel.profile?.hostSecondaryName ?? "Demi"
                 guestNames = viewModel.profile?.guestNames.joined(separator: ", ") ?? "Alex, Sam"
                 durationMinutes = Double(viewModel.profile?.desiredDurationMinutes ?? 3)
-                if let stored = viewModel.profile?.voiceID,
-                   PodcastSetupView.voiceOptions.contains(where: { $0.id == stored }) {
-                    voiceID = stored
-                }
+                applyStoredVoiceIfPossible()
             }
+            .onChange(of: viewModel.catalogVoices) { _, _ in
+                applyStoredVoiceIfPossible()
+            }
+        }
+    }
+
+    private func applyStoredVoiceIfPossible() {
+        if let stored = viewModel.profile?.voiceID,
+           voices.contains(where: { $0.id == stored }) {
+            voiceID = stored
         }
     }
 }
@@ -1475,6 +1541,10 @@ struct OnboardingStarterPack: Identifiable {
     /// Curated balanced mix used by the "Inspire me" shortcut. Listed in priority
     /// order; only topics actually present in the live catalog are used.
     static let inspireMeTopics: [String] = ["News", "Tech", "Culture", "Personal Finance"]
+
+    static func icon(forTopic topic: String) -> String {
+        iconByTopic[topic] ?? "sparkles"
+    }
 
     /// Build topic-grouped starter packs from the live source catalog.
     /// Topics appear in the order their first source is encountered, matching `sources.yml` order.
