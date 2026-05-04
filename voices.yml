@@ -1,11 +1,9 @@
 # Voice catalog. The `id` field is the ElevenLabs voice ID — same value
-# stored on PodcastProfileRecord.voice_id. To add a new voice:
-#   1. Replace the TODO_VOICE_* placeholder id with the real ElevenLabs voice ID.
-#   2. Replace the placeholder name with the human-friendly voice name.
-#   3. Set enabled to true.
-# Loader filters out enabled: false entries, so disabled placeholders never reach
-# the iOS picker. No app deploy needed when toggling a voice on/off — backend
-# revision rollout picks up the change.
+# stored on PodcastProfileRecord.voice_id. To add a new voice: append a new
+# entry with its ElevenLabs voice ID, human-friendly name, gender,
+# description, and enabled: true. Loader filters out enabled: false entries
+# so disabled rows never reach the iOS picker. No app deploy needed when
+# toggling a voice on/off — backend revision rollout picks up the change.
 
 voices:
   # ============================================================
@@ -24,8 +22,7 @@ voices:
     enabled: true
 
   # ============================================================
-  # Placeholder slots — fill in elevenlabs_id + name, flip enabled to true.
-  # Target mix: 4 male / 4 female (8 premium voices on top of Vinnie + Demi).
+  # Premium voices (3 male / 3 female on top of Vinnie + Demi = 8 total).
   # ============================================================
   - id: 5e3JKXK83vvgQqBcdUol
     name: Chaz Cobalt
@@ -45,12 +42,6 @@ voices:
     description: Deep and reflective; the voice for a long drive.
     enabled: true
 
-  - id: TODO_VOICE_M4
-    name: Premium voice (male, slot 4)
-    gender: male
-    description: ""
-    enabled: false
-
   - id: eXpIbVcVbLo8ZJQDlDnl
     name: Lola Lumen
     gender: female
@@ -68,9 +59,3 @@ voices:
     gender: female
     description: Bold and punchy; reads the headlines like she means it.
     enabled: true
-
-  - id: TODO_VOICE_F4
-    name: Premium voice (female, slot 4)
-    gender: female
-    description: ""
-    enabled: false

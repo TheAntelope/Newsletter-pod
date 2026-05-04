@@ -100,14 +100,12 @@ def test_voice_catalog_returns_only_enabled_voices():
     catalog = client.get("/v1/voices/catalog")
     assert catalog.status_code == 200
     voices = catalog.json()["voices"]
-    # voices.yml ships with 2 enabled (Vinnie + Demi) and 8 disabled placeholders.
-    # Loader filters the disabled ones out, so the catalog should never expose them.
+    # Loader filters out enabled: false entries; the catalog should only ever
+    # expose voices we've explicitly turned on.
     assert len(voices) >= 2
     ids = {v["id"] for v in voices}
     assert "suMMgpGbVcnihP1CcgFS" in ids  # Vinnie
     assert "RKCbSROXui75bk1SVpy8" in ids  # Demi
-    for placeholder in ("TODO_VOICE_M1", "TODO_VOICE_F1"):
-        assert placeholder not in ids
     for voice in voices:
         assert {"id", "name", "gender", "description"} <= set(voice.keys())
 
