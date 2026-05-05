@@ -5,6 +5,21 @@ from datetime import date
 
 from .models import PodcastUxConfig, SourceItem
 
+# Conversational two-host pace; used only as an LLM length anchor on top of the
+# minute target. GPT models hit duration goals much better when given a word
+# count alongside the minute number.
+WORDS_PER_MINUTE = 150
+
+
+def _format_runtime_label(min_minutes: int, max_minutes: int) -> str:
+    lo, hi = min(min_minutes, max_minutes), max(min_minutes, max_minutes)
+    if lo == hi:
+        return f"{lo} minutes (about {lo * WORDS_PER_MINUTE} spoken words)"
+    return (
+        f"{lo}-{hi} minutes "
+        f"(about {lo * WORDS_PER_MINUTE}-{hi * WORDS_PER_MINUTE} spoken words)"
+    )
+
 
 def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxConfig) -> str:
     grouped: dict[str, list[SourceItem]] = defaultdict(list)
@@ -13,9 +28,9 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
 
     thin_day = len(items) <= 2
     runtime_label = (
-        f"{ux.thin_day_minutes}-4 minutes"
+        _format_runtime_label(ux.thin_day_minutes, 4)
         if thin_day
-        else f"{ux.target_minutes}-{ux.max_minutes} minutes"
+        else _format_runtime_label(ux.target_minutes, ux.max_minutes)
     )
     editorial_guidance = (
         "This is a thin-news day. Publish a shorter edition if there are only a few worthwhile items."
@@ -55,7 +70,7 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
         secondary_host_line,
         f"Tone: {ux.tone}",
         "Audience: one person who wants the most useful updates quickly.",
-        f"Goal: a short business-tech digest that runs approximately {runtime_label}.",
+        f"Goal: a digest of the user's sources that runs approximately {runtime_label}. Hit the word count target — do not produce a shorter script.",
         "Editorial approach:",
         f"- {editorial_guidance}",
         "- Group related items into 2-4 top story blocks when possible.",

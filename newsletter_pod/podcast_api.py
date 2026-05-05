@@ -121,13 +121,12 @@ class PodcastApiClient:
                         {
                             "type": "input_text",
                             "text": (
-                                "You write concise spoken-word daily business and technology digests. "
+                                "You write spoken-word daily digests on the user's selected sources. "
                                 "Return valid JSON only. "
                                 f"Split the narration into 1-6 audio_segments, each at most {OPENAI_SPEECH_MAX_CHARS} "
                                 "characters because they will be sent separately to a text-to-speech endpoint. "
                                 "Preserve natural transitions across segments. "
-                                "Keep the total script compact enough for a short daily episode, and write show_notes "
-                                "as markdown with source attributions and links."
+                                "Write show_notes as markdown with source attributions and links."
                             ),
                         }
                     ],
