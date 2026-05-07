@@ -536,43 +536,32 @@ private enum DescriptionBlock {
 
 private struct AboutPodcastCard: View {
     @EnvironmentObject private var viewModel: AppViewModel
-    @State private var showScheduleEditor = false
 
     var body: some View {
-        EditorialCard {
-            MetaLabel(text: "About this podcast")
-            Text(viewModel.profile?.title ?? "ClawCast")
-                .font(Theme.Typography.title)
-                .foregroundStyle(Theme.Palette.ink)
-
-            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                infoRow(label: "Format", value: formatLabel)
-                infoRow(label: "Hosts", value: hostsLabel)
-                infoRow(label: "Length", value: "\(viewModel.profile?.desiredDurationMinutes ?? 8) min")
-                Button {
-                    showScheduleEditor = true
-                } label: {
-                    HStack {
-                        Text("Delivery")
-                            .font(Theme.Typography.callout)
-                            .foregroundStyle(Theme.Palette.muted)
-                        Spacer()
-                        Text(deliveryLabel)
-                            .font(Theme.Typography.calloutStrong)
-                            .foregroundStyle(Theme.Palette.ink)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Theme.Palette.muted)
-                    }
-                    .contentShape(Rectangle())
+        Button {
+            viewModel.selectedTab = .podcast
+        } label: {
+            EditorialCard {
+                HStack {
+                    MetaLabel(text: "About this podcast")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.muted)
                 }
-                .buttonStyle(.plain)
+                Text(viewModel.profile?.title ?? "ClawCast")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Palette.ink)
+
+                VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                    infoRow(label: "Format", value: formatLabel)
+                    infoRow(label: "Hosts", value: hostsLabel)
+                    infoRow(label: "Length", value: "\(viewModel.profile?.desiredDurationMinutes ?? 8) min")
+                    infoRow(label: "Delivery", value: deliveryLabel)
+                }
             }
         }
-        .sheet(isPresented: $showScheduleEditor) {
-            ScheduleEditorView()
-                .environmentObject(viewModel)
-        }
+        .buttonStyle(.plain)
     }
 
     private var formatLabel: String {
@@ -1276,28 +1265,6 @@ struct ScheduleSection: View {
                 weekdays: weekdays,
                 localTime: OnboardingScheduleStep.formattedHHmm(deliveryTime)
             )
-        }
-    }
-}
-
-struct ScheduleEditorView: View {
-    @EnvironmentObject private var viewModel: AppViewModel
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                ScheduleSection()
-            }
-            .editorialBackground()
-            .navigationTitle("Delivery schedule")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(Theme.Palette.amberDeep)
-                }
-            }
         }
     }
 }
