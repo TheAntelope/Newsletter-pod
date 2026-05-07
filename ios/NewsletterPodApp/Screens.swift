@@ -996,6 +996,9 @@ struct PodcastSetupView: View {
     @State private var voiceID: String = PodcastSetupView.voiceOptions[0].id
     @State private var secondaryVoiceID: String = PodcastSetupView.voiceOptions[1].id
     @StateObject private var samplePlayer = VoiceSamplePlayer()
+    @State private var didLoadInitialState = false
+    @State private var nameSaveTask: Task<Void, Never>?
+    @State private var configSaveTask: Task<Void, Never>?
 
     /// Full voice catalog with the legacy 2-voice list as fallback when the
     /// server catalog hasn't loaded yet. Mirrors `OnboardingVoicesStep`.
@@ -1013,20 +1016,6 @@ struct PodcastSetupView: View {
                     TextField("First name", text: $displayName)
                         .textContentType(.givenName)
                         .autocorrectionDisabled()
-                    Button("Save name") {
-                        Task {
-                            let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !trimmed.isEmpty else { return }
-                            await viewModel.updateProfile(
-                                displayName: trimmed,
-                                timezone: viewModel.user?.timezone ?? TimeZone.current.identifier
-                            )
-                        }
-                    }
-                    .buttonStyle(.amberOutlined)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-                    .disabled(displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
                 Section("Format") {
@@ -1072,28 +1061,6 @@ struct PodcastSetupView: View {
                 }
 
                 ScheduleSection()
-
-                Section {
-                    Button("Save podcast settings") {
-                        Task {
-                            let secondary: String? = formatPreset == "two_hosts" ? secondaryVoiceID : nil
-                            await viewModel.savePodcastConfig(
-                                title: viewModel.profile?.title ?? "ClawCast",
-                                formatPreset: formatPreset,
-                                primaryHost: viewModel.profile?.hostPrimaryName ?? "Host",
-                                secondaryHost: nil,
-                                guestNames: [],
-                                desiredDurationMinutes: Int(durationMinutes),
-                                voiceID: voiceID,
-                                secondaryVoiceID: secondary
-                            )
-                        }
-                    }
-                    .buttonStyle(.amberFilled)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-                }
-
             }
             .navigationTitle("Podcast Setup")
             .navigationBarTitleDisplayMode(.inline)
@@ -1103,11 +1070,60 @@ struct PodcastSetupView: View {
                 formatPreset = viewModel.profile?.formatPreset ?? "two_hosts"
                 durationMinutes = Double(viewModel.profile?.desiredDurationMinutes ?? 3)
                 applyStoredVoicesIfPossible()
+                didLoadInitialState = true
             }
             .onChange(of: viewModel.catalogVoices) { _, _ in
                 applyStoredVoicesIfPossible()
             }
-            .onDisappear { samplePlayer.stop() }
+            .onChange(of: displayName) { _, newValue in
+                guard didLoadInitialState else { return }
+                scheduleNameSave(newValue)
+            }
+            .onChange(of: formatPreset) { _, _ in scheduleConfigSave(immediate: true) }
+            .onChange(of: voiceID) { _, _ in scheduleConfigSave(immediate: true) }
+            .onChange(of: secondaryVoiceID) { _, _ in scheduleConfigSave(immediate: true) }
+            .onChange(of: durationMinutes) { _, _ in scheduleConfigSave(immediate: false) }
+            .onDisappear {
+                samplePlayer.stop()
+                nameSaveTask?.cancel()
+                configSaveTask?.cancel()
+            }
+        }
+    }
+
+    private func scheduleNameSave(_ value: String) {
+        nameSaveTask?.cancel()
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != viewModel.user?.displayName else { return }
+        nameSaveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            await viewModel.updateProfile(
+                displayName: trimmed,
+                timezone: viewModel.user?.timezone ?? TimeZone.current.identifier
+            )
+        }
+    }
+
+    private func scheduleConfigSave(immediate: Bool) {
+        guard didLoadInitialState else { return }
+        configSaveTask?.cancel()
+        configSaveTask = Task { @MainActor in
+            if !immediate {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled else { return }
+            }
+            let secondary: String? = formatPreset == "two_hosts" ? secondaryVoiceID : nil
+            await viewModel.savePodcastConfig(
+                title: viewModel.profile?.title ?? "ClawCast",
+                formatPreset: formatPreset,
+                primaryHost: viewModel.profile?.hostPrimaryName ?? "Host",
+                secondaryHost: nil,
+                guestNames: [],
+                desiredDurationMinutes: Int(durationMinutes),
+                voiceID: voiceID,
+                secondaryVoiceID: secondary
+            )
         }
     }
 
@@ -1123,10 +1139,15 @@ struct PodcastSetupView: View {
         let canPreview = (selectedVoice?.previewURL?.isEmpty == false)
         HStack(spacing: 12) {
             Button {
-                if let voice = selectedVoice, canPreview { samplePlayer.play(voice) }
+                guard let voice = selectedVoice, canPreview else { return }
+                if isPlaying {
+                    samplePlayer.stop()
+                } else {
+                    samplePlayer.play(voice)
+                }
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: isPlaying ? "speaker.wave.2.fill" : "play.circle.fill")
+                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 20))
                         .foregroundStyle(canPreview ? Theme.Palette.amberDeep : Color.secondary)
                     VStack(alignment: .leading, spacing: 2) {
@@ -1192,6 +1213,8 @@ struct ScheduleSection: View {
     @EnvironmentObject private var viewModel: AppViewModel
     @State private var selectedDays: Set<String> = ["monday"]
     @State private var deliveryTime: Date = OnboardingScheduleStep.defaultDeliveryTime()
+    @State private var didLoadInitialState = false
+    @State private var saveTask: Task<Void, Never>?
 
     private static let dayInitials = ["M", "T", "W", "T", "F", "S", "S"]
 
@@ -1228,31 +1251,36 @@ struct ScheduleSection: View {
             )
             .tint(Theme.Palette.amberDeep)
 
-            Button("Save delivery schedule") {
-                Task {
-                    let weekdays = OnboardingScheduleStep.canonicalWeekdayOrder.filter { selectedDays.contains($0) }
-                    let timezone = viewModel.user?.timezone ?? TimeZone.current.identifier
-                    await viewModel.saveSchedule(
-                        timezone: timezone,
-                        weekdays: weekdays,
-                        localTime: OnboardingScheduleStep.formattedHHmm(deliveryTime)
-                    )
-                }
-            }
-            .buttonStyle(.amberOutlined)
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
-            .disabled(selectedDays.isEmpty)
-
             Text("Episodes are delivered in your device's timezone (\(TimeZone.current.identifier)).")
                 .font(Theme.Typography.callout)
-                .foregroundStyle(Theme.Palette.muted)
+                .foregroundStyle(.secondary)
         }
         .onAppear {
             selectedDays = Set(viewModel.schedule?.weekdays ?? ["monday"])
             if let parsed = OnboardingScheduleStep.parseHHmm(viewModel.schedule?.localTime) {
                 deliveryTime = parsed
             }
+            didLoadInitialState = true
+        }
+        .onChange(of: selectedDays) { _, _ in scheduleSave() }
+        .onChange(of: deliveryTime) { _, _ in scheduleSave() }
+        .onDisappear { saveTask?.cancel() }
+    }
+
+    private func scheduleSave() {
+        guard didLoadInitialState else { return }
+        guard !selectedDays.isEmpty else { return }
+        saveTask?.cancel()
+        saveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            let weekdays = OnboardingScheduleStep.canonicalWeekdayOrder.filter { selectedDays.contains($0) }
+            let timezone = viewModel.user?.timezone ?? TimeZone.current.identifier
+            await viewModel.saveSchedule(
+                timezone: timezone,
+                weekdays: weekdays,
+                localTime: OnboardingScheduleStep.formattedHHmm(deliveryTime)
+            )
         }
     }
 }
