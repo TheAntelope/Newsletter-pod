@@ -95,6 +95,65 @@ def test_schedule_patch_accepts_local_time():
     assert bad2.status_code == 400
 
 
+def test_feedback_endpoint_translates_and_persists(monkeypatch):
+    from newsletter_pod import control_plane as cp_module
+
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("feedback-user", "fb@example.com"))
+
+    seen = {}
+
+    def fake_translate(text, *, api_key, text_model, base_url, locale_hint):
+        seen["text"] = text
+        seen["locale_hint"] = locale_hint
+        return f"[en] {text}"
+
+    monkeypatch.setattr(cp_module, "translate_to_english", fake_translate)
+
+    resp = client.post(
+        "/v1/me/feedback",
+        json={"text": "  ¡Me encanta!  ", "locale_hint": "es-ES", "source": "voice"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["raw_text"] == "¡Me encanta!"
+    assert body["english_text"] == "[en] ¡Me encanta!"
+    assert body["locale_hint"] == "es-ES"
+    assert body["source"] == "voice"
+    assert seen == {"text": "¡Me encanta!", "locale_hint": "es-ES"}
+
+    user_id = body["user_id"]
+    stored = container.control_repository.list_recent_feedback(user_id, limit=5)
+    assert len(stored) == 1
+    assert stored[0].english_text == "[en] ¡Me encanta!"
+
+    empty = client.post("/v1/me/feedback", json={"text": "   "}, headers=headers)
+    assert empty.status_code == 400
+
+
+def test_feedback_translation_failure_still_persists_raw(monkeypatch):
+    from newsletter_pod import control_plane as cp_module
+    from newsletter_pod.translation import TranslationError
+
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("fb-fail-user", "fb-fail@example.com"))
+
+    def boom(*args, **kwargs):
+        raise TranslationError("upstream down")
+
+    monkeypatch.setattr(cp_module, "translate_to_english", boom)
+
+    resp = client.post("/v1/me/feedback", json={"text": "hola"}, headers=headers)
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["raw_text"] == "hola"
+    assert body["english_text"] is None
+    user_id = body["user_id"]
+    stored = container.control_repository.list_recent_feedback(user_id, limit=5)
+    assert len(stored) == 1
+
+
 def test_voice_catalog_returns_only_enabled_voices():
     container, client = _build_app()
     catalog = client.get("/v1/voices/catalog")

@@ -10,6 +10,7 @@ from .user_models import (
     BillingEventRecord,
     CostRecord,
     DeliveryScheduleRecord,
+    FeedbackRecord,
     FeedTokenRecord,
     InboundEmailItem,
     PodcastProfileRecord,
@@ -146,6 +147,14 @@ class ControlPlaneRepository(ABC):
     def list_recent_inbound_items(self, user_id: str, limit: int) -> list[InboundEmailItem]:
         raise NotImplementedError
 
+    @abstractmethod
+    def save_feedback(self, feedback: FeedbackRecord) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_recent_feedback(self, user_id: str, limit: int) -> list[FeedbackRecord]:
+        raise NotImplementedError
+
 
 class InMemoryControlPlaneRepository(ControlPlaneRepository):
     def __init__(self) -> None:
@@ -163,6 +172,7 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         self._costs: dict[str, CostRecord] = {}
         self._billing_events: dict[str, BillingEventRecord] = {}
         self._inbound_items: dict[str, InboundEmailItem] = {}
+        self._feedback: dict[str, FeedbackRecord] = {}
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         return self._users.get(user_id)
@@ -275,6 +285,14 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         items.sort(key=lambda item: item.received_at, reverse=True)
         return items[:limit]
 
+    def save_feedback(self, feedback: FeedbackRecord) -> None:
+        self._feedback[feedback.id] = feedback
+
+    def list_recent_feedback(self, user_id: str, limit: int) -> list[FeedbackRecord]:
+        items = [item for item in self._feedback.values() if item.user_id == user_id]
+        items.sort(key=lambda item: item.created_at, reverse=True)
+        return items[:limit]
+
 
 class FirestoreControlPlaneRepository(ControlPlaneRepository):
     def __init__(self, collection_prefix: str) -> None:
@@ -291,6 +309,7 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         self._costs = self._db.collection(f"{collection_prefix}_cost_records")
         self._billing_events = self._db.collection(f"{collection_prefix}_billing_events")
         self._inbound_items = self._db.collection(f"{collection_prefix}_inbound_items")
+        self._feedback = self._db.collection(f"{collection_prefix}_feedback")
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         doc = self._users.document(user_id).get()
@@ -462,3 +481,16 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
                 .stream()
         )
         return [InboundEmailItem.model_validate(doc.to_dict()) for doc in docs]
+
+    def save_feedback(self, feedback: FeedbackRecord) -> None:
+        self._feedback.document(feedback.id).set(feedback.model_dump(mode="python"))
+
+    def list_recent_feedback(self, user_id: str, limit: int) -> list[FeedbackRecord]:
+        docs = list(
+            self._feedback
+                .where("user_id", "==", user_id)
+                .order_by("created_at", direction=firestore.Query.DESCENDING)
+                .limit(limit)
+                .stream()
+        )
+        return [FeedbackRecord.model_validate(doc.to_dict()) for doc in docs]

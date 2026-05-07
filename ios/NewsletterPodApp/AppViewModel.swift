@@ -288,6 +288,27 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func submitFeedback(text: String, source: String) async -> Bool {
+        guard let sessionToken else { return false }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let locale = Locale.current.identifier
+        do {
+            errorMessage = nil
+            try await apiClient.submitFeedback(
+                token: sessionToken,
+                text: trimmed,
+                localeHint: locale,
+                source: source
+            )
+            flashSaved("Feedback sent")
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     func saveSchedule(timezone: String, weekdays: [String], localTime: String? = nil) async {
         guard let sessionToken else { return }
         await load {

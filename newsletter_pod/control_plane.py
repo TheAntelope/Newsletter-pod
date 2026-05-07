@@ -21,10 +21,12 @@ from .models import PodcastUxConfig, PublishStatus, SourceDefinition, SourceItem
 from .podcast_api import PodcastApiClient
 from .prompting import build_digest_prompt
 from .storage import AudioStorage
+from .translation import TranslationError, translate_to_english
 from .user_models import (
     BillingEventRecord,
     CostRecord,
     DeliveryScheduleRecord,
+    FeedbackRecord,
     FeedTokenRecord,
     PodcastProfileRecord,
     SubscriptionRecord,
@@ -192,6 +194,44 @@ class ControlPlaneService:
             "inbound_address": self._inbound_address_for(user),
             "items": [item.model_dump(mode="json") for item in items],
         }
+
+    def submit_feedback(
+        self,
+        user_id: str,
+        raw_text: str,
+        locale_hint: Optional[str] = None,
+        source: str = "text",
+    ) -> dict[str, Any]:
+        self._require_user(user_id)
+        cleaned = (raw_text or "").strip()
+        if not cleaned:
+            raise ControlPlaneError("Feedback cannot be empty")
+        if len(cleaned) > 4000:
+            raise ControlPlaneError("Feedback exceeds the 4000-character limit")
+
+        try:
+            english = translate_to_english(
+                cleaned,
+                api_key=self.podcast_client.api_key,
+                text_model=self.podcast_client.text_model,
+                base_url=self.podcast_client.base_url,
+                locale_hint=locale_hint,
+            )
+        except (TranslationError, requests.RequestException) as exc:
+            logger.warning("feedback translation failed for user=%s: %s", user_id, exc)
+            english = None
+
+        record = FeedbackRecord(
+            id=uuid4().hex,
+            user_id=user_id,
+            raw_text=cleaned,
+            english_text=english,
+            locale_hint=locale_hint,
+            source=source,
+            created_at=utc_now(),
+        )
+        self.repository.save_feedback(record)
+        return record.model_dump(mode="json")
 
     def _user_payload(self, user: UserRecord) -> dict[str, Any]:
         payload = user.model_dump(mode="json")

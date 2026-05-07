@@ -141,6 +141,16 @@ class CostRecord(BaseModel):
     recorded_at: datetime
 
 
+class FeedbackRecord(BaseModel):
+    id: str
+    user_id: str
+    raw_text: str
+    english_text: Optional[str] = None
+    locale_hint: Optional[str] = None
+    source: str = "text"
+    created_at: datetime
+
+
 class BillingEventRecord(BaseModel):
     id: str
     user_id: Optional[str] = None

@@ -82,6 +82,12 @@ class ProcessUserRequest(BaseModel):
     force: bool = False
 
 
+class SubmitFeedbackRequest(BaseModel):
+    text: str
+    locale_hint: Optional[str] = None
+    source: Optional[str] = None
+
+
 @dataclass
 class ServiceContainer:
     settings: Settings
@@ -276,6 +282,23 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         user = _require_session_user(container, authorization)
         assert container.control_plane is not None
         return container.control_plane.list_inbound_items(user.id)
+
+    @app.post("/v1/me/feedback", status_code=status.HTTP_201_CREATED)
+    def submit_feedback(
+        request_payload: SubmitFeedbackRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.submit_feedback(
+                user_id=user.id,
+                raw_text=request_payload.text,
+                locale_hint=request_payload.locale_hint,
+                source=(request_payload.source or "text"),
+            )
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     @app.get("/v1/me/episodes")
     def list_my_episodes(authorization: str | None = Header(default=None)) -> dict:

@@ -1,5 +1,6 @@
 import AuthenticationServices
 import AVFoundation
+import Speech
 import StoreKit
 import SwiftUI
 import UIKit
@@ -153,7 +154,7 @@ struct HomeView: View {
                     SourcesSummaryCard()
                     LibraryEntryCard()
                     SetupChecklistCard()
-                    SendFeedbackLink()
+                    FeedbackComposer()
                 }
                 .padding(.horizontal, Theme.Spacing.l)
                 .padding(.top, Theme.Spacing.s)
@@ -194,34 +195,109 @@ private struct LibraryEntryCard: View {
     }
 }
 
-private struct SendFeedbackLink: View {
-    private static let address = "vincemartin1991@gmail.com"
-    private static let subject = "ClawCast feedback"
+private struct FeedbackComposer: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @StateObject private var dictation = FeedbackDictation()
+    @State private var text: String = ""
+    @State private var dictationStartLength: Int = 0
+    @State private var isSubmitting = false
+    @State private var lastSubmitSource: String = "text"
+    @FocusState private var fieldFocused: Bool
+
+    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var canSubmit: Bool { !trimmed.isEmpty && !isSubmitting && !dictation.isRecording }
 
     var body: some View {
-        HStack {
-            Spacer()
-            Button {
-                openMailto()
-            } label: {
-                Label("Send feedback", systemImage: "envelope")
-                    .font(Theme.Typography.calloutStrong)
-                    .foregroundStyle(Theme.Palette.muted)
+        EditorialCard {
+            MetaLabel(text: "Send feedback")
+
+            ZStack(alignment: .topLeading) {
+                if text.isEmpty {
+                    Text("What's working, what's not, what would you change?")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 8)
+                }
+                TextEditor(text: $text)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 120)
+                    .focused($fieldFocused)
             }
-            .buttonStyle(.plain)
-            .accessibilityHint("Opens your mail app to email feedback")
-            Spacer()
+            .background(Theme.Palette.cream.opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Theme.Palette.rule, lineWidth: 1)
+            )
+
+            if let error = dictation.errorMessage {
+                Text(error)
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(.red)
+            }
+
+            HStack(spacing: 12) {
+                Button {
+                    Task { await toggleDictation() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: dictation.isRecording ? "stop.circle.fill" : "mic.fill")
+                        Text(dictation.isRecording ? "Stop" : "Dictate")
+                    }
+                    .font(Theme.Typography.calloutStrong)
+                }
+                .buttonStyle(.amberOutlined)
+                .disabled(isSubmitting)
+
+                Spacer()
+
+                Button {
+                    Task { await submit() }
+                } label: {
+                    if isSubmitting {
+                        ProgressView()
+                    } else {
+                        Text("Submit")
+                    }
+                }
+                .buttonStyle(.amberFilled)
+                .disabled(!canSubmit)
+            }
         }
-        .padding(.top, Theme.Spacing.s)
+        .onChange(of: dictation.transcript) { _, newValue in
+            applyDictationUpdate(newValue)
+        }
+        .onDisappear { dictation.cancel() }
     }
 
-    private func openMailto() {
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = Self.address
-        components.queryItems = [URLQueryItem(name: "subject", value: Self.subject)]
-        if let url = components.url {
-            UIApplication.shared.open(url)
+    private func toggleDictation() async {
+        if dictation.isRecording {
+            dictation.stop()
+            lastSubmitSource = "voice"
+        } else {
+            fieldFocused = false
+            dictationStartLength = text.count
+            lastSubmitSource = "voice"
+            await dictation.start()
+        }
+    }
+
+    private func applyDictationUpdate(_ partial: String) {
+        let prefix = String(text.prefix(dictationStartLength))
+        let separator = (prefix.isEmpty || prefix.hasSuffix(" ") || prefix.hasSuffix("\n")) ? "" : " "
+        text = prefix + separator + partial
+    }
+
+    private func submit() async {
+        guard canSubmit else { return }
+        isSubmitting = true
+        defer { isSubmitting = false }
+        let ok = await viewModel.submitFeedback(text: trimmed, source: lastSubmitSource)
+        if ok {
+            text = ""
+            dictation.reset()
+            dictationStartLength = 0
+            lastSubmitSource = "text"
         }
     }
 }
@@ -2178,6 +2254,118 @@ private struct PaidBadge: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(Theme.Palette.amberDeep, in: Capsule())
+    }
+}
+
+@MainActor
+private final class FeedbackDictation: ObservableObject {
+    @Published private(set) var transcript: String = ""
+    @Published private(set) var isRecording: Bool = false
+    @Published var errorMessage: String?
+
+    private let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    private let audioEngine = AVAudioEngine()
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+    private var task: SFSpeechRecognitionTask?
+
+    func start() async {
+        errorMessage = nil
+        guard let recognizer, recognizer.isAvailable else {
+            errorMessage = "Dictation is unavailable on this device."
+            return
+        }
+
+        let speechAuth = await requestSpeechAuthorization()
+        guard speechAuth == .authorized else {
+            errorMessage = "Enable Speech Recognition in Settings to dictate."
+            return
+        }
+        let micAuth = await requestMicrophoneAuthorization()
+        guard micAuth else {
+            errorMessage = "Enable Microphone access in Settings to dictate."
+            return
+        }
+
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+
+            let newRequest = SFSpeechAudioBufferRecognitionRequest()
+            newRequest.shouldReportPartialResults = true
+            request = newRequest
+
+            let inputNode = audioEngine.inputNode
+            let format = inputNode.outputFormat(forBus: 0)
+            inputNode.removeTap(onBus: 0)
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak newRequest] buffer, _ in
+                newRequest?.append(buffer)
+            }
+            audioEngine.prepare()
+            try audioEngine.start()
+
+            isRecording = true
+            transcript = ""
+            task = recognizer.recognitionTask(with: newRequest) { [weak self] result, error in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if let result {
+                        self.transcript = result.bestTranscription.formattedString
+                        if result.isFinal {
+                            self.stop()
+                        }
+                    }
+                    if error != nil {
+                        self.stop()
+                    }
+                }
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+            cleanup()
+        }
+    }
+
+    func stop() {
+        guard isRecording else { return }
+        request?.endAudio()
+        cleanup()
+    }
+
+    func cancel() {
+        task?.cancel()
+        cleanup()
+    }
+
+    func reset() {
+        transcript = ""
+    }
+
+    private func cleanup() {
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+        audioEngine.inputNode.removeTap(onBus: 0)
+        request = nil
+        task = nil
+        isRecording = false
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
+        await withCheckedContinuation { cont in
+            SFSpeechRecognizer.requestAuthorization { status in
+                cont.resume(returning: status)
+            }
+        }
+    }
+
+    private func requestMicrophoneAuthorization() async -> Bool {
+        await withCheckedContinuation { cont in
+            AVAudioApplication.requestRecordPermission { granted in
+                cont.resume(returning: granted)
+            }
+        }
     }
 }
 

@@ -129,6 +129,20 @@ final class APIClient {
         )
     }
 
+    func submitFeedback(
+        token: String,
+        text: String,
+        localeHint: String?,
+        source: String
+    ) async throws {
+        let _: FeedbackAck = try await request(
+            path: "/v1/me/feedback",
+            method: "POST",
+            body: SubmitFeedbackBody(text: text, localeHint: localeHint, source: source),
+            token: token
+        )
+    }
+
     func fetchSchedule(token: String) async throws -> ScheduleEnvelope {
         try await request(path: "/v1/me/schedule", method: "GET", body: Optional<Int>.none, token: token)
     }
@@ -199,6 +213,22 @@ final class APIClient {
 
 private struct ServerErrorEnvelope: Decodable {
     let detail: String
+}
+
+private struct FeedbackAck: Decodable {
+    let id: String
+}
+
+private struct SubmitFeedbackBody: Encodable {
+    let text: String
+    let localeHint: String?
+    let source: String
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case localeHint = "locale_hint"
+        case source
+    }
 }
 
 private struct AppleAuthBody: Encodable {

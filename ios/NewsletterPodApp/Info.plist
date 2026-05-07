@@ -22,6 +22,10 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>ClawCast uses the microphone to dictate your feedback when you tap the Dictate button.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>ClawCast transcribes your dictated feedback so you can submit it as text.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
