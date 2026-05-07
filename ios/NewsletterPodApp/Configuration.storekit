@@ -72,14 +72,14 @@
         {
           "adHocOffers" : [],
           "codeOffers" : [],
-          "displayPrice" : "4.99",
+          "displayPrice" : "19.99",
           "familyShareable" : false,
           "groupNumber" : 1,
           "internalID" : "60000000",
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "Up to 15 sources, 3 delivery days, 20-min episodes",
+              "description" : "Up to 15 sources, 7 delivery days, up to 20-min episodes",
               "displayName" : "Newsletter Pod Paid · Monthly",
               "locale" : "en_US"
             }
@@ -94,14 +94,14 @@
         {
           "adHocOffers" : [],
           "codeOffers" : [],
-          "displayPrice" : "39.99",
+          "displayPrice" : "149.99",
           "familyShareable" : false,
           "groupNumber" : 2,
           "internalID" : "60000001",
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "Up to 15 sources, 3 delivery days, 20-min episodes. Save 33%.",
+              "description" : "Up to 15 sources, 7 delivery days, up to 20-min episodes. Save 37%.",
               "displayName" : "Newsletter Pod Paid · Annual",
               "locale" : "en_US"
             }
