@@ -548,7 +548,6 @@ private struct AboutPodcastCard: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.s) {
                 infoRow(label: "Format", value: formatLabel)
                 infoRow(label: "Hosts", value: hostsLabel)
-                infoRow(label: "Voice", value: voiceLabel)
                 infoRow(label: "Length", value: "\(viewModel.profile?.desiredDurationMinutes ?? 8) min")
                 Button {
                     showScheduleEditor = true
@@ -601,10 +600,6 @@ private struct AboutPodcastCard: View {
     private var deliveryLabel: String {
         let days = viewModel.schedule?.weekdays.map { $0.prefix(3).capitalized }.joined(separator: ", ")
         return days?.isEmpty == false ? days! : "Not set"
-    }
-
-    private var voiceLabel: String {
-        voiceName(for: viewModel.profile?.voiceID)
     }
 
     private func voiceName(for voiceID: String?) -> String {
