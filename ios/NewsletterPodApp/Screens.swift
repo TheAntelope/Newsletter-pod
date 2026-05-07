@@ -704,7 +704,7 @@ private struct SourcesSummaryCard: View {
                 HStack {
                     MetaLabel(text: "Your sources")
                     Spacer()
-                    Text("\(viewModel.selectedSources.count) / \(viewModel.entitlements?.maxSources ?? 0)")
+                    Text("\(viewModel.selectedSources.count)")
                         .font(Theme.Typography.meta)
                         .foregroundStyle(Theme.Palette.muted)
                     Image(systemName: "chevron.right")
@@ -1495,8 +1495,6 @@ struct PaywallView: View {
         EditorialCard {
             MetaLabel(text: "What you get")
             VStack(spacing: Theme.Spacing.s) {
-                comparisonRow(label: "Sources", free: "5", paid: "15")
-                EditorialDivider()
                 comparisonRow(label: "Delivery days / week", free: "5", paid: "7")
                 EditorialDivider()
                 comparisonRow(label: "Episode length", free: "3–5 min", paid: "5–20 min")

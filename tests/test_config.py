@@ -6,8 +6,7 @@ from newsletter_pod.config import Settings
 def test_default_tier_caps_align_with_paywall_copy(monkeypatch):
     # Drop any env that would mask the in-code defaults.
     for key in [
-        "FREE_MAX_SOURCES",
-        "PAID_MAX_SOURCES",
+        "MAX_SOURCES_SAFETY_CAP",
         "FREE_MAX_DELIVERY_DAYS",
         "PAID_MAX_DELIVERY_DAYS",
         "FREE_MIN_DURATION_MINUTES",
@@ -17,8 +16,7 @@ def test_default_tier_caps_align_with_paywall_copy(monkeypatch):
     ]:
         monkeypatch.delenv(key, raising=False)
     settings = Settings()
-    assert settings.free_max_sources == 5
-    assert settings.paid_max_sources == 15
+    assert settings.max_sources_safety_cap == 100
     assert settings.free_max_delivery_days == 5
     assert settings.paid_max_delivery_days == 7
     assert settings.free_min_duration_minutes == 3

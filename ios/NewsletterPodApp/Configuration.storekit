@@ -79,7 +79,7 @@
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "Up to 15 sources, 7 delivery days, up to 20-min episodes",
+              "description" : "Unlimited sources, 7 delivery days, up to 20-min episodes",
               "displayName" : "Newsletter Pod Paid · Monthly",
               "locale" : "en_US"
             }
@@ -101,7 +101,7 @@
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "Up to 15 sources, 7 delivery days, up to 20-min episodes. Save 37%.",
+              "description" : "Unlimited sources, 7 delivery days, up to 20-min episodes. Save 37%.",
               "displayName" : "Newsletter Pod Paid · Annual",
               "locale" : "en_US"
             }

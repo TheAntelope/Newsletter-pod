@@ -110,7 +110,6 @@ struct SubscriptionDTO: Codable {
 
 struct EntitlementsDTO: Codable {
     let tier: String
-    let maxSources: Int
     let maxDeliveryDays: Int
     let minDurationMinutes: Int
     let maxDurationMinutes: Int
@@ -118,7 +117,6 @@ struct EntitlementsDTO: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case tier
-        case maxSources = "max_sources"
         case maxDeliveryDays = "max_delivery_days"
         case minDurationMinutes = "min_duration_minutes"
         case maxDurationMinutes = "max_duration_minutes"

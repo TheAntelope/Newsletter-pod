@@ -299,7 +299,6 @@ class ControlPlaneService:
         }
 
     def replace_user_sources(self, user_id: str, requested_sources: list[dict[str, Any]]) -> dict[str, Any]:
-        entitlements = self._entitlements_for(self._get_subscription(user_id))
         resolved: list[UserSourceRecord] = []
         seen_keys: set[str] = set()
 
@@ -337,8 +336,10 @@ class ControlPlaneService:
             seen_keys.add(dedupe_key)
             resolved.append(source)
 
-        if len(resolved) > entitlements.max_sources:
-            raise ControlPlaneError(f"Plan limit exceeded: max {entitlements.max_sources} sources")
+        if len(resolved) > self.settings.max_sources_safety_cap:
+            raise ControlPlaneError(
+                f"Too many sources: please keep under {self.settings.max_sources_safety_cap}"
+            )
 
         self.repository.replace_user_sources(user_id, resolved)
         return self.list_user_sources(user_id)
@@ -869,7 +870,6 @@ class ControlPlaneService:
         if subscription.tier == "paid" and subscription.status not in {"expired", "revoked"}:
             return UserEntitlements(
                 tier="paid",
-                max_sources=self.settings.paid_max_sources,
                 max_delivery_days=self.settings.paid_max_delivery_days,
                 min_duration_minutes=self.settings.paid_min_duration_minutes,
                 max_duration_minutes=self.settings.paid_max_duration_minutes,
@@ -877,7 +877,6 @@ class ControlPlaneService:
             )
         return UserEntitlements(
             tier="free",
-            max_sources=self.settings.free_max_sources,
             max_delivery_days=self.settings.free_max_delivery_days,
             min_duration_minutes=self.settings.free_min_duration_minutes,
             max_duration_minutes=self.settings.free_max_duration_minutes,

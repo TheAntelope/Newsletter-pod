@@ -103,8 +103,10 @@ class Settings(BaseSettings):
     weekly_cutoff_local: str = Field(default="11:00", alias="WEEKLY_CUTOFF_LOCAL")
     dispatch_interval_minutes: int = Field(default=15, alias="DISPATCH_INTERVAL_MINUTES")
 
-    free_max_sources: int = Field(default=5, alias="FREE_MAX_SOURCES")
-    paid_max_sources: int = Field(default=15, alias="PAID_MAX_SOURCES")
+    # Defensive ceiling on user source count. Not a tier limit — the paywall
+    # doesn't mention it. Sized to absorb pathological cases (OPML paste,
+    # runaway add loop) without letting ingestion explode.
+    max_sources_safety_cap: int = Field(default=100, alias="MAX_SOURCES_SAFETY_CAP")
     free_max_delivery_days: int = Field(default=5, alias="FREE_MAX_DELIVERY_DAYS")
     paid_max_delivery_days: int = Field(default=7, alias="PAID_MAX_DELIVERY_DAYS")
     free_min_duration_minutes: int = Field(default=3, alias="FREE_MIN_DURATION_MINUTES")

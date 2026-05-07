@@ -163,7 +163,6 @@ class BillingEventRecord(BaseModel):
 
 class UserEntitlements(BaseModel):
     tier: str
-    max_sources: int
     max_delivery_days: int
     min_duration_minutes: int
     max_duration_minutes: int

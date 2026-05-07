@@ -66,7 +66,6 @@ final class AppViewModel: ObservableObject {
         )
         entitlements = EntitlementsDTO(
             tier: "free",
-            maxSources: 5,
             maxDeliveryDays: 7,
             minDurationMinutes: 3,
             maxDurationMinutes: 8,
