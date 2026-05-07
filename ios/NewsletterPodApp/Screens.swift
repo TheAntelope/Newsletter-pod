@@ -2710,9 +2710,9 @@ private struct OnboardingDoneStep: View {
         OnboardingStepShell(
             title: "You're set.",
             subtitle: "Your first episode is being made now — about 3-5 minutes. Subscribe in Apple Podcasts so it lands automatically when ready.",
-            primaryLabel: "Open Apple Podcasts",
-            primaryDisabled: viewModel.feed?.feedURL == nil,
-            onPrimary: openInApplePodcasts,
+            primaryLabel: "Go to dashboard",
+            primaryDisabled: false,
+            onPrimary: onFinish,
             onBack: nil
         ) {
             VStack(spacing: Theme.Spacing.m) {
@@ -2737,23 +2737,11 @@ private struct OnboardingDoneStep: View {
                     }
                 }
 
-                Button {
-                    UIPasteboard.general.string = viewModel.feed?.feedURL
-                } label: {
-                    Label("Copy feed link", systemImage: "doc.on.doc")
+                Button(action: openInApplePodcasts) {
+                    Label("Open Apple Podcasts", systemImage: "headphones")
                 }
-                .buttonStyle(.amberOutlined)
+                .buttonStyle(.amberFilled)
                 .disabled(viewModel.feed?.feedURL == nil)
-
-                Button {
-                    onFinish()
-                } label: {
-                    Text("Go to dashboard")
-                        .font(Theme.Typography.calloutStrong)
-                        .foregroundStyle(Theme.Palette.muted)
-                }
-                .buttonStyle(.plain)
-                .padding(.top, Theme.Spacing.s)
             }
         }
         .task {
