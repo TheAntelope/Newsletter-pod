@@ -28,6 +28,7 @@ class PodcastProfileRecord(BaseModel):
     guest_names: list[str] = Field(default_factory=list)
     desired_duration_minutes: int = 3
     voice_id: Optional[str] = None
+    secondary_voice_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

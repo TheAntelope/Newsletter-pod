@@ -319,6 +319,7 @@ class ControlPlaneService:
         guest_names: Optional[list[str]],
         desired_duration_minutes: Optional[int],
         voice_id: Optional[str] = None,
+        secondary_voice_id: Optional[str] = None,
     ) -> dict[str, Any]:
         profile = self._get_profile(user_id)
         entitlements = self._entitlements_for(self._get_subscription(user_id))
@@ -342,13 +343,19 @@ class ControlPlaneService:
                 )
             profile.desired_duration_minutes = desired_duration_minutes
         if voice_id is not None:
-            allowed = {
-                self.settings.elevenlabs_voice_primary_id,
-                self.settings.elevenlabs_voice_secondary_id,
-            }
-            if voice_id not in allowed:
+            if voice_id not in self._voice_catalog:
                 raise ControlPlaneError("Unsupported voice selection")
             profile.voice_id = voice_id
+        if secondary_voice_id is not None:
+            if secondary_voice_id == "":
+                profile.secondary_voice_id = None
+            else:
+                if secondary_voice_id not in self._voice_catalog:
+                    raise ControlPlaneError("Unsupported commenter voice selection")
+                profile.secondary_voice_id = secondary_voice_id
+
+        if profile.secondary_voice_id and profile.secondary_voice_id == profile.voice_id:
+            raise ControlPlaneError("Host and commenter voices must be different")
 
         self._validate_profile(profile)
         profile.updated_at = utc_now()
@@ -554,16 +561,13 @@ class ControlPlaneService:
             entitlements.min_duration_minutes,
             min(entitlements.max_duration_minutes, profile.desired_duration_minutes),
         )
-        guest_name = self._current_guest_name(profile, user_id)
-        ux = self._build_user_ux(profile, guest_name)
+        primary_voice_id, secondary_voice_id, secondary_speaker_name = self._resolve_voice_pair(
+            profile, local_date
+        )
+        ux = self._build_user_ux(profile, primary_voice_id, secondary_speaker_name)
+        guest_name = secondary_speaker_name if profile.format_preset == "rotating_guest" else None
         prompt = build_digest_prompt(items, run_date=local_date, ux=ux)
         title_hint = f"{local_date.isoformat()} weekly briefing"
-        primary_voice_id = profile.voice_id or self.settings.elevenlabs_voice_primary_id
-        secondary_voice_id = (
-            self.settings.elevenlabs_voice_secondary_id
-            if primary_voice_id == self.settings.elevenlabs_voice_primary_id
-            else self.settings.elevenlabs_voice_primary_id
-        )
         generated = self.podcast_client.generate(
             prompt=prompt,
             title=title_hint,
@@ -748,6 +752,7 @@ class ControlPlaneService:
                 guest_names=[],
                 desired_duration_minutes=self.settings.free_default_duration_minutes,
                 voice_id=self.settings.elevenlabs_voice_primary_id,
+                secondary_voice_id=self.settings.elevenlabs_voice_secondary_id,
                 created_at=now,
                 updated_at=now,
             )
@@ -856,6 +861,7 @@ class ControlPlaneService:
                 title="ClawCast",
                 desired_duration_minutes=self.settings.free_default_duration_minutes,
                 voice_id=self.settings.elevenlabs_voice_primary_id,
+                secondary_voice_id=self.settings.elevenlabs_voice_secondary_id,
                 created_at=now,
                 updated_at=now,
             )
@@ -900,39 +906,74 @@ class ControlPlaneService:
     def _validate_profile(self, profile: PodcastProfileRecord) -> None:
         _validate_format_preset(profile.format_preset)
         if profile.format_preset == "solo_host":
-            if not profile.host_primary_name:
-                raise ControlPlaneError("Solo host format requires a primary host name")
             profile.host_secondary_name = None
             profile.guest_names = []
+            profile.secondary_voice_id = None
         elif profile.format_preset == "two_hosts":
-            if not profile.host_primary_name or not profile.host_secondary_name:
-                raise ControlPlaneError("Two-host format requires primary and secondary host names")
             profile.guest_names = []
         elif profile.format_preset == "rotating_guest":
-            if not profile.host_primary_name:
-                raise ControlPlaneError("Rotating guest format requires a primary host name")
-            if len(profile.guest_names) < 2 or len(profile.guest_names) > 4:
-                raise ControlPlaneError("Rotating guest format requires 2 to 4 guest names")
             profile.host_secondary_name = None
+            profile.secondary_voice_id = None
 
-    def _build_user_ux(self, profile: PodcastProfileRecord, guest_name: Optional[str]) -> PodcastUxConfig:
+    def _voice_name(self, voice_id: Optional[str], fallback: str) -> str:
+        if voice_id and voice_id in self._voice_catalog:
+            return self._voice_catalog[voice_id].name
+        return fallback
+
+    def _resolve_voice_pair(
+        self,
+        profile: PodcastProfileRecord,
+        local_date: date,
+    ) -> tuple[str, Optional[str], Optional[str]]:
+        """Pick the (primary, secondary) voice IDs and the secondary speaker name
+        used for this episode.
+
+        - solo_host: secondary is None.
+        - two_hosts: secondary is the user-selected commenter voice. Falls back to
+          the legacy default pair when no commenter has been picked yet.
+        - rotating_guest: secondary cycles daily through every catalog voice that
+          isn't the host, indexed by the local episode date.
+        """
+        primary_id = profile.voice_id or self.settings.elevenlabs_voice_primary_id
+
+        if profile.format_preset == "solo_host":
+            return primary_id, None, None
+
+        if profile.format_preset == "rotating_guest":
+            others = [vid for vid in self._voice_catalog if vid != primary_id]
+            if not others:
+                return primary_id, None, None
+            others.sort()
+            secondary_id = others[local_date.toordinal() % len(others)]
+            return primary_id, secondary_id, self._voice_name(secondary_id, "Guest")
+
+        # two_hosts
+        secondary_id = profile.secondary_voice_id
+        if not secondary_id or secondary_id == primary_id or secondary_id not in self._voice_catalog:
+            secondary_id = (
+                self.settings.elevenlabs_voice_secondary_id
+                if primary_id == self.settings.elevenlabs_voice_primary_id
+                else self.settings.elevenlabs_voice_primary_id
+            )
+        return primary_id, secondary_id, self._voice_name(secondary_id, "Co-host")
+
+    def _build_user_ux(
+        self,
+        profile: PodcastProfileRecord,
+        primary_voice_id: str,
+        secondary_speaker_name: Optional[str],
+    ) -> PodcastUxConfig:
         duration = profile.desired_duration_minutes
-        secondary = profile.host_secondary_name or guest_name or ""
+        primary_name = self._voice_name(primary_voice_id, profile.host_primary_name or "Host")
         return PodcastUxConfig(
-            host_primary_name=profile.host_primary_name,
-            host_secondary_name=secondary,
+            host_primary_name=primary_name,
+            host_secondary_name=secondary_speaker_name or "",
             format=profile.format_preset,
             tone="calm_analyst",
             target_minutes=duration,
             max_minutes=duration,
             thin_day_minutes=min(5, duration),
         )
-
-    def _current_guest_name(self, profile: PodcastProfileRecord, user_id: str) -> Optional[str]:
-        if profile.format_preset != "rotating_guest" or not profile.guest_names:
-            return None
-        episode_count = self.repository.count_user_episodes(user_id)
-        return profile.guest_names[episode_count % len(profile.guest_names)]
 
     def _build_show_notes(
         self,

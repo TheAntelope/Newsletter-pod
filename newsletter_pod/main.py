@@ -55,6 +55,7 @@ class UpdatePodcastConfigRequest(BaseModel):
     guest_names: Optional[list[str]] = None
     desired_duration_minutes: Optional[int] = None
     voice_id: Optional[str] = None
+    secondary_voice_id: Optional[str] = None
 
 
 class UpdateScheduleRequest(BaseModel):
@@ -236,6 +237,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 guest_names=request_payload.guest_names,
                 desired_duration_minutes=request_payload.desired_duration_minutes,
                 voice_id=request_payload.voice_id,
+                secondary_voice_id=request_payload.secondary_voice_id,
             )
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

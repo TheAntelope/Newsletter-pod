@@ -586,12 +586,16 @@ private struct AboutPodcastCard: View {
     }
 
     private var hostsLabel: String {
-        let primary = viewModel.profile?.hostPrimaryName ?? "—"
-        if let secondary = viewModel.profile?.hostSecondaryName, !secondary.isEmpty,
-           viewModel.profile?.formatPreset == "two_hosts" {
+        let primary = voiceName(for: viewModel.profile?.voiceID)
+        switch viewModel.profile?.formatPreset {
+        case "two_hosts":
+            let secondary = voiceName(for: viewModel.profile?.secondaryVoiceID)
             return "\(primary) & \(secondary)"
+        case "rotating_guest":
+            return "\(primary) & rotating guest"
+        default:
+            return primary
         }
-        return primary
     }
 
     private var deliveryLabel: String {
@@ -600,9 +604,19 @@ private struct AboutPodcastCard: View {
     }
 
     private var voiceLabel: String {
-        let stored = viewModel.profile?.voiceID
-        let match = PodcastSetupView.voiceOptions.first { $0.id == stored }
-        return match?.name ?? PodcastSetupView.voiceOptions[0].name
+        voiceName(for: viewModel.profile?.voiceID)
+    }
+
+    private func voiceName(for voiceID: String?) -> String {
+        if let id = voiceID {
+            if let catalog = viewModel.catalogVoices.first(where: { $0.id == id }) {
+                return catalog.name
+            }
+            if let fallback = PodcastSetupView.voiceOptions.first(where: { $0.id == id }) {
+                return fallback.name
+            }
+        }
+        return PodcastSetupView.voiceOptions[0].name
     }
 
     private func infoRow(label: String, value: String) -> some View {
@@ -977,13 +991,11 @@ struct PodcastSetupView: View {
 
     @EnvironmentObject private var viewModel: AppViewModel
     @State private var displayName = ""
-    @State private var title = ""
     @State private var formatPreset = "two_hosts"
-    @State private var primaryHost = "Vinnie"
-    @State private var secondaryHost = "Demi"
-    @State private var guestNames = "Alex, Sam"
     @State private var durationMinutes = 3.0
     @State private var voiceID: String = PodcastSetupView.voiceOptions[0].id
+    @State private var secondaryVoiceID: String = PodcastSetupView.voiceOptions[1].id
+    @StateObject private var samplePlayer = VoiceSamplePlayer()
 
     /// Full voice catalog with the legacy 2-voice list as fallback when the
     /// server catalog hasn't loaded yet. Mirrors `OnboardingVoicesStep`.
@@ -992,10 +1004,6 @@ struct PodcastSetupView: View {
         return PodcastSetupView.voiceOptions.map {
             CatalogVoiceDTO(id: $0.id, name: $0.name, gender: "neutral", description: "", previewURL: nil)
         }
-    }
-
-    private var hostOption: CatalogVoiceDTO? {
-        voices.first(where: { $0.id == voiceID }) ?? voices.first
     }
 
     var body: some View {
@@ -1021,57 +1029,36 @@ struct PodcastSetupView: View {
                     .disabled(displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
-                Section("Show") {
-                    TextField("Podcast title", text: $title)
+                Section("Format") {
                     Picker("Format", selection: $formatPreset) {
                         Text("Solo host").tag("solo_host")
                         Text("Two hosts").tag("two_hosts")
                         Text("Rotating guest").tag("rotating_guest")
                     }
-                    TextField("Primary host", text: $primaryHost)
-                    if formatPreset == "two_hosts" {
-                        TextField("Secondary host", text: $secondaryHost)
-                    }
-                    if formatPreset == "rotating_guest" {
-                        TextField("Guest names, comma separated", text: $guestNames)
-                    }
                 }
 
-                Section("Voices") {
-                    Menu {
-                        ForEach(voices) { voice in
-                            Button {
-                                voiceID = voice.id
-                            } label: {
-                                if voice.id == voiceID {
-                                    Label(voice.name, systemImage: "checkmark")
-                                } else {
-                                    Text(voice.name)
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            Text(formatPreset == "solo_host" ? "Narrator" : "Host")
-                                .foregroundStyle(Theme.Palette.ink)
-                            Spacer()
-                            Text(hostOption?.name ?? "Choose a voice")
-                                .foregroundStyle(Theme.Palette.muted)
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(Theme.Palette.amberDeep)
-                        }
-                    }
-                    if let description = hostOption?.description, !description.isEmpty {
-                        Text(description)
+                Section("Voice cast") {
+                    voiceRow(
+                        label: formatPreset == "solo_host" ? "Narrator" : "Host",
+                        selectedID: voiceID,
+                        excludeID: formatPreset == "two_hosts" ? secondaryVoiceID : nil,
+                        onSelect: { voiceID = $0 }
+                    )
+                    if formatPreset == "two_hosts" {
+                        voiceRow(
+                            label: "Commenter",
+                            selectedID: secondaryVoiceID,
+                            excludeID: voiceID,
+                            onSelect: { secondaryVoiceID = $0 }
+                        )
+                    } else if formatPreset == "rotating_guest" {
+                        Text("Commenter rotates daily through your other voices.")
                             .font(Theme.Typography.callout)
-                            .foregroundStyle(Theme.Palette.inkSoft)
+                            .foregroundStyle(.secondary)
                     }
-                    if formatPreset != "solo_host" {
-                        Text("Commentator voice is paired automatically.")
-                            .font(Theme.Typography.callout)
-                            .foregroundStyle(Theme.Palette.muted)
-                    }
+                    Text("Tap a voice to hear a sample.")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Duration") {
@@ -1081,7 +1068,7 @@ struct PodcastSetupView: View {
                         step: 1
                     )
                     Text("\(Int(durationMinutes)) minutes")
-                        .foregroundStyle(Theme.Palette.muted)
+                        .foregroundStyle(.secondary)
                 }
 
                 ScheduleSection()
@@ -1089,18 +1076,16 @@ struct PodcastSetupView: View {
                 Section {
                     Button("Save podcast settings") {
                         Task {
-                            let guests = guestNames
-                                .split(separator: ",")
-                                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                                .filter { !$0.isEmpty }
+                            let secondary: String? = formatPreset == "two_hosts" ? secondaryVoiceID : nil
                             await viewModel.savePodcastConfig(
-                                title: title,
+                                title: viewModel.profile?.title ?? "ClawCast",
                                 formatPreset: formatPreset,
-                                primaryHost: primaryHost,
-                                secondaryHost: formatPreset == "two_hosts" ? secondaryHost : nil,
-                                guestNames: guests,
+                                primaryHost: viewModel.profile?.hostPrimaryName ?? "Host",
+                                secondaryHost: nil,
+                                guestNames: [],
                                 desiredDurationMinutes: Int(durationMinutes),
-                                voiceID: voiceID
+                                voiceID: voiceID,
+                                secondaryVoiceID: secondary
                             )
                         }
                     }
@@ -1115,24 +1100,90 @@ struct PodcastSetupView: View {
             .editorialBackground()
             .onAppear {
                 displayName = viewModel.user?.displayName ?? ""
-                title = viewModel.profile?.title ?? "ClawCast"
                 formatPreset = viewModel.profile?.formatPreset ?? "two_hosts"
-                primaryHost = viewModel.profile?.hostPrimaryName ?? "Vinnie"
-                secondaryHost = viewModel.profile?.hostSecondaryName ?? "Demi"
-                guestNames = viewModel.profile?.guestNames.joined(separator: ", ") ?? "Alex, Sam"
                 durationMinutes = Double(viewModel.profile?.desiredDurationMinutes ?? 3)
-                applyStoredVoiceIfPossible()
+                applyStoredVoicesIfPossible()
             }
             .onChange(of: viewModel.catalogVoices) { _, _ in
-                applyStoredVoiceIfPossible()
+                applyStoredVoicesIfPossible()
+            }
+            .onDisappear { samplePlayer.stop() }
+        }
+    }
+
+    @ViewBuilder
+    private func voiceRow(
+        label: String,
+        selectedID: String,
+        excludeID: String?,
+        onSelect: @escaping (String) -> Void
+    ) -> some View {
+        let selectedVoice = voices.first(where: { $0.id == selectedID })
+        let isPlaying = samplePlayer.playingVoiceID == selectedID
+        let canPreview = (selectedVoice?.previewURL?.isEmpty == false)
+        HStack(spacing: 12) {
+            Button {
+                if let voice = selectedVoice, canPreview { samplePlayer.play(voice) }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: isPlaying ? "speaker.wave.2.fill" : "play.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(canPreview ? Theme.Palette.amberDeep : Color.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(label)
+                            .font(Theme.Typography.calloutStrong)
+                            .foregroundStyle(.secondary)
+                        Text(selectedVoice?.name ?? "Choose a voice")
+                            .foregroundStyle(.primary)
+                    }
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canPreview)
+
+            Menu {
+                ForEach(voices) { voice in
+                    Button {
+                        onSelect(voice.id)
+                    } label: {
+                        if voice.id == excludeID {
+                            Label("\(voice.name) (already chosen)", systemImage: "circle.slash")
+                        } else if voice.id == selectedID {
+                            Label(voice.name, systemImage: "checkmark")
+                        } else {
+                            Text(voice.name)
+                        }
+                    }
+                    .disabled(voice.id == excludeID)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text("Change")
+                        .font(Theme.Typography.calloutStrong)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(Theme.Palette.amberDeep)
             }
         }
     }
 
-    private func applyStoredVoiceIfPossible() {
-        if let stored = viewModel.profile?.voiceID,
-           voices.contains(where: { $0.id == stored }) {
+    private func applyStoredVoicesIfPossible() {
+        let available = voices.map(\.id)
+        guard !available.isEmpty else { return }
+        if let stored = viewModel.profile?.voiceID, available.contains(stored) {
             voiceID = stored
+        } else if !available.contains(voiceID) {
+            voiceID = available[0]
+        }
+        if let storedSecondary = viewModel.profile?.secondaryVoiceID,
+           available.contains(storedSecondary),
+           storedSecondary != voiceID {
+            secondaryVoiceID = storedSecondary
+        } else if !available.contains(secondaryVoiceID) || secondaryVoiceID == voiceID {
+            secondaryVoiceID = available.first(where: { $0 != voiceID }) ?? available.last ?? voiceID
         }
     }
 }
@@ -1796,11 +1847,10 @@ struct OnboardingFlowView: View {
     }
 
     private func saveVoicesSelection() async {
-        // The anchor's voice ID becomes the profile's primary voice. The commentator
-        // is auto-derived at TTS time as "the other configured ElevenLabs voice".
         guard let anchorID = selectedAnchorVoiceID,
               let preset = OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID }) else { return }
         let title = viewModel.profile?.title.isEmpty == false ? viewModel.profile!.title : "ClawCast"
+        let secondaryID: String? = preset.formatPreset == "two_hosts" ? selectedCommentatorVoiceID : nil
         await viewModel.savePodcastConfig(
             title: title,
             formatPreset: preset.formatPreset,
@@ -1808,7 +1858,8 @@ struct OnboardingFlowView: View {
             secondaryHost: preset.secondaryHost,
             guestNames: [],
             desiredDurationMinutes: preset.durationMinutes,
-            voiceID: anchorID
+            voiceID: anchorID,
+            secondaryVoiceID: secondaryID
         )
     }
 

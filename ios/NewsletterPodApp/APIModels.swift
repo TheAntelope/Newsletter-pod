@@ -183,6 +183,7 @@ struct PodcastProfileDTO: Codable {
     let guestNames: [String]
     let desiredDurationMinutes: Int
     let voiceID: String?
+    let secondaryVoiceID: String?
 
     private enum CodingKeys: String, CodingKey {
         case title
@@ -192,6 +193,7 @@ struct PodcastProfileDTO: Codable {
         case guestNames = "guest_names"
         case desiredDurationMinutes = "desired_duration_minutes"
         case voiceID = "voice_id"
+        case secondaryVoiceID = "secondary_voice_id"
     }
 }
 
