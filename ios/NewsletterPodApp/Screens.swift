@@ -291,6 +291,7 @@ private struct FeedbackComposer: View {
     private func submit() async {
         guard canSubmit else { return }
         isSubmitting = true
+        fieldFocused = false
         defer { isSubmitting = false }
         let ok = await viewModel.submitFeedback(text: trimmed, source: lastSubmitSource)
         if ok {
