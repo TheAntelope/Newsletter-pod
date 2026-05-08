@@ -2840,22 +2840,34 @@ private struct GenerationProgressBar: View {
         self.expectedDuration = expectedDuration
     }
 
+    /// Only render once a run has actually been tracked (started, or completed).
+    /// Avoids showing a misleading 0% bar when the view appears in a state where
+    /// generation never kicked off (e.g. the Done step opened without a backend
+    /// run, or before `.task` triggers `generateNow()`).
+    private var hasTrackedRun: Bool {
+        startedAt != nil || didComplete
+    }
+
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.5)) { context in
-            let p = currentProgress(at: context.date)
-            VStack(alignment: .leading, spacing: 6) {
-                ProgressView(value: p)
-                    .tint(Theme.Palette.amber)
-                    .animation(.easeOut(duration: 0.5), value: p)
-                HStack {
-                    Text(statusText)
-                        .font(Theme.Typography.meta)
-                        .foregroundStyle(Theme.Palette.muted)
-                    Spacer()
-                    Text("\(Int((p * 100).rounded()))%")
-                        .font(Theme.Typography.meta)
-                        .foregroundStyle(Theme.Palette.muted)
-                        .monospacedDigit()
+        Group {
+            if hasTrackedRun {
+                TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                    let p = currentProgress(at: context.date)
+                    VStack(alignment: .leading, spacing: 6) {
+                        ProgressView(value: p)
+                            .tint(Theme.Palette.amber)
+                            .animation(.easeOut(duration: 0.5), value: p)
+                        HStack {
+                            Text(statusText)
+                                .font(Theme.Typography.meta)
+                                .foregroundStyle(Theme.Palette.muted)
+                            Spacer()
+                            Text("\(Int((p * 100).rounded()))%")
+                                .font(Theme.Typography.meta)
+                                .foregroundStyle(Theme.Palette.muted)
+                                .monospacedDigit()
+                        }
+                    }
                 }
             }
         }
