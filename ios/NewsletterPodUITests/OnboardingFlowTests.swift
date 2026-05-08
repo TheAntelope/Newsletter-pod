@@ -42,9 +42,9 @@ final class OnboardingFlowTests: XCTestCase {
 
         tapPrimary(label: "Set up my podcast")
 
-        // Step 2 of 6 — Pick your topics
+        // Step 2 of 6 — Sources
         XCTAssertTrue(
-            app.staticTexts["Pick your topics."].waitForExistence(timeout: 5),
+            app.staticTexts["What should the show cover?"].waitForExistence(timeout: 5),
             "Sources step did not appear"
         )
         attach("02-sources")

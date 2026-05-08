@@ -365,8 +365,7 @@ private struct HeroEpisodeCard: View {
                     CollapsibleTranscript(text: transcript)
                 }
             } else if viewModel.isGenerating {
-                HStack(alignment: .top, spacing: Theme.Spacing.m) {
-                    ProgressView().tint(Theme.Palette.amberDeep)
+                VStack(alignment: .leading, spacing: Theme.Spacing.m) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Your first episode is being made.")
                             .font(Theme.Typography.bodyStrong)
@@ -375,6 +374,7 @@ private struct HeroEpisodeCard: View {
                             .font(Theme.Typography.callout)
                             .foregroundStyle(Theme.Palette.inkSoft)
                     }
+                    GenerationProgressBar(isGenerating: viewModel.isGenerating)
                 }
             } else if viewModel.selectedSources.isEmpty {
                 Text("Tap below for a guided setup — pick sources, choose a format, and we'll start your first episode.")
@@ -1633,9 +1633,24 @@ private struct PlanCard: View {
 struct OnboardingStarterPack: Identifiable {
     let id: String
     let name: String
-    let summary: String
     let icon: String
     let sourceIDs: [String]
+    let sourceNames: [String]
+
+    /// Truncated preview shown when the card is collapsed.
+    var summary: String {
+        let preview = sourceNames.prefix(3).joined(separator: ", ")
+        return sourceNames.count > 3 ? "\(preview), + \(sourceNames.count - 3) more" : preview
+    }
+
+    /// Full comma-separated list shown when the card is expanded.
+    var fullList: String {
+        sourceNames.joined(separator: ", ")
+    }
+
+    var hasMore: Bool {
+        sourceNames.count > 3
+    }
 
     // SF Symbols per topic. Unknown topics fall back to "sparkles".
     private static let iconByTopic: [String: String] = [
@@ -1676,14 +1691,12 @@ struct OnboardingStarterPack: Identifiable {
         }
         return topicOrder.map { topic in
             let sources = bucket[topic] ?? []
-            let preview = sources.prefix(3).map(\.name).joined(separator: ", ")
-            let summary = sources.count > 3 ? "\(preview), + \(sources.count - 3) more" : preview
             return OnboardingStarterPack(
                 id: topic,
                 name: topic,
-                summary: summary,
                 icon: iconByTopic[topic] ?? "sparkles",
-                sourceIDs: sources.map(\.sourceID)
+                sourceIDs: sources.map(\.sourceID),
+                sourceNames: sources.map(\.name)
             )
         }
     }
@@ -1693,42 +1706,57 @@ struct OnboardingShowPreset: Identifiable {
     let id: String
     let name: String
     let tagline: String
+    let description: String
     let formatPreset: String
     let primaryHost: String
     let secondaryHost: String?
     let durationMinutes: Int
+    let recommended: Bool
     let requiresPaid: Bool
+
+    /// Whether the user must pick a commentator voice in the Voices step.
+    /// `rotating_guest` ignores the user's secondary voice on the backend
+    /// (it cycles through the catalog daily), so we don't ask for one.
+    var requiresCommentatorPick: Bool {
+        formatPreset == "two_hosts"
+    }
 
     static let all: [OnboardingShowPreset] = [
         OnboardingShowPreset(
-            id: "quick",
-            name: "Quick brief",
-            tagline: "3 minutes • solo host",
+            id: "solo",
+            name: "Solo host",
+            tagline: "5 minutes • one host",
+            description: "Just one voice walking through the day's items.",
             formatPreset: "solo_host",
             primaryHost: "Vinnie",
             secondaryHost: nil,
-            durationMinutes: 3,
+            durationMinutes: 5,
+            recommended: false,
             requiresPaid: false
         ),
         OnboardingShowPreset(
             id: "twohost",
             name: "Two-host show",
-            tagline: "5 minutes • banter between two hosts",
+            tagline: "5 minutes • two hosts",
+            description: "Two voices trade off — one anchors, the other reacts and chimes in.",
             formatPreset: "two_hosts",
             primaryHost: "Vinnie",
             secondaryHost: "Demi",
             durationMinutes: 5,
+            recommended: true,
             requiresPaid: false
         ),
         OnboardingShowPreset(
-            id: "deep",
-            name: "Deep dive",
-            tagline: "8 minutes • two hosts, more depth",
-            formatPreset: "two_hosts",
+            id: "rotating",
+            name: "Rotating guest",
+            tagline: "5 minutes • host + rotating guest",
+            description: "An anchor plus a different guest voice each episode, drawn from the full voice catalog.",
+            formatPreset: "rotating_guest",
             primaryHost: "Vinnie",
-            secondaryHost: "Demi",
-            durationMinutes: 8,
-            requiresPaid: true
+            secondaryHost: nil,
+            durationMinutes: 5,
+            recommended: false,
+            requiresPaid: false
         ),
     ]
 }
@@ -1785,6 +1813,10 @@ struct OnboardingFlowView: View {
     /// since there's no commentator role to assign.
     private var isSoloHostPreset: Bool {
         OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID })?.formatPreset == "solo_host"
+    }
+
+    private var requiresCommentator: Bool {
+        OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID })?.requiresCommentatorPick ?? false
     }
 
     private var totalSteps: Int {
@@ -1851,6 +1883,7 @@ struct OnboardingFlowView: View {
             OnboardingVoicesStep(
                 anchorVoiceID: $selectedAnchorVoiceID,
                 commentatorVoiceID: $selectedCommentatorVoiceID,
+                requiresCommentator: requiresCommentator,
                 onBack: { step = 2 },
                 onContinue: {
                     Task {
@@ -2008,7 +2041,7 @@ private struct OnboardingWelcomeStep: View {
     var body: some View {
         OnboardingStepShell(
             title: greeting,
-            subtitle: "Here's how ClawCast works — tap the button below to get started.",
+            subtitle: "Your own podcast, hosted by AI voices, made from the news and writers you actually want to follow. Let's set it up.",
             primaryLabel: "Set up my podcast",
             primaryDisabled: false,
             onPrimary: onContinue,
@@ -2017,18 +2050,18 @@ private struct OnboardingWelcomeStep: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 bullet(
                     number: "1",
-                    title: "Pick your sources",
-                    text: "Curated topics, or pick your own feeds."
+                    title: "Choose your sources",
+                    text: "Pick topics or paste in your own feeds. We'll pull the latest stories. After set-up, you'll get your own email address you can use to subscribe to newsletters and have them added to your podcast."
                 )
                 bullet(
                     number: "2",
-                    title: "We generate the audio",
-                    text: "Hosts read the latest items in your show."
+                    title: "Pick the hosts",
+                    text: "Choose one or two AI voices to read and riff on the day's items."
                 )
                 bullet(
                     number: "3",
                     title: "Listen in Apple Podcasts",
-                    text: "A private feed lands on your delivery days."
+                    text: "New episodes show up in Apple Podcasts on the days you choose."
                 )
             }
             .padding(.horizontal, Theme.Spacing.s)
@@ -2067,8 +2100,8 @@ private struct OnboardingSourcesStep: View {
     var body: some View {
         let packs = OnboardingStarterPack.packs(from: viewModel.catalogSources)
         OnboardingStepShell(
-            title: "Pick your topics.",
-            subtitle: "Choose one or more — you can fine-tune individual feeds later on the Sources tab.",
+            title: "What should the show cover?",
+            subtitle: "These are bundles of trusted publications. Pick the ones you want covered; you can fine-tune the exact sources after setup.",
             primaryLabel: viewModel.isLoading ? "Saving…" : "Continue",
             primaryDisabled: selected.isEmpty || viewModel.isLoading,
             onPrimary: onContinue,
@@ -2142,35 +2175,52 @@ private struct OnboardingSourcesStep: View {
         let isSelected: Bool
         let onToggle: () -> Void
 
+        @State private var isExpanded = false
+
         var body: some View {
-            Button(action: onToggle) {
-                EditorialCard {
-                    HStack(alignment: .top, spacing: Theme.Spacing.m) {
-                        Image(systemName: pack.icon)
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(isSelected ? Theme.Palette.amberDeep : Theme.Palette.muted)
-                            .frame(width: 32)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(pack.name)
-                                .font(Theme.Typography.subtitle)
-                                .foregroundStyle(Theme.Palette.ink)
-                            Text(pack.summary)
-                                .font(Theme.Typography.callout)
-                                .foregroundStyle(Theme.Palette.inkSoft)
-                                .multilineTextAlignment(.leading)
+            EditorialCard {
+                HStack(alignment: .top, spacing: Theme.Spacing.m) {
+                    Image(systemName: pack.icon)
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(isSelected ? Theme.Palette.amberDeep : Theme.Palette.muted)
+                        .frame(width: 32)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(pack.name)
+                            .font(Theme.Typography.subtitle)
+                            .foregroundStyle(Theme.Palette.ink)
+                        Text(isExpanded ? pack.fullList : pack.summary)
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if pack.hasMore {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(isExpanded ? "Show less" : "Show all \(pack.sourceNames.count)")
+                                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                                        .font(.system(size: 11, weight: .semibold))
+                                }
+                                .font(Theme.Typography.calloutStrong)
+                                .foregroundStyle(Theme.Palette.amberDeep)
+                                .padding(.top, 2)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        Spacer(minLength: 0)
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 22))
-                            .foregroundStyle(isSelected ? Theme.Palette.amber : Theme.Palette.rule)
                     }
+                    Spacer(minLength: 0)
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 22))
+                        .foregroundStyle(isSelected ? Theme.Palette.amber : Theme.Palette.rule)
                 }
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                        .stroke(isSelected ? Theme.Palette.amber : Color.clear, lineWidth: 2)
-                )
             }
-            .buttonStyle(.plain)
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                    .stroke(isSelected ? Theme.Palette.amber : Color.clear, lineWidth: 2)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { onToggle() }
         }
     }
 }
@@ -2184,7 +2234,7 @@ private struct OnboardingShowStep: View {
     var body: some View {
         OnboardingStepShell(
             title: "Pick a show shape.",
-            subtitle: "We'll use these defaults for your hosts and length. You can customize on the Podcast tab any time.",
+            subtitle: "We'll use these defaults for your host setup. We recommend a 5-minute podcast to start — you can change the duration later on the Podcast tab.",
             primaryLabel: "Continue",
             primaryDisabled: false,
             onPrimary: onContinue,
@@ -2213,18 +2263,25 @@ private struct OnboardingShowStep: View {
             Button(action: { if !isLocked { onSelect() } }) {
                 EditorialCard {
                     HStack(alignment: .top, spacing: Theme.Spacing.m) {
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 6) {
                             HStack(spacing: 8) {
                                 Text(preset.name)
                                     .font(Theme.Typography.subtitle)
                                     .foregroundStyle(Theme.Palette.ink)
+                                if preset.recommended {
+                                    RecommendedBadge()
+                                }
                                 if isLocked {
                                     PaidBadge()
                                 }
                             }
                             Text(preset.tagline)
+                                .font(Theme.Typography.calloutStrong)
+                                .foregroundStyle(Theme.Palette.muted)
+                            Text(preset.description)
                                 .font(Theme.Typography.callout)
                                 .foregroundStyle(Theme.Palette.inkSoft)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer(minLength: 0)
                         Image(systemName: isLocked ? "lock.fill" : (isSelected ? "checkmark.circle.fill" : "circle"))
@@ -2241,6 +2298,21 @@ private struct OnboardingShowStep: View {
             .buttonStyle(.plain)
             .disabled(isLocked)
         }
+    }
+}
+
+private struct RecommendedBadge: View {
+    var body: some View {
+        Text("Recommended")
+            .font(Theme.Typography.meta)
+            .tracking(1.2)
+            .foregroundStyle(Theme.Palette.amberDeep)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Theme.Palette.amber.opacity(0.18), in: Capsule())
+            .overlay(
+                Capsule().stroke(Theme.Palette.amberDeep, lineWidth: 1)
+            )
     }
 }
 
@@ -2421,10 +2493,17 @@ private final class VoiceSamplePlayer: ObservableObject {
     }
 }
 
+private enum VoiceCardRole {
+    case unassigned
+    case anchor
+    case commentator
+}
+
 private struct OnboardingVoicesStep: View {
     @EnvironmentObject private var viewModel: AppViewModel
     @Binding var anchorVoiceID: String?
     @Binding var commentatorVoiceID: String?
+    let requiresCommentator: Bool
     let onBack: () -> Void
     let onContinue: () -> Void
 
@@ -2440,119 +2519,168 @@ private struct OnboardingVoicesStep: View {
     }
 
     private var continueDisabled: Bool {
-        anchorVoiceID == nil || commentatorVoiceID == nil || anchorVoiceID == commentatorVoiceID || viewModel.isLoading
+        if viewModel.isLoading { return true }
+        guard let anchor = anchorVoiceID, !anchor.isEmpty else { return true }
+        if requiresCommentator {
+            guard let commentator = commentatorVoiceID, commentator != anchor else { return true }
+        }
+        return false
+    }
+
+    private var subtitle: String {
+        if requiresCommentator {
+            return "Tap a voice to hear a sample. Tap a card to assign it as Anchor; tap again to switch it to Commentator. Change either later on the Podcast tab."
+        }
+        return "Tap a voice to hear a sample, then pick the anchor. A different guest voice cycles in for each episode. You can change the anchor anytime on the Podcast tab."
     }
 
     var body: some View {
         OnboardingStepShell(
-            title: "Pick your two voices.",
-            subtitle: "One reads as the anchor, the other plays color commentator. You can change these any time on the Podcast tab.",
+            title: "Choose a voice that fits your style.",
+            subtitle: subtitle,
             primaryLabel: viewModel.isLoading ? "Saving…" : "Continue",
             primaryDisabled: continueDisabled,
             onPrimary: onContinue,
             onBack: onBack
         ) {
             VStack(spacing: Theme.Spacing.m) {
-                voiceSlot(
-                    label: "Anchor",
-                    selectedID: anchorVoiceID,
-                    excludeID: commentatorVoiceID,
-                    onSelect: { anchorVoiceID = $0 }
-                )
-                voiceSlot(
-                    label: "Commentator",
-                    selectedID: commentatorVoiceID,
-                    excludeID: anchorVoiceID,
-                    onSelect: { commentatorVoiceID = $0 }
-                )
+                ForEach(voices) { voice in
+                    VoiceChoiceCard(
+                        voice: voice,
+                        role: role(for: voice.id),
+                        isPlaying: samplePlayer.playingVoiceID == voice.id,
+                        onCycle: { cycleRole(for: voice) },
+                        onPreview: { samplePlayer.play(voice) }
+                    )
+                }
             }
             .onAppear { applyDefaultsIfEmpty() }
             .onChange(of: viewModel.catalogVoices) { _, _ in applyDefaultsIfEmpty() }
+            .onChange(of: requiresCommentator) { _, needsCommentator in
+                if !needsCommentator { commentatorVoiceID = nil }
+            }
             .onDisappear { samplePlayer.stop() }
         }
     }
 
-    /// Pre-fill anchor + commentator with the user's current profile voice and any
-    /// other available voice on first appearance, so a user who taps Continue
-    /// without changing anything still gets a valid two-voice setup.
+    private func role(for id: String) -> VoiceCardRole {
+        if id == anchorVoiceID { return .anchor }
+        if requiresCommentator, id == commentatorVoiceID { return .commentator }
+        return .unassigned
+    }
+
+    /// Tap-to-cycle logic. Promotes a card through roles, with constraint that
+    /// at most one card holds each role.
+    /// - two_hosts:       unassigned → anchor → commentator → unassigned
+    /// - rotating_guest:  unassigned → anchor → unassigned (no commentator slot)
+    private func cycleRole(for voice: CatalogVoiceDTO) {
+        let id = voice.id
+        switch role(for: id) {
+        case .unassigned:
+            anchorVoiceID = id
+            // If this voice held the commentator slot, drop it.
+            if commentatorVoiceID == id { commentatorVoiceID = nil }
+        case .anchor:
+            if requiresCommentator {
+                anchorVoiceID = nil
+                commentatorVoiceID = id
+            } else {
+                anchorVoiceID = nil
+            }
+        case .commentator:
+            commentatorVoiceID = nil
+        }
+    }
+
+    /// Pre-fill an anchor (and commentator if needed) on first appearance so a
+    /// user who taps Continue without touching anything gets a valid setup.
     private func applyDefaultsIfEmpty() {
         let available = voices.map(\.id)
         guard !available.isEmpty else { return }
         if anchorVoiceID == nil {
             anchorVoiceID = viewModel.profile?.voiceID.flatMap { available.contains($0) ? $0 : nil } ?? available.first
         }
-        if commentatorVoiceID == nil {
+        if requiresCommentator, commentatorVoiceID == nil {
             commentatorVoiceID = available.first(where: { $0 != anchorVoiceID }) ?? available.last
         }
     }
+}
 
-    @ViewBuilder
-    private func voiceSlot(label: String, selectedID: String?, excludeID: String?, onSelect: @escaping (String) -> Void) -> some View {
-        let selectedVoice = voices.first(where: { $0.id == selectedID })
-        let isPlaying = selectedVoice?.id != nil && samplePlayer.playingVoiceID == selectedVoice?.id
-        let canPreview = (selectedVoice?.previewURL?.isEmpty == false)
+private struct VoiceChoiceCard: View {
+    let voice: CatalogVoiceDTO
+    let role: VoiceCardRole
+    let isPlaying: Bool
+    let onCycle: () -> Void
+    let onPreview: () -> Void
+
+    private var isSelected: Bool { role != .unassigned }
+    private var canPreview: Bool { (voice.previewURL?.isEmpty == false) }
+
+    var body: some View {
         EditorialCard {
-            HStack(alignment: .center, spacing: Theme.Spacing.m) {
-                Button {
-                    if let voice = selectedVoice { samplePlayer.play(voice) }
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(label)
-                            .font(Theme.Typography.calloutStrong)
-                            .foregroundStyle(Theme.Palette.muted)
-                        HStack(spacing: 6) {
-                            Text(selectedVoice?.name ?? "Choose a voice")
-                                .font(Theme.Typography.subtitle)
-                                .foregroundStyle(Theme.Palette.ink)
-                            if isPlaying {
-                                Image(systemName: "speaker.wave.2.fill")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(Theme.Palette.amberDeep)
-                                    .transition(.opacity)
-                            } else if canPreview {
-                                Image(systemName: "play.circle.fill")
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(Theme.Palette.amber.opacity(0.7))
+            HStack(alignment: .top, spacing: Theme.Spacing.m) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(voice.name)
+                            .font(Theme.Typography.subtitle)
+                            .foregroundStyle(Theme.Palette.ink)
+                        if let badge = roleBadgeText {
+                            VoiceRoleBadge(text: badge)
+                        }
+                    }
+                    if !voice.description.isEmpty {
+                        Text(voice.description)
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if canPreview {
+                        Button(action: onPreview) {
+                            HStack(spacing: 4) {
+                                Image(systemName: isPlaying ? "speaker.wave.2.fill" : "play.circle.fill")
+                                    .font(.system(size: 14, weight: .semibold))
+                                Text(isPlaying ? "Playing…" : "Hear a sample")
+                                    .font(Theme.Typography.calloutStrong)
                             }
+                            .foregroundStyle(Theme.Palette.amberDeep)
+                            .padding(.top, 2)
                         }
-                        if let description = selectedVoice?.description, !description.isEmpty {
-                            Text(description)
-                                .font(Theme.Typography.callout)
-                                .foregroundStyle(Theme.Palette.inkSoft)
-                        }
+                        .buttonStyle(.plain)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .disabled(!canPreview)
-
-                Menu {
-                    ForEach(voices) { voice in
-                        Button {
-                            onSelect(voice.id)
-                        } label: {
-                            if voice.id == excludeID {
-                                Label("\(voice.name) (already chosen)", systemImage: "circle.slash")
-                            } else if voice.id == selectedID {
-                                Label(voice.name, systemImage: "checkmark")
-                            } else {
-                                Text(voice.name)
-                            }
-                        }
-                        .disabled(voice.id == excludeID)
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("Change")
-                            .font(Theme.Typography.calloutStrong)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .foregroundStyle(Theme.Palette.amberDeep)
-                }
+                Spacer(minLength: 0)
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(isSelected ? Theme.Palette.amber : Theme.Palette.rule)
             }
         }
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .stroke(isSelected ? Theme.Palette.amber : Color.clear, lineWidth: 2)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { onCycle() }
+    }
+
+    private var roleBadgeText: String? {
+        switch role {
+        case .anchor: return "Anchor"
+        case .commentator: return "Commentator"
+        case .unassigned: return nil
+        }
+    }
+}
+
+private struct VoiceRoleBadge: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(Theme.Typography.meta)
+            .tracking(1.2)
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Theme.Palette.amber, in: Capsule())
     }
 }
 
@@ -2699,6 +2827,74 @@ private struct OnboardingScheduleStep: View {
     }
 }
 
+/// Time-based progress bar for episode generation. The backend doesn't expose a
+/// real percentage, so we anchor to the typical 3–5 min generation window, fill
+/// linearly toward `cap`, and snap to 100% the moment `isGenerating` flips false.
+private struct GenerationProgressBar: View {
+    let isGenerating: Bool
+    let expectedDuration: TimeInterval
+
+    @State private var startedAt: Date? = nil
+    @State private var didComplete: Bool = false
+
+    private let cap: Double = 0.95
+
+    init(isGenerating: Bool, expectedDuration: TimeInterval = 240) {
+        self.isGenerating = isGenerating
+        self.expectedDuration = expectedDuration
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.5)) { context in
+            let p = currentProgress(at: context.date)
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView(value: p)
+                    .tint(Theme.Palette.amber)
+                    .animation(.easeOut(duration: 0.5), value: p)
+                HStack {
+                    Text(statusText)
+                        .font(Theme.Typography.meta)
+                        .foregroundStyle(Theme.Palette.muted)
+                    Spacer()
+                    Text("\(Int((p * 100).rounded()))%")
+                        .font(Theme.Typography.meta)
+                        .foregroundStyle(Theme.Palette.muted)
+                        .monospacedDigit()
+                }
+            }
+        }
+        .onAppear { sync(active: isGenerating) }
+        .onChange(of: isGenerating) { _, active in sync(active: active) }
+    }
+
+    private func currentProgress(at now: Date) -> Double {
+        if didComplete { return 1.0 }
+        guard let start = startedAt else { return 0 }
+        let elapsed = now.timeIntervalSince(start)
+        return min(cap, elapsed / expectedDuration)
+    }
+
+    private var statusText: String {
+        if didComplete { return "Episode ready" }
+        if isGenerating { return "Generating…" }
+        return ""
+    }
+
+    private func sync(active: Bool) {
+        if active {
+            if startedAt == nil {
+                startedAt = Date()
+                didComplete = false
+            }
+        } else if startedAt != nil {
+            withAnimation(.easeOut(duration: 0.5)) {
+                didComplete = true
+            }
+            startedAt = nil
+        }
+    }
+}
+
 private struct OnboardingDoneStep: View {
     @EnvironmentObject private var viewModel: AppViewModel
     let onFinish: () -> Void
@@ -2715,23 +2911,22 @@ private struct OnboardingDoneStep: View {
         ) {
             VStack(spacing: Theme.Spacing.m) {
                 EditorialCard {
-                    HStack(spacing: Theme.Spacing.m) {
-                        if viewModel.isGenerating {
-                            ProgressView().tint(Theme.Palette.amberDeep)
-                        } else {
-                            Image(systemName: "wand.and.stars")
+                    VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                        HStack(spacing: Theme.Spacing.m) {
+                            Image(systemName: viewModel.isGenerating ? "wand.and.stars" : "checkmark.seal.fill")
                                 .foregroundStyle(Theme.Palette.amberDeep)
                                 .font(.system(size: 22, weight: .semibold))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(viewModel.isGenerating ? "Generating your first episode…" : "Episode ready")
+                                    .font(Theme.Typography.subtitle)
+                                    .foregroundStyle(Theme.Palette.ink)
+                                Text("You can close this and come back later.")
+                                    .font(Theme.Typography.callout)
+                                    .foregroundStyle(Theme.Palette.inkSoft)
+                            }
+                            Spacer(minLength: 0)
                         }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(viewModel.isGenerating ? "Generating your first episode…" : "Episode requested")
-                                .font(Theme.Typography.subtitle)
-                                .foregroundStyle(Theme.Palette.ink)
-                            Text("You can close this and come back later.")
-                                .font(Theme.Typography.callout)
-                                .foregroundStyle(Theme.Palette.inkSoft)
-                        }
-                        Spacer(minLength: 0)
+                        GenerationProgressBar(isGenerating: viewModel.isGenerating)
                     }
                 }
 
