@@ -842,6 +842,14 @@ struct SourcesView: View {
         sources.reduce(0) { $0 + (selectedCatalogIDs.contains($1.sourceID) ? 1 : 0) }
     }
 
+    private func autosaveSources() {
+        let catalogIDs = Array(selectedCatalogIDs)
+        let urls = customURLs
+        Task {
+            await viewModel.saveSources(catalogIDs: catalogIDs, customURLs: urls)
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -869,6 +877,7 @@ struct SourcesView: View {
                                         } else {
                                             selectedCatalogIDs.remove(source.sourceID)
                                         }
+                                        autosaveSources()
                                     }
                                 ))
                             }
@@ -894,25 +903,12 @@ struct SourcesView: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.URL)
+                            .onSubmit { autosaveSources() }
                     }
 
                     Button("Add another feed") {
                         customURLs.append("")
                     }
-                }
-
-                Section {
-                    Button("Save sources") {
-                        Task {
-                            await viewModel.saveSources(
-                                catalogIDs: Array(selectedCatalogIDs),
-                                customURLs: customURLs
-                            )
-                        }
-                    }
-                    .buttonStyle(.amberFilled)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
                 }
             }
             .navigationTitle("Sources")
