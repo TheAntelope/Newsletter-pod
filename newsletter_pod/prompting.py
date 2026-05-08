@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date
+from typing import Optional
 
 from .models import PodcastUxConfig, SourceItem
 
@@ -9,6 +10,19 @@ from .models import PodcastUxConfig, SourceItem
 # minute target. GPT models hit duration goals much better when given a word
 # count alongside the minute number.
 WORDS_PER_MINUTE = 150
+
+
+def _greeting_name(raw: Optional[str]) -> Optional[str]:
+    # Skip the personalised greeting when the user hasn't set a first name
+    # (default sentinel "Listener") or supplied something with no letters.
+    if not raw:
+        return None
+    cleaned = raw.strip()
+    if not cleaned or cleaned.casefold() == "listener":
+        return None
+    if not any(ch.isalpha() for ch in cleaned):
+        return None
+    return cleaned
 
 
 def _format_runtime_label(min_minutes: int, max_minutes: int) -> str:
@@ -42,6 +56,11 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
         "- Open as a dated daily edition.",
         "- Use the primary host as the main narrator.",
     ]
+    greeting_name = _greeting_name(ux.listener_name)
+    if greeting_name:
+        host_structure.append(
+            f"- Greet the listener by first name once during the intro: {greeting_name}."
+        )
     allowed_speakers = [ux.host_primary_name]
 
     secondary = ux.host_secondary_name.strip() if ux.host_secondary_name else ""
@@ -61,6 +80,10 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
         )
         allowed_speakers.append(secondary)
     host_structure.append("- End with a brief wrap-up and the top 3 takeaways.")
+    host_structure.append(
+        "- Close with a short, clear sign-off so the listener knows the episode "
+        "is over (for example: \"That's it for today — see you next time.\")."
+    )
 
     lines = [
         "You are producing a single dated daily podcast episode.",

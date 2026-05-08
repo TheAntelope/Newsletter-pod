@@ -65,6 +65,7 @@ class PodcastUxConfig(BaseModel):
     target_minutes: int = 6
     max_minutes: int = 8
     thin_day_minutes: int = 2
+    listener_name: Optional[str] = None
 
 
 class GeneratedEpisode(BaseModel):

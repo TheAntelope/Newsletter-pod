@@ -83,6 +83,70 @@ def test_prompt_specifies_skim_friendly_show_notes_format():
     assert "under 700 characters" in prompt
 
 
+def test_prompt_includes_signoff_instruction():
+    prompt = build_digest_prompt(
+        [
+            SourceItem(
+                source_id="a",
+                source_name="Source A",
+                guid="1",
+                link="https://example.com/a",
+                title="Title A",
+                summary="Summary A",
+                published_at=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc),
+                dedupe_key="1",
+            )
+        ],
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(),
+    )
+
+    assert "clear sign-off so the listener knows the episode is over" in prompt
+
+
+def test_prompt_personalises_greeting_when_listener_name_set():
+    items = [
+        SourceItem(
+            source_id="a",
+            source_name="Source A",
+            guid="1",
+            link="https://example.com/a",
+            title="Title A",
+            summary="Summary A",
+            published_at=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc),
+            dedupe_key="1",
+        )
+    ]
+    run_date = datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date()
+
+    prompt = build_digest_prompt(
+        items, run_date=run_date, ux=PodcastUxConfig(listener_name="Vince")
+    )
+    assert "Greet the listener by first name once during the intro: Vince." in prompt
+
+
+def test_prompt_skips_greeting_for_default_or_unreadable_name():
+    items = [
+        SourceItem(
+            source_id="a",
+            source_name="Source A",
+            guid="1",
+            link="https://example.com/a",
+            title="Title A",
+            summary="Summary A",
+            published_at=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc),
+            dedupe_key="1",
+        )
+    ]
+    run_date = datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date()
+
+    for raw in (None, "", "   ", "Listener", "listener", "12345"):
+        prompt = build_digest_prompt(
+            items, run_date=run_date, ux=PodcastUxConfig(listener_name=raw)
+        )
+        assert "Greet the listener by first name" not in prompt
+
+
 def test_prompt_switches_to_thin_day_runtime_guidance():
     items = [
         SourceItem(
