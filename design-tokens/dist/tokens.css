@@ -1,0 +1,44 @@
+/**
+ * Do not edit directly, this file was auto-generated.
+ */
+
+:root {
+  --color-cream: #F5F0E6;
+  --color-cream-deep: #EDE6D9;
+  --color-ink: #1C1A17;
+  --color-ink-soft: #3F3B35;
+  --color-muted: #6B6359;
+  --color-amber: #B8642A;
+  --color-amber-deep: #944C1B;
+  --color-rule: #D9D1C2;
+  --spacing-xs: 4px;
+  --spacing-s: 8px;
+  --spacing-m: 16px;
+  --spacing-l: 24px;
+  --spacing-xl: 32px;
+  --radius-card: 18px;
+  --typography-display-font-family: Charter, "Iowan Old Style", "Apple Garamond", Georgia, serif;
+  --typography-display-font-weight: 700;
+  --typography-display-font-size: 32px;
+  --typography-title-font-family: Charter, "Iowan Old Style", "Apple Garamond", Georgia, serif;
+  --typography-title-font-weight: 600;
+  --typography-title-font-size: 22px;
+  --typography-subtitle-font-family: Charter, "Iowan Old Style", "Apple Garamond", Georgia, serif;
+  --typography-subtitle-font-weight: 600;
+  --typography-subtitle-font-size: 17px;
+  --typography-body-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --typography-body-font-weight: 400;
+  --typography-body-font-size: 15px;
+  --typography-body-strong-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --typography-body-strong-font-weight: 600;
+  --typography-body-strong-font-size: 15px;
+  --typography-callout-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --typography-callout-font-weight: 400;
+  --typography-callout-font-size: 13px;
+  --typography-callout-strong-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --typography-callout-strong-font-weight: 600;
+  --typography-callout-strong-font-size: 13px;
+  --typography-meta-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --typography-meta-font-weight: 600;
+  --typography-meta-font-size: 11px;
+}

@@ -22,6 +22,18 @@ workflows:
         APP_STORE_APPLE_ID: "6762568729"
       xcode: latest
     scripts:
+      - name: Build design tokens
+        script: |
+          cd "$CM_BUILD_DIR/design-tokens"
+          npm ci
+          npm run build
+          # Fail the build if generated outputs drifted from the committed ones —
+          # tells the dev to run `npm run build` in design-tokens/ and commit.
+          cd "$CM_BUILD_DIR"
+          if ! git diff --exit-code ios/NewsletterPodApp/DesignTokens.swift design-tokens/dist/; then
+            echo "ERROR: design-tokens outputs are stale. Run 'npm run build' in design-tokens/ and commit the regenerated files."
+            exit 1
+          fi
       - name: Generate Xcode project
         script: |
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
@@ -90,6 +102,16 @@ workflows:
         XCODE_SCHEME: "NewsletterPod"
       xcode: latest
     scripts:
+      - name: Build design tokens
+        script: |
+          cd "$CM_BUILD_DIR/design-tokens"
+          npm ci
+          npm run build
+          cd "$CM_BUILD_DIR"
+          if ! git diff --exit-code ios/NewsletterPodApp/DesignTokens.swift design-tokens/dist/; then
+            echo "ERROR: design-tokens outputs are stale. Run 'npm run build' in design-tokens/ and commit the regenerated files."
+            exit 1
+          fi
       - name: Install xcodegen and xcparse
         script: |
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen

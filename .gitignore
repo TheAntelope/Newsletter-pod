@@ -21,3 +21,8 @@ DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcuserstate
 ios/build/
+
+# Design-tokens build artifacts. Generated outputs (DesignTokens.swift,
+# dist/tokens.css) ARE committed so iOS/web builds don't need npm.
+design-tokens/node_modules/
+.claude/

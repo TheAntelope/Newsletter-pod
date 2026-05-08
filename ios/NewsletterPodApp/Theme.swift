@@ -1,41 +1,46 @@
 import SwiftUI
 
 enum Theme {
+    /// Palette values are sourced from `DesignTokens` (generated from
+    /// `design-tokens/tokens.json`). `Theme.Palette` stays as the public API
+    /// so call sites don't need to change when tokens are renamed or restructured.
     enum Palette {
-        static let cream = Color(red: 0.961, green: 0.941, blue: 0.902)
-        static let creamDeep = Color(red: 0.929, green: 0.902, blue: 0.851)
-        static let ink = Color(red: 0.110, green: 0.102, blue: 0.090)
-        static let inkSoft = Color(red: 0.247, green: 0.231, blue: 0.208)
-        static let muted = Color(red: 0.420, green: 0.388, blue: 0.349)
-        static let amber = Color(red: 0.722, green: 0.392, blue: 0.165)
-        static let amberDeep = Color(red: 0.580, green: 0.298, blue: 0.106)
-        static let rule = Color(red: 0.851, green: 0.820, blue: 0.761)
+        static let cream = DesignTokens.colorCream
+        static let creamDeep = DesignTokens.colorCreamDeep
+        static let ink = DesignTokens.colorInk
+        static let inkSoft = DesignTokens.colorInkSoft
+        static let muted = DesignTokens.colorMuted
+        static let amber = DesignTokens.colorAmber
+        static let amberDeep = DesignTokens.colorAmberDeep
+        static let rule = DesignTokens.colorRule
         static let cardShadow = Color.black.opacity(0.06)
     }
 
     // Type ramp. Six base tiers + two emphasis variants. All text is sentence
     // case; only `MetaLabel` uppercases (eyebrow style). Mono and SF Symbol
     // sizing is intentionally outside this ramp.
+    //
+    // Sourced from `DesignTokens` (generated from `design-tokens/tokens.json`).
     enum Typography {
-        static let display: Font = .system(size: 32, weight: .bold, design: .serif)
-        static let title: Font = .system(size: 22, weight: .semibold, design: .serif)
-        static let subtitle: Font = .system(size: 17, weight: .semibold, design: .serif)
-        static let body: Font = .system(size: 15, weight: .regular, design: .default)
-        static let bodyStrong: Font = .system(size: 15, weight: .semibold, design: .default)
-        static let callout: Font = .system(size: 13, weight: .regular, design: .default)
-        static let calloutStrong: Font = .system(size: 13, weight: .semibold, design: .default)
-        static let meta: Font = .system(size: 11, weight: .semibold, design: .default)
+        static let display = DesignTokens.typographyDisplay
+        static let title = DesignTokens.typographyTitle
+        static let subtitle = DesignTokens.typographySubtitle
+        static let body = DesignTokens.typographyBody
+        static let bodyStrong = DesignTokens.typographyBodyStrong
+        static let callout = DesignTokens.typographyCallout
+        static let calloutStrong = DesignTokens.typographyCalloutStrong
+        static let meta = DesignTokens.typographyMeta
     }
 
     enum Spacing {
-        static let xs: CGFloat = 4
-        static let s: CGFloat = 8
-        static let m: CGFloat = 16
-        static let l: CGFloat = 24
-        static let xl: CGFloat = 32
+        static let xs = DesignTokens.spacingXs
+        static let s = DesignTokens.spacingS
+        static let m = DesignTokens.spacingM
+        static let l = DesignTokens.spacingL
+        static let xl = DesignTokens.spacingXl
     }
 
-    static let cardRadius: CGFloat = 18
+    static let cardRadius = DesignTokens.radiusCard
 }
 
 struct EditorialBackground: ViewModifier {
