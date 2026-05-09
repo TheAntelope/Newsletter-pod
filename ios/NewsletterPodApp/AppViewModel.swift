@@ -176,7 +176,6 @@ final class AppViewModel: ObservableObject {
             selectedSources = response.sources
             entitlements = response.entitlements
             feed = try await apiClient.fetchFeed(token: sessionToken)
-            flashSaved("Sources saved")
         }
     }
 
