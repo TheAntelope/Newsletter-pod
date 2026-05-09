@@ -25,4 +25,10 @@ ios/build/
 # Design-tokens build artifacts. Generated outputs (DesignTokens.swift,
 # dist/tokens.css) ARE committed so iOS/web builds don't need npm.
 design-tokens/node_modules/
-.claude/
+
+# Local Claude Code workspace: ignore screenshots / lock files / etc.,
+# but keep settings.json under version control so project hooks travel
+# with the repo. Use `.claude/*` (not `.claude/`) so the negation below
+# can take effect — Git skips traversal entirely for an ignored dir.
+.claude/*
+!.claude/settings.json

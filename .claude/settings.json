@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_inbound.py -x --no-header -q)",
+      "Bash(python -m pytest -x --no-header -q)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" https://newsletter-pod-cdze2t26va-ew.a.run.app/)",
+      "Bash(python -c ' *)",
+      "Bash(npm --version)",
+      "Bash(npm install *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "input=$(cat); if echo \"$input\" | grep -q '\"file_path\":\"[^\"]*design-tokens[^\"]*tokens\\.json'; then cd design-tokens && npm run build; fi",
+            "timeout": 60,
+            "statusMessage": "Rebuilding design tokens..."
+          }
+        ]
+      }
+    ]
+  }
+}
