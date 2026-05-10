@@ -364,18 +364,6 @@ private struct HeroEpisodeCard: View {
                 if let transcript = latest.transcriptText, !transcript.isEmpty {
                     CollapsibleTranscript(text: transcript)
                 }
-            } else if viewModel.isGenerating {
-                VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Your first episode is being made.")
-                            .font(Theme.Typography.bodyStrong)
-                            .foregroundStyle(Theme.Palette.ink)
-                        Text("About 3–5 minutes. You can close the app and come back later — it will land in Apple Podcasts when ready.")
-                            .font(Theme.Typography.callout)
-                            .foregroundStyle(Theme.Palette.inkSoft)
-                    }
-                    GenerationProgressBar(isGenerating: viewModel.isGenerating)
-                }
             } else if viewModel.selectedSources.isEmpty {
                 Text("Tap below for a guided setup — pick sources, choose a format, and we'll start your first episode.")
                     .font(Theme.Typography.body)
@@ -387,10 +375,26 @@ private struct HeroEpisodeCard: View {
                     Label("Start guided setup", systemImage: "wand.and.stars")
                 }
                 .buttonStyle(.amberFilled)
-            } else {
+            } else if !viewModel.isGenerating {
                 Text("Your sources are set. Tap Generate below to make your first episode now, or wait for your scheduled delivery.")
                     .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Palette.inkSoft)
+            }
+
+            if viewModel.isGenerating {
+                VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(viewModel.feed?.latestEpisode == nil
+                             ? "Your first episode is being made."
+                             : "We're putting together your next episode.")
+                            .font(Theme.Typography.bodyStrong)
+                            .foregroundStyle(Theme.Palette.ink)
+                        Text("About 3–5 minutes. You can close the app and come back later — it will land in Apple Podcasts when ready.")
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                    }
+                    GenerationProgressBar(isGenerating: viewModel.isGenerating)
+                }
             }
 
             EditorialDivider()
