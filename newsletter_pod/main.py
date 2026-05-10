@@ -56,6 +56,15 @@ class UpdatePodcastConfigRequest(BaseModel):
     desired_duration_minutes: Optional[int] = None
     voice_id: Optional[str] = None
     secondary_voice_id: Optional[str] = None
+    tone: Optional[str] = None
+    key_findings_count: Optional[int] = None
+    humor_style: Optional[str] = None
+    personalized_greeting: Optional[bool] = None
+    include_top_takeaways: Optional[bool] = None
+    include_weather: Optional[bool] = None
+    weather_location: Optional[str] = None
+    custom_guidance: Optional[str] = None
+    custom_guidance_preset_id: Optional[str] = None
 
 
 class UpdateScheduleRequest(BaseModel):
@@ -244,6 +253,15 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 desired_duration_minutes=request_payload.desired_duration_minutes,
                 voice_id=request_payload.voice_id,
                 secondary_voice_id=request_payload.secondary_voice_id,
+                tone=request_payload.tone,
+                key_findings_count=request_payload.key_findings_count,
+                humor_style=request_payload.humor_style,
+                personalized_greeting=request_payload.personalized_greeting,
+                include_top_takeaways=request_payload.include_top_takeaways,
+                include_weather=request_payload.include_weather,
+                weather_location=request_payload.weather_location,
+                custom_guidance=request_payload.custom_guidance,
+                custom_guidance_preset_id=request_payload.custom_guidance_preset_id,
             )
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

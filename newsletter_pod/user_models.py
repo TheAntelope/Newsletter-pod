@@ -29,6 +29,15 @@ class PodcastProfileRecord(BaseModel):
     desired_duration_minutes: int = 3
     voice_id: Optional[str] = None
     secondary_voice_id: Optional[str] = None
+    tone: str = "calm_analyst"
+    key_findings_count: int = 3
+    humor_style: str = "none"
+    personalized_greeting: bool = True
+    include_top_takeaways: bool = True
+    include_weather: bool = False
+    weather_location: Optional[str] = None
+    custom_guidance: Optional[str] = None
+    custom_guidance_preset_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

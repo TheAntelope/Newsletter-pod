@@ -182,6 +182,15 @@ struct PodcastProfileDTO: Codable {
     let desiredDurationMinutes: Int
     let voiceID: String?
     let secondaryVoiceID: String?
+    let tone: String?
+    let keyFindingsCount: Int?
+    let humorStyle: String?
+    let personalizedGreeting: Bool?
+    let includeTopTakeaways: Bool?
+    let includeWeather: Bool?
+    let weatherLocation: String?
+    let customGuidance: String?
+    let customGuidancePresetID: String?
 
     private enum CodingKeys: String, CodingKey {
         case title
@@ -192,6 +201,15 @@ struct PodcastProfileDTO: Codable {
         case desiredDurationMinutes = "desired_duration_minutes"
         case voiceID = "voice_id"
         case secondaryVoiceID = "secondary_voice_id"
+        case tone
+        case keyFindingsCount = "key_findings_count"
+        case humorStyle = "humor_style"
+        case personalizedGreeting = "personalized_greeting"
+        case includeTopTakeaways = "include_top_takeaways"
+        case includeWeather = "include_weather"
+        case weatherLocation = "weather_location"
+        case customGuidance = "custom_guidance"
+        case customGuidancePresetID = "custom_guidance_preset_id"
     }
 }
 
