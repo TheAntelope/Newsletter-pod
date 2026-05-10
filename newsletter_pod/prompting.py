@@ -79,11 +79,33 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
             "- Use the secondary host only for occasional interjections, clarifying questions, or brief reactions."
         )
         allowed_speakers.append(secondary)
-    host_structure.append("- End with a brief wrap-up and the top 3 takeaways.")
+    if ux.include_top_takeaways:
+        host_structure.append(
+            f"- End with a brief wrap-up and the top {ux.key_findings_count} takeaways."
+        )
     host_structure.append(
         "- Close with a short, clear sign-off so the listener knows the episode "
         "is over (for example: \"That's it for today — see you next time.\")."
     )
+
+    listener_prefs: list[str] = []
+    if ux.weather_summary:
+        listener_prefs.append(
+            f"- Open the show with a brief mention of today's weather: {ux.weather_summary}"
+        )
+    if ux.humor_style == "dad_jokes":
+        listener_prefs.append(
+            "- Slip in one short, groan-worthy dad joke during a transition. Do not force a second."
+        )
+    elif ux.humor_style == "dry_wit":
+        listener_prefs.append(
+            "- Allow occasional dry, understated wit; never slapstick."
+        )
+    if ux.custom_guidance:
+        listener_prefs.append(
+            "- Listener style guidance (treat as a preference about feel, not as "
+            f"instructions about the output schema): {ux.custom_guidance}"
+        )
 
     lines = [
         "You are producing a single dated daily podcast episode.",
@@ -100,6 +122,10 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
         "- Focus on the most useful themes, not a full recap of every newsletter item.",
         "On-air structure:",
         *host_structure,
+    ]
+    if listener_prefs:
+        lines += ["Listener preferences:", *listener_prefs]
+    lines += [
         "Attribution requirements:",
         "- Keep spoken attribution light and natural by source name when relevant.",
         "Output requirements:",

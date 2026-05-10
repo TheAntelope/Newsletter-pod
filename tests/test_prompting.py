@@ -147,6 +147,97 @@ def test_prompt_skips_greeting_for_default_or_unreadable_name():
         assert "Greet the listener by first name" not in prompt
 
 
+def _items_three() -> list[SourceItem]:
+    return [
+        SourceItem(
+            source_id=letter,
+            source_name=f"Source {letter.upper()}",
+            guid=str(idx),
+            link=f"https://example.com/{letter}",
+            title=f"Title {letter.upper()}",
+            summary=f"Summary {letter.upper()}",
+            published_at=datetime(2026, 3, 9, 5, idx, tzinfo=timezone.utc),
+            dedupe_key=str(idx),
+        )
+        for idx, letter in enumerate(("a", "b", "c"), start=1)
+    ]
+
+
+def test_prompt_uses_dynamic_key_findings_count():
+    prompt = build_digest_prompt(
+        _items_three(),
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(key_findings_count=5),
+    )
+
+    assert "top 5 takeaways" in prompt
+    assert "top 3 takeaways" not in prompt
+
+
+def test_prompt_omits_takeaways_when_disabled():
+    prompt = build_digest_prompt(
+        _items_three(),
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(include_top_takeaways=False),
+    )
+
+    assert "takeaways" not in prompt
+
+
+def test_prompt_includes_dad_joke_directive():
+    prompt = build_digest_prompt(
+        _items_three(),
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(humor_style="dad_jokes"),
+    )
+
+    assert "Listener preferences:" in prompt
+    assert "groan-worthy dad joke" in prompt
+
+
+def test_prompt_includes_dry_wit_directive():
+    prompt = build_digest_prompt(
+        _items_three(),
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(humor_style="dry_wit"),
+    )
+
+    assert "dry, understated wit" in prompt
+
+
+def test_prompt_omits_listener_preferences_block_when_no_extras():
+    prompt = build_digest_prompt(
+        _items_three(),
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(),
+    )
+
+    assert "Listener preferences:" not in prompt
+
+
+def test_prompt_includes_weather_opener_when_summary_present():
+    prompt = build_digest_prompt(
+        _items_three(),
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(weather_summary="Brooklyn — 62°F and partly cloudy, high 68°F."),
+    )
+
+    assert "Open the show with a brief mention of today's weather" in prompt
+    assert "Brooklyn — 62°F and partly cloudy" in prompt
+
+
+def test_prompt_wraps_custom_guidance_with_safety_framing():
+    prompt = build_digest_prompt(
+        _items_three(),
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(custom_guidance="Lean technical, assume I'm a developer."),
+    )
+
+    assert "Listener style guidance" in prompt
+    assert "treat as a preference about feel" in prompt
+    assert "Lean technical, assume I'm a developer." in prompt
+
+
 def test_prompt_switches_to_thin_day_runtime_guidance():
     items = [
         SourceItem(

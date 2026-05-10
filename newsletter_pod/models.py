@@ -66,6 +66,11 @@ class PodcastUxConfig(BaseModel):
     max_minutes: int = 8
     thin_day_minutes: int = 2
     listener_name: Optional[str] = None
+    key_findings_count: int = 3
+    humor_style: str = "none"
+    include_top_takeaways: bool = True
+    custom_guidance: Optional[str] = None
+    weather_summary: Optional[str] = None
 
 
 class GeneratedEpisode(BaseModel):

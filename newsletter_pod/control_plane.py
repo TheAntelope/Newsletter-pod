@@ -21,6 +21,7 @@ from .models import PodcastUxConfig, PublishStatus, SourceDefinition, SourceItem
 from .podcast_api import PodcastApiClient
 from .prompting import build_digest_prompt
 from .storage import AudioStorage
+from .weather import fetch_weather_summary
 from .translation import TranslationError, translate_to_english
 from .user_models import (
     BillingEventRecord,
@@ -361,6 +362,15 @@ class ControlPlaneService:
         desired_duration_minutes: Optional[int],
         voice_id: Optional[str] = None,
         secondary_voice_id: Optional[str] = None,
+        tone: Optional[str] = None,
+        key_findings_count: Optional[int] = None,
+        humor_style: Optional[str] = None,
+        personalized_greeting: Optional[bool] = None,
+        include_top_takeaways: Optional[bool] = None,
+        include_weather: Optional[bool] = None,
+        weather_location: Optional[str] = None,
+        custom_guidance: Optional[str] = None,
+        custom_guidance_preset_id: Optional[str] = None,
     ) -> dict[str, Any]:
         profile = self._get_profile(user_id)
         entitlements = self._entitlements_for(self._get_subscription(user_id))
@@ -394,6 +404,28 @@ class ControlPlaneService:
                 if secondary_voice_id not in self._voice_catalog:
                     raise ControlPlaneError("Unsupported commenter voice selection")
                 profile.secondary_voice_id = secondary_voice_id
+        if tone is not None:
+            _validate_tone(tone)
+            profile.tone = tone
+        if key_findings_count is not None:
+            profile.key_findings_count = max(3, min(7, int(key_findings_count)))
+        if humor_style is not None:
+            _validate_humor_style(humor_style)
+            profile.humor_style = humor_style
+        if personalized_greeting is not None:
+            profile.personalized_greeting = bool(personalized_greeting)
+        if include_top_takeaways is not None:
+            profile.include_top_takeaways = bool(include_top_takeaways)
+        if include_weather is not None:
+            profile.include_weather = bool(include_weather)
+        if weather_location is not None:
+            trimmed = weather_location.strip()[:_WEATHER_LOCATION_MAX_LEN]
+            profile.weather_location = trimmed or None
+        if custom_guidance is not None:
+            profile.custom_guidance = _sanitize_custom_guidance(custom_guidance)
+        if custom_guidance_preset_id is not None:
+            preset_value = custom_guidance_preset_id.strip()[:64]
+            profile.custom_guidance_preset_id = preset_value or None
 
         if profile.secondary_voice_id and profile.secondary_voice_id == profile.voice_id:
             raise ControlPlaneError("Host and commenter voices must be different")
@@ -605,11 +637,25 @@ class ControlPlaneService:
         primary_voice_id, secondary_voice_id, secondary_speaker_name = self._resolve_voice_pair(
             profile, local_date
         )
+        weather_summary: Optional[str] = None
+        if profile.include_weather and profile.weather_location:
+            try:
+                weather_summary = fetch_weather_summary(
+                    profile.weather_location, today=local_date
+                )
+            except Exception:  # pragma: no cover — weather is best-effort
+                logger.warning(
+                    "Weather fetch failed for user=%s location=%r",
+                    user_id,
+                    profile.weather_location,
+                )
+                weather_summary = None
         ux = self._build_user_ux(
             profile,
             primary_voice_id,
             secondary_speaker_name,
             listener_name=user.display_name,
+            weather_summary=weather_summary,
         )
         guest_name = secondary_speaker_name if profile.format_preset == "rotating_guest" else None
         prompt = build_digest_prompt(items, run_date=local_date, ux=ux)
@@ -1007,18 +1053,28 @@ class ControlPlaneService:
         primary_voice_id: str,
         secondary_speaker_name: Optional[str],
         listener_name: Optional[str] = None,
+        weather_summary: Optional[str] = None,
     ) -> PodcastUxConfig:
         duration = profile.desired_duration_minutes
         primary_name = self._voice_name(primary_voice_id, profile.host_primary_name or "Host")
+        tone = profile.tone if profile.tone in _TONE_OPTIONS else "calm_analyst"
+        humor = profile.humor_style if profile.humor_style in _HUMOR_OPTIONS else "none"
+        key_findings = max(3, min(7, profile.key_findings_count or 3))
+        effective_listener = listener_name if profile.personalized_greeting else None
         return PodcastUxConfig(
             host_primary_name=primary_name,
             host_secondary_name=secondary_speaker_name or "",
             format=profile.format_preset,
-            tone="calm_analyst",
+            tone=tone,
             target_minutes=duration,
             max_minutes=duration,
             thin_day_minutes=min(5, duration),
-            listener_name=listener_name,
+            listener_name=effective_listener,
+            key_findings_count=key_findings,
+            humor_style=humor,
+            include_top_takeaways=profile.include_top_takeaways,
+            custom_guidance=profile.custom_guidance,
+            weather_summary=weather_summary,
         )
 
     def _build_show_notes(
@@ -1138,6 +1194,48 @@ def _normalize_local_time(value: str) -> str:
 def _validate_format_preset(value: str) -> None:
     if value not in {"solo_host", "two_hosts", "rotating_guest"}:
         raise ControlPlaneError(f"Invalid format preset: {value}")
+
+
+_TONE_OPTIONS = {"calm_analyst", "warm_friendly", "snappy_news", "playful"}
+_HUMOR_OPTIONS = {"none", "dad_jokes", "dry_wit"}
+# Output-schema keys we don't want users smuggling into the listener-prefs block.
+_GUIDANCE_DENYLIST = ("audio_segments", "episode_title", "show_notes")
+_GUIDANCE_MAX_LEN = 500
+_WEATHER_LOCATION_MAX_LEN = 80
+
+
+def _validate_tone(value: str) -> None:
+    if value not in _TONE_OPTIONS:
+        raise ControlPlaneError(f"Invalid tone: {value}")
+
+
+def _validate_humor_style(value: str) -> None:
+    if value not in _HUMOR_OPTIONS:
+        raise ControlPlaneError(f"Invalid humor style: {value}")
+
+
+def _sanitize_custom_guidance(value: str) -> Optional[str]:
+    """Trim, collapse whitespace, strip control chars, enforce length + denylist.
+
+    Returns ``None`` for an empty/whitespace-only input so the caller can clear
+    the field by sending an empty string. Raises ``ControlPlaneError`` on a
+    denylist hit so the user sees a clear message instead of silent truncation.
+    """
+    if value is None:
+        return None
+    cleaned_chars = [ch for ch in value if ch.isprintable() or ch in (" ", "\n")]
+    cleaned = " ".join("".join(cleaned_chars).split())
+    if not cleaned:
+        return None
+    if len(cleaned) > _GUIDANCE_MAX_LEN:
+        cleaned = cleaned[:_GUIDANCE_MAX_LEN]
+    lowered = cleaned.casefold()
+    for token in _GUIDANCE_DENYLIST:
+        if token in lowered:
+            raise ControlPlaneError(
+                f"Custom guidance cannot reference output-schema fields ({token})."
+            )
+    return cleaned
 
 
 def _parse_client_datetime(value: Any) -> Optional[datetime]:

@@ -187,7 +187,16 @@ final class AppViewModel: ObservableObject {
         guestNames: [String],
         desiredDurationMinutes: Int,
         voiceID: String?,
-        secondaryVoiceID: String? = nil
+        secondaryVoiceID: String? = nil,
+        tone: String? = nil,
+        keyFindingsCount: Int? = nil,
+        humorStyle: String? = nil,
+        personalizedGreeting: Bool? = nil,
+        includeTopTakeaways: Bool? = nil,
+        includeWeather: Bool? = nil,
+        weatherLocation: String? = nil,
+        customGuidance: String? = nil,
+        customGuidancePresetID: String? = nil
     ) async {
         guard let sessionToken else { return }
         await load {
@@ -200,7 +209,16 @@ final class AppViewModel: ObservableObject {
                 guestNames: guestNames,
                 desiredDurationMinutes: desiredDurationMinutes,
                 voiceID: voiceID,
-                secondaryVoiceID: secondaryVoiceID
+                secondaryVoiceID: secondaryVoiceID,
+                tone: tone,
+                keyFindingsCount: keyFindingsCount,
+                humorStyle: humorStyle,
+                personalizedGreeting: personalizedGreeting,
+                includeTopTakeaways: includeTopTakeaways,
+                includeWeather: includeWeather,
+                weatherLocation: weatherLocation,
+                customGuidance: customGuidance,
+                customGuidancePresetID: customGuidancePresetID
             )
             profile = response.profile
             entitlements = response.entitlements

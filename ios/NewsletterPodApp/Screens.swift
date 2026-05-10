@@ -1040,11 +1040,75 @@ private struct InboundItemRow: View {
 
 // MARK: - Podcast setup
 
+struct GuidancePreset: Identifiable, Hashable {
+    let id: String
+    let label: String
+    let tone: String
+    let humorStyle: String
+    let keyFindingsCount: Int
+    let personalizedGreeting: Bool
+    let guidance: String
+}
+
 struct PodcastSetupView: View {
     static let voiceOptions: [(id: String, name: String)] = [
         ("suMMgpGbVcnihP1CcgFS", "Vinnie Chase"),
         ("RKCbSROXui75bk1SVpy8", "Demi Dreams"),
     ]
+
+    static let toneOptions: [(id: String, label: String)] = [
+        ("calm_analyst", "Calm analyst"),
+        ("warm_friendly", "Warm & friendly"),
+        ("snappy_news", "Snappy news"),
+        ("playful", "Playful"),
+    ]
+
+    static let humorOptions: [(id: String, label: String)] = [
+        ("none", "None"),
+        ("dry_wit", "Dry wit"),
+        ("dad_jokes", "Dad jokes"),
+    ]
+
+    static let guidancePresets: [GuidancePreset] = [
+        GuidancePreset(
+            id: "quick_calm",
+            label: "Quick & Calm",
+            tone: "calm_analyst",
+            humorStyle: "none",
+            keyFindingsCount: 3,
+            personalizedGreeting: true,
+            guidance: "Prioritize clarity over color."
+        ),
+        GuidancePreset(
+            id: "morning_energy",
+            label: "Morning Energy",
+            tone: "warm_friendly",
+            humorStyle: "dad_jokes",
+            keyFindingsCount: 5,
+            personalizedGreeting: true,
+            guidance: "Open with a warm greeting and one upbeat sentence about the day."
+        ),
+        GuidancePreset(
+            id: "newsroom_brief",
+            label: "Newsroom Brief",
+            tone: "snappy_news",
+            humorStyle: "none",
+            keyFindingsCount: 5,
+            personalizedGreeting: false,
+            guidance: "Tight transitions, lead with the lede, no filler."
+        ),
+        GuidancePreset(
+            id: "friend_catching_up",
+            label: "Friend Catching You Up",
+            tone: "warm_friendly",
+            humorStyle: "dry_wit",
+            keyFindingsCount: 3,
+            personalizedGreeting: true,
+            guidance: "Sound like a smart friend explaining over coffee. Use 'you' often."
+        ),
+    ]
+
+    static let guidanceMaxLength = 500
 
     @EnvironmentObject private var viewModel: AppViewModel
     @State private var displayName = ""
@@ -1052,8 +1116,18 @@ struct PodcastSetupView: View {
     @State private var durationMinutes = 3.0
     @State private var voiceID: String = PodcastSetupView.voiceOptions[0].id
     @State private var secondaryVoiceID: String = PodcastSetupView.voiceOptions[1].id
+    @State private var tone: String = "calm_analyst"
+    @State private var humorStyle: String = "none"
+    @State private var keyFindingsCount: Int = 3
+    @State private var personalizedGreeting: Bool = true
+    @State private var includeTopTakeaways: Bool = true
+    @State private var includeWeather: Bool = false
+    @State private var weatherLocation: String = ""
+    @State private var customGuidance: String = ""
+    @State private var customGuidancePresetID: String? = nil
     @StateObject private var samplePlayer = VoiceSamplePlayer()
     @State private var didLoadInitialState = false
+    @State private var isApplyingPreset = false
     @State private var nameSaveTask: Task<Void, Never>?
     @State private var configSaveTask: Task<Void, Never>?
 
@@ -1107,6 +1181,57 @@ struct PodcastSetupView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section("Style") {
+                    Picker("Tone", selection: $tone) {
+                        ForEach(PodcastSetupView.toneOptions, id: \.id) { option in
+                            Text(option.label).tag(option.id)
+                        }
+                    }
+                    Picker("Humor", selection: $humorStyle) {
+                        ForEach(PodcastSetupView.humorOptions, id: \.id) { option in
+                            Text(option.label).tag(option.id)
+                        }
+                    }
+                    Stepper("Key takeaways: \(keyFindingsCount)", value: $keyFindingsCount, in: 3...7)
+                    Toggle("Greet me by name", isOn: $personalizedGreeting)
+                    Toggle("Include top takeaways", isOn: $includeTopTakeaways)
+                    Toggle("Include weather", isOn: $includeWeather)
+                    if includeWeather {
+                        TextField("City or ZIP", text: $weatherLocation)
+                            .textContentType(.addressCity)
+                            .autocorrectionDisabled()
+                    }
+                }
+
+                Section("Custom guidance") {
+                    Menu {
+                        ForEach(PodcastSetupView.guidancePresets) { preset in
+                            Button(preset.label) { applyPreset(preset) }
+                        }
+                    } label: {
+                        HStack {
+                            Text("Start from a preset…")
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    TextEditor(text: $customGuidance)
+                        .frame(minHeight: 80)
+                        .onChange(of: customGuidance) { _, newValue in
+                            if newValue.count > PodcastSetupView.guidanceMaxLength {
+                                customGuidance = String(newValue.prefix(PodcastSetupView.guidanceMaxLength))
+                            }
+                        }
+                    Text("\(customGuidance.count)/\(PodcastSetupView.guidanceMaxLength)")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(.secondary)
+                    Text("Tell the hosts how you'd like the show to feel. Examples: \"Lean technical, skip background.\" \"One dad joke per show, max.\"")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Duration") {
                     Slider(
                         value: $durationMinutes,
@@ -1126,6 +1251,15 @@ struct PodcastSetupView: View {
                 displayName = viewModel.user?.displayName ?? ""
                 formatPreset = viewModel.profile?.formatPreset ?? "two_hosts"
                 durationMinutes = Double(viewModel.profile?.desiredDurationMinutes ?? 3)
+                tone = viewModel.profile?.tone ?? "calm_analyst"
+                humorStyle = viewModel.profile?.humorStyle ?? "none"
+                keyFindingsCount = viewModel.profile?.keyFindingsCount ?? 3
+                personalizedGreeting = viewModel.profile?.personalizedGreeting ?? true
+                includeTopTakeaways = viewModel.profile?.includeTopTakeaways ?? true
+                includeWeather = viewModel.profile?.includeWeather ?? false
+                weatherLocation = viewModel.profile?.weatherLocation ?? ""
+                customGuidance = viewModel.profile?.customGuidance ?? ""
+                customGuidancePresetID = viewModel.profile?.customGuidancePresetID
                 applyStoredVoicesIfPossible()
                 didLoadInitialState = true
             }
@@ -1140,6 +1274,29 @@ struct PodcastSetupView: View {
             .onChange(of: voiceID) { _, _ in scheduleConfigSave(immediate: true) }
             .onChange(of: secondaryVoiceID) { _, _ in scheduleConfigSave(immediate: true) }
             .onChange(of: durationMinutes) { _, _ in scheduleConfigSave(immediate: false) }
+            .onChange(of: tone) { _, _ in
+                if !isApplyingPreset { customGuidancePresetID = nil }
+                scheduleConfigSave(immediate: true)
+            }
+            .onChange(of: humorStyle) { _, _ in
+                if !isApplyingPreset { customGuidancePresetID = nil }
+                scheduleConfigSave(immediate: true)
+            }
+            .onChange(of: keyFindingsCount) { _, _ in
+                if !isApplyingPreset { customGuidancePresetID = nil }
+                scheduleConfigSave(immediate: true)
+            }
+            .onChange(of: personalizedGreeting) { _, _ in
+                if !isApplyingPreset { customGuidancePresetID = nil }
+                scheduleConfigSave(immediate: true)
+            }
+            .onChange(of: includeTopTakeaways) { _, _ in scheduleConfigSave(immediate: true) }
+            .onChange(of: includeWeather) { _, _ in scheduleConfigSave(immediate: true) }
+            .onChange(of: weatherLocation) { _, _ in scheduleConfigSave(immediate: false) }
+            .onChange(of: customGuidance) { _, _ in
+                if !isApplyingPreset { customGuidancePresetID = nil }
+                scheduleConfigSave(immediate: false)
+            }
             .onDisappear {
                 samplePlayer.stop()
                 nameSaveTask?.cancel()
@@ -1171,6 +1328,7 @@ struct PodcastSetupView: View {
                 guard !Task.isCancelled else { return }
             }
             let secondary: String? = formatPreset == "two_hosts" ? secondaryVoiceID : nil
+            let trimmedLocation = weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
             await viewModel.savePodcastConfig(
                 title: viewModel.profile?.title ?? "ClawCast",
                 formatPreset: formatPreset,
@@ -1179,9 +1337,31 @@ struct PodcastSetupView: View {
                 guestNames: [],
                 desiredDurationMinutes: Int(durationMinutes),
                 voiceID: voiceID,
-                secondaryVoiceID: secondary
+                secondaryVoiceID: secondary,
+                tone: tone,
+                keyFindingsCount: keyFindingsCount,
+                humorStyle: humorStyle,
+                personalizedGreeting: personalizedGreeting,
+                includeTopTakeaways: includeTopTakeaways,
+                includeWeather: includeWeather,
+                weatherLocation: trimmedLocation,
+                customGuidance: customGuidance,
+                customGuidancePresetID: customGuidancePresetID
             )
         }
+    }
+
+    private func applyPreset(_ preset: GuidancePreset) {
+        isApplyingPreset = true
+        tone = preset.tone
+        humorStyle = preset.humorStyle
+        keyFindingsCount = preset.keyFindingsCount
+        personalizedGreeting = preset.personalizedGreeting
+        customGuidance = preset.guidance
+        customGuidancePresetID = preset.id
+        // Reset the guard on the next runloop tick so onChange handlers (which
+        // SwiftUI delivers after the body re-renders) all see the flag set.
+        DispatchQueue.main.async { isApplyingPreset = false }
     }
 
     @ViewBuilder
