@@ -44,6 +44,12 @@ sources:
     topic: News
     enabled: true
 
+  - id: news-last-week-denmark
+    name: Last Week in Denmark
+    rss_url: https://lastweekdk.substack.com/feed
+    topic: News
+    enabled: true
+
   # =====================================================================
   # Politics
   # =====================================================================
