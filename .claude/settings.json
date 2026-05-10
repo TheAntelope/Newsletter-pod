@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "input=$(cat); if echo \"$input\" | grep -q '\"file_path\":\"[^\"]*design-tokens[^\"]*tokens\\.json'; then cd design-tokens && npm run build; fi",
+            "command": "input=$(cat); if echo \"$input\" | grep -q '\"file_path\":\"[^\"]*design-tokens[^\"]*tokens\\.json'; then cd design-tokens && npm run build && cp dist/DesignTokens.swift ../ios/NewsletterPodApp/DesignTokens.swift; fi",
             "timeout": 60,
             "statusMessage": "Rebuilding design tokens..."
           }

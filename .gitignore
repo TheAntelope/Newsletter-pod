@@ -24,9 +24,9 @@ DerivedData/
 *.xcuserstate
 ios/build/
 
-# Design-tokens build artifacts. Generated outputs (DesignTokens.swift,
-# dist/tokens.css) ARE committed so iOS/web builds don't need npm.
-design-tokens/node_modules/
+# design-tokens/ is a submodule (TheAntelope/clawcast-tokens) — its own
+# .gitignore handles node_modules. Keep ios/NewsletterPodApp/DesignTokens.swift
+# committed so Xcode builds don't need npm; CI refreshes it from the submodule.
 
 # Local Claude Code workspace: ignore screenshots / lock files / etc.,
 # but keep settings.json under version control so project hooks travel

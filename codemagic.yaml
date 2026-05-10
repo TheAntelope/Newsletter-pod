@@ -24,14 +24,21 @@ workflows:
     scripts:
       - name: Build design tokens
         script: |
+          # design-tokens lives in a submodule (TheAntelope/clawcast-tokens).
+          # Codemagic shallow-clones without submodules by default — pull it now.
+          cd "$CM_BUILD_DIR"
+          git submodule update --init --recursive
           cd "$CM_BUILD_DIR/design-tokens"
           npm ci
           npm run build
-          # Fail the build if generated outputs drifted from the committed ones —
-          # tells the dev to run `npm run build` in design-tokens/ and commit.
+          # Refresh the iOS-side committed copy from the submodule's dist/
+          # output so Xcode sees the freshly generated file.
+          cp dist/DesignTokens.swift "$CM_BUILD_DIR/ios/NewsletterPodApp/DesignTokens.swift"
+          # Fail the build if the iOS Swift file drifted from what the submodule
+          # generates — caught when a dev edits tokens.json without re-copying.
           cd "$CM_BUILD_DIR"
-          if ! git diff --exit-code ios/NewsletterPodApp/DesignTokens.swift design-tokens/dist/; then
-            echo "ERROR: design-tokens outputs are stale. Run 'npm run build' in design-tokens/ and commit the regenerated files."
+          if ! git diff --exit-code ios/NewsletterPodApp/DesignTokens.swift; then
+            echo "ERROR: ios/NewsletterPodApp/DesignTokens.swift is stale. Update the design-tokens submodule (or run 'npm run build' inside it), copy dist/DesignTokens.swift to ios/NewsletterPodApp/, and commit."
             exit 1
           fi
       - name: Generate Xcode project
