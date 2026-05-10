@@ -71,6 +71,35 @@ final class AppViewModel: ObservableObject {
             maxDurationMinutes: 8,
             maxItemsPerEpisode: 25
         )
+        // Seed a representative profile + schedule so the Podcast Setup tab
+        // renders populated UI in screenshot tests (3/4/5-min duration picker
+        // selection, weather location row, etc.). Onboarding tests still see
+        // the wizard because showOnboarding is forced true below.
+        profile = PodcastProfileDTO(
+            title: "ClawCast",
+            formatPreset: "two_hosts",
+            hostPrimaryName: "Vinnie",
+            hostSecondaryName: "Demi",
+            guestNames: [],
+            desiredDurationMinutes: 4,
+            voiceID: nil,
+            secondaryVoiceID: nil,
+            tone: "calm_analyst",
+            keyFindingsCount: 3,
+            humorStyle: "none",
+            personalizedGreeting: true,
+            includeTopTakeaways: true,
+            includeWeather: true,
+            weatherLocation: "Copenhagen, Denmark",
+            customGuidance: nil,
+            customGuidancePresetID: nil
+        )
+        schedule = DeliveryScheduleDTO(
+            timezone: TimeZone.current.identifier,
+            weekdays: ["monday", "tuesday", "wednesday", "thursday", "friday"],
+            localTime: "07:00",
+            cutoffTime: "06:00"
+        )
         showOnboarding = true
     }
 
