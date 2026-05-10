@@ -605,7 +605,12 @@ class ControlPlaneService:
         primary_voice_id, secondary_voice_id, secondary_speaker_name = self._resolve_voice_pair(
             profile, local_date
         )
-        ux = self._build_user_ux(profile, primary_voice_id, secondary_speaker_name)
+        ux = self._build_user_ux(
+            profile,
+            primary_voice_id,
+            secondary_speaker_name,
+            listener_name=user.display_name,
+        )
         guest_name = secondary_speaker_name if profile.format_preset == "rotating_guest" else None
         prompt = build_digest_prompt(items, run_date=local_date, ux=ux)
         title_hint = f"{local_date.isoformat()} weekly briefing"
@@ -1001,6 +1006,7 @@ class ControlPlaneService:
         profile: PodcastProfileRecord,
         primary_voice_id: str,
         secondary_speaker_name: Optional[str],
+        listener_name: Optional[str] = None,
     ) -> PodcastUxConfig:
         duration = profile.desired_duration_minutes
         primary_name = self._voice_name(primary_voice_id, profile.host_primary_name or "Host")
@@ -1012,6 +1018,7 @@ class ControlPlaneService:
             target_minutes=duration,
             max_minutes=duration,
             thin_day_minutes=min(5, duration),
+            listener_name=listener_name,
         )
 
     def _build_show_notes(

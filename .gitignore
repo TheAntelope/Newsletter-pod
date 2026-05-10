@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 *.egg-info/
 .venv/
+uv.lock
 .env
 .DS_Store
 .feed_token.bin
