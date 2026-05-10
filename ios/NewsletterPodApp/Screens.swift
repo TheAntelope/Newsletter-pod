@@ -316,9 +316,9 @@ private struct GreetingHeader: View {
 
     private var greeting: String {
         guard let user = viewModel.user, user.hasFriendlyName else {
-            return "good \(timeOfDay)."
+            return "Good \(timeOfDay)."
         }
-        return "good \(timeOfDay), \(user.firstName)."
+        return "Good \(timeOfDay), \(user.firstName)."
     }
 
     private var timeOfDay: String {
