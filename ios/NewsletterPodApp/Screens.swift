@@ -2709,9 +2709,9 @@ private struct OnboardingVoicesStep: View {
 
     private var subtitle: String {
         if requiresCommentator {
-            return "Tap a voice to hear a sample. Tap a card to assign it as Anchor; tap again to switch it to Commentator. Change either later on the Podcast tab."
+            return "Your Anchor leads, your Commenter reacts. Tap a voice to make them Commenter, or tap your Commenter to swap roles. Change either later on the Podcast tab."
         }
-        return "Tap a voice to hear a sample, then pick the anchor. A different guest voice cycles in for each episode. You can change the anchor anytime on the Podcast tab."
+        return "Tap a voice to set them as Anchor. A different guest voice cycles in each episode. Change the anchor anytime on the Podcast tab."
     }
 
     var body: some View {
@@ -2749,26 +2749,25 @@ private struct OnboardingVoicesStep: View {
         return .unassigned
     }
 
-    /// Tap-to-cycle logic. Promotes a card through roles, with constraint that
-    /// at most one card holds each role.
-    /// - two_hosts:       unassigned → anchor → commentator → unassigned
-    /// - rotating_guest:  unassigned → anchor → unassigned (no commentator slot)
+    /// Tap-to-assign logic. Anchor is always pre-filled by `applyDefaultsIfEmpty`,
+    /// so tapping the anchor is a no-op (use the explicit play button to preview).
+    /// - two_hosts:      tap unassigned → becomes Commenter (replacing the current one);
+    ///                   tap Commenter  → swaps roles with Anchor.
+    /// - rotating_guest: tap any non-anchor voice → becomes Anchor.
     private func cycleRole(for voice: CatalogVoiceDTO) {
         let id = voice.id
-        switch role(for: id) {
-        case .unassigned:
-            anchorVoiceID = id
-            // If this voice held the commentator slot, drop it.
-            if commentatorVoiceID == id { commentatorVoiceID = nil }
-        case .anchor:
-            if requiresCommentator {
-                anchorVoiceID = nil
-                commentatorVoiceID = id
+        let currentRole = role(for: id)
+        guard currentRole != .anchor else { return }
+
+        if requiresCommentator {
+            if currentRole == .commentator {
+                commentatorVoiceID = anchorVoiceID
+                anchorVoiceID = id
             } else {
-                anchorVoiceID = nil
+                commentatorVoiceID = id
             }
-        case .commentator:
-            commentatorVoiceID = nil
+        } else {
+            anchorVoiceID = id
         }
     }
 
