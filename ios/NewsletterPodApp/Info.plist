@@ -26,6 +26,8 @@
 	<string>ClawCast uses the microphone to dictate your feedback when you tap the Dictate button.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>ClawCast transcribes your dictated feedback so you can submit it as text.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>ClawCast uses your location to add the local forecast to your podcast when "Include weather" is on.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

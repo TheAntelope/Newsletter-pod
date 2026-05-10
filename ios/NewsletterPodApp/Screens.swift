@@ -1,5 +1,6 @@
 import AuthenticationServices
 import AVFoundation
+import CoreLocation
 import Speech
 import StoreKit
 import SwiftUI
@@ -1117,7 +1118,16 @@ struct PodcastSetupView: View {
     @EnvironmentObject private var viewModel: AppViewModel
     @State private var displayName = ""
     @State private var formatPreset = "two_hosts"
-    @State private var durationMinutes = 3.0
+    @State private var durationMinutes: Int = 3
+    private static let durationOptions: [Int] = [3, 4, 5]
+
+    /// Snap a stored duration onto the discrete {3, 4, 5} picker. Handles
+    /// legacy profiles that were saved at 6+ minutes via the old slider.
+    private static func clampDuration(_ value: Int) -> Int {
+        if value <= 3 { return 3 }
+        if value >= 5 { return 5 }
+        return 4
+    }
     @State private var voiceID: String = PodcastSetupView.voiceOptions[0].id
     @State private var secondaryVoiceID: String = PodcastSetupView.voiceOptions[1].id
     @State private var tone: String = "calm_analyst"
@@ -1130,6 +1140,7 @@ struct PodcastSetupView: View {
     @State private var customGuidance: String = ""
     @State private var customGuidancePresetID: String? = nil
     @StateObject private var samplePlayer = VoiceSamplePlayer()
+    @StateObject private var locationResolver = LocationResolver()
     @State private var didLoadInitialState = false
     @State private var isApplyingPreset = false
     @State private var nameSaveTask: Task<Void, Never>?
@@ -1201,9 +1212,7 @@ struct PodcastSetupView: View {
                     Toggle("Include top takeaways", isOn: $includeTopTakeaways)
                     Toggle("Include weather", isOn: $includeWeather)
                     if includeWeather {
-                        TextField("City or ZIP", text: $weatherLocation)
-                            .textContentType(.addressCity)
-                            .autocorrectionDisabled()
+                        weatherLocationRow
                     }
                 }
 
@@ -1237,13 +1246,29 @@ struct PodcastSetupView: View {
                 }
 
                 Section("Duration") {
-                    Slider(
-                        value: $durationMinutes,
-                        in: Double(viewModel.entitlements?.minDurationMinutes ?? 3)...Double(viewModel.entitlements?.maxDurationMinutes ?? 8),
-                        step: 1
-                    )
-                    Text("\(Int(durationMinutes)) minutes")
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        ForEach(Self.durationOptions, id: \.self) { mins in
+                            let isSelected = durationMinutes == mins
+                            Button {
+                                durationMinutes = mins
+                            } label: {
+                                Text("\(mins)")
+                                    .font(Theme.Typography.subtitle)
+                                    .frame(width: 36, height: 36)
+                                    .background(isSelected ? Theme.Palette.amber : Color.clear, in: Circle())
+                                    .foregroundStyle(isSelected ? Color.white : Theme.Palette.ink)
+                                    .overlay(
+                                        Circle().stroke(isSelected ? Theme.Palette.amber : Theme.Palette.rule, lineWidth: 1.5)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        Spacer()
+                        Text("minutes")
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
                 }
 
                 ScheduleSection()
@@ -1254,7 +1279,7 @@ struct PodcastSetupView: View {
             .onAppear {
                 displayName = viewModel.user?.displayName ?? ""
                 formatPreset = viewModel.profile?.formatPreset ?? "two_hosts"
-                durationMinutes = Double(viewModel.profile?.desiredDurationMinutes ?? 3)
+                durationMinutes = Self.clampDuration(viewModel.profile?.desiredDurationMinutes ?? 3)
                 tone = viewModel.profile?.tone ?? "calm_analyst"
                 humorStyle = viewModel.profile?.humorStyle ?? "none"
                 keyFindingsCount = viewModel.profile?.keyFindingsCount ?? 3
@@ -1295,8 +1320,20 @@ struct PodcastSetupView: View {
                 scheduleConfigSave(immediate: true)
             }
             .onChange(of: includeTopTakeaways) { _, _ in scheduleConfigSave(immediate: true) }
-            .onChange(of: includeWeather) { _, _ in scheduleConfigSave(immediate: true) }
+            .onChange(of: includeWeather) { _, isOn in
+                scheduleConfigSave(immediate: true)
+                // Auto-detect on first opt-in if we don't already have a cached
+                // value to display. User can refresh later via the row's button.
+                if isOn, weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    locationResolver.resolve()
+                }
+            }
             .onChange(of: weatherLocation) { _, _ in scheduleConfigSave(immediate: false) }
+            .onChange(of: locationResolver.state) { _, newState in
+                if case .resolved(let name) = newState {
+                    weatherLocation = name
+                }
+            }
             .onChange(of: customGuidance) { _, _ in
                 if !isApplyingPreset { customGuidancePresetID = nil }
                 scheduleConfigSave(immediate: false)
@@ -1307,6 +1344,68 @@ struct PodcastSetupView: View {
                 configSaveTask?.cancel()
             }
         }
+    }
+
+    /// Replaces the old "City or ZIP" text field. Drives the user's saved
+    /// `weatherLocation` from `LocationResolver.state` and surfaces denial
+    /// with a Settings shortcut.
+    @ViewBuilder
+    private var weatherLocationRow: some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.s) {
+            Image(systemName: locationIconName)
+                .foregroundStyle(Theme.Palette.amberDeep)
+                .font(.system(size: 18, weight: .semibold))
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Weather location")
+                    .font(Theme.Typography.calloutStrong)
+                    .foregroundStyle(.secondary)
+                Text(weatherStatusLine)
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(Theme.Palette.ink)
+                if case .denied = locationResolver.state {
+                    Button("Open Settings") { openAppSettings() }
+                        .font(Theme.Typography.calloutStrong)
+                        .padding(.top, 2)
+                } else if locationResolver.state != .requesting {
+                    Button(weatherLocation.isEmpty ? "Use current location" : "Update") {
+                        locationResolver.resolve()
+                    }
+                    .font(Theme.Typography.calloutStrong)
+                    .padding(.top, 2)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var locationIconName: String {
+        switch locationResolver.state {
+        case .denied: return "location.slash.fill"
+        case .requesting: return "location.circle"
+        default: return "location.fill"
+        }
+    }
+
+    private var weatherStatusLine: String {
+        switch locationResolver.state {
+        case .requesting:
+            return "Detecting your location…"
+        case .denied:
+            return "Location access denied. Enable it in Settings to add weather to your podcast."
+        case .error(let message):
+            return weatherLocation.isEmpty ? "Couldn't fetch location: \(message)" : weatherLocation
+        case .resolved(let name):
+            return name
+        case .idle:
+            return weatherLocation.isEmpty ? "Tap Use current location to detect." : weatherLocation
+        }
+    }
+
+    private func openAppSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     private func scheduleNameSave(_ value: String) {
@@ -1339,7 +1438,7 @@ struct PodcastSetupView: View {
                 primaryHost: viewModel.profile?.hostPrimaryName ?? "Host",
                 secondaryHost: nil,
                 guestNames: [],
-                desiredDurationMinutes: Int(durationMinutes),
+                desiredDurationMinutes: durationMinutes,
                 voiceID: voiceID,
                 secondaryVoiceID: secondary,
                 tone: tone,
@@ -2670,6 +2769,99 @@ private final class VoiceSamplePlayer: ObservableObject {
     private func handlePlaybackEnded() {
         playingVoiceID = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    }
+}
+
+/// Resolves the device's current location to a "City, Country" string for the
+/// weather feature. Wraps CLLocationManager + CLGeocoder and exposes a small
+/// state machine so the UI can show progress / errors / a denied state.
+@MainActor
+final class LocationResolver: NSObject, ObservableObject, CLLocationManagerDelegate {
+    enum State: Equatable {
+        case idle
+        case requesting
+        case resolved(String)
+        case denied
+        case error(String)
+    }
+
+    @Published private(set) var state: State = .idle
+
+    private let manager = CLLocationManager()
+    private let geocoder = CLGeocoder()
+
+    override init() {
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyKilometer
+    }
+
+    /// Request a fresh location reading. Triggers the permission prompt on
+    /// first call; on subsequent calls just refreshes the GPS fix.
+    func resolve() {
+        switch manager.authorizationStatus {
+        case .notDetermined:
+            state = .requesting
+            manager.requestWhenInUseAuthorization()
+        case .restricted, .denied:
+            state = .denied
+        case .authorizedWhenInUse, .authorizedAlways:
+            state = .requesting
+            manager.requestLocation()
+        @unknown default:
+            state = .error("Couldn't read location authorization")
+        }
+    }
+
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
+        Task { @MainActor in
+            switch status {
+            case .authorizedWhenInUse, .authorizedAlways:
+                if case .requesting = state { manager.requestLocation() }
+            case .denied, .restricted:
+                state = .denied
+            default:
+                break
+            }
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+        Task { @MainActor in
+            await reverseGeocode(location)
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        let message = error.localizedDescription
+        Task { @MainActor in
+            state = .error(message)
+        }
+    }
+
+    @MainActor
+    private func reverseGeocode(_ location: CLLocation) async {
+        do {
+            let placemarks = try await geocoder.reverseGeocodeLocation(location)
+            guard let pm = placemarks.first else {
+                state = .error("Couldn't read place name")
+                return
+            }
+            // Prefer "City, Country"; fall back to administrativeArea (state) if
+            // locality is unavailable (e.g. rural areas, some non-US locales).
+            let primary = pm.locality ?? pm.subAdministrativeArea ?? pm.administrativeArea
+            let parts = [primary, pm.country].compactMap { $0 }.filter { !$0.isEmpty }
+            let label = parts.joined(separator: ", ")
+            if label.isEmpty {
+                state = .error("Couldn't read place name")
+            } else {
+                state = .resolved(label)
+            }
+        } catch {
+            state = .error(error.localizedDescription)
+        }
     }
 }
 
