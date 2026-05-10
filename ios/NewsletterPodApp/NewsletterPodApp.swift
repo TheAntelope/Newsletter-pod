@@ -8,6 +8,7 @@ struct NewsletterPodApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(viewModel)
+                .preferredColorScheme(.light)
                 .task {
                     await viewModel.purchaseManager.loadProducts()
                 }
