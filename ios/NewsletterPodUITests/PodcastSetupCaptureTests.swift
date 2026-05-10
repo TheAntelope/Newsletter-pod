@@ -28,8 +28,11 @@ final class PodcastSetupCaptureTests: XCTestCase {
         XCTAssertTrue(podcastTab.waitForExistence(timeout: 8), "Podcast tab not found")
         podcastTab.tap()
 
+        // The inline navigationTitle ("Podcast Setup") isn't queryable as a
+        // staticText in XCUITest, so wait for a Form section header that we
+        // know renders inside PodcastSetupView.
         XCTAssertTrue(
-            app.staticTexts["Podcast Setup"].waitForExistence(timeout: 5),
+            app.staticTexts["Format"].waitForExistence(timeout: 8),
             "Podcast Setup screen did not appear"
         )
 
