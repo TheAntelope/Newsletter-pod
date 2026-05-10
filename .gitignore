@@ -16,6 +16,7 @@ uv.lock
 tmp-live-episode.mp3
 sample_episode.mp3
 welcome_v*.mp3
+weekly_changes.json
 build/
 DerivedData/
 *.xcworkspace

@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir .
 COPY newsletter_pod ./newsletter_pod
 COPY sources.yml ./sources.yml
 COPY voices.yml ./voices.yml
+COPY weekly_changes.json ./weekly_changes.json
 
 EXPOSE 8080
 

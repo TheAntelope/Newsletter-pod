@@ -4,6 +4,7 @@ import logging
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -23,6 +24,7 @@ from .prompting import build_digest_prompt
 from .storage import AudioStorage
 from .weather import fetch_weather_summary
 from .translation import TranslationError, translate_to_english
+from .weekly_update import iso_week_key, load_recent_commits
 from .user_models import (
     BillingEventRecord,
     CostRecord,
@@ -41,6 +43,8 @@ from .user_repository import ControlPlaneRepository
 
 logger = logging.getLogger(__name__)
 from .utils import link_hash, utc_now
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 WELCOME_EPISODE_TITLE = "Welcome to ClawCast"
 WELCOME_EPISODE_DESCRIPTION = (
@@ -657,6 +661,14 @@ class ControlPlaneService:
             listener_name=user.display_name,
             weather_summary=weather_summary,
         )
+        current_iso_week = iso_week_key(local_date)
+        weekly_update_due = user.last_weekly_update_iso_week != current_iso_week
+        if weekly_update_due:
+            commits = load_recent_commits(project_root=_PROJECT_ROOT)
+            if commits:
+                ux.weekly_update_commits = commits
+            else:
+                weekly_update_due = False
         guest_name = secondary_speaker_name if profile.format_preset == "rotating_guest" else None
         prompt = build_digest_prompt(items, run_date=local_date, ux=ux)
         title_hint = f"{local_date.isoformat()} weekly briefing"
@@ -706,6 +718,10 @@ class ControlPlaneService:
         )
         self.repository.save_user_episode(episode)
         self.repository.update_user_source_cursors(user_id, ingestion.cursor_updates)
+        if weekly_update_due:
+            user.last_weekly_update_iso_week = current_iso_week
+            user.updated_at = utc_now()
+            self.repository.save_user(user)
 
         cost_estimate = estimate_generation_cost(
             prompt_text=prompt,

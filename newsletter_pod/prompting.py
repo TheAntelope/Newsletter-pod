@@ -83,6 +83,13 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
         host_structure.append(
             f"- End with a brief wrap-up and the top {ux.key_findings_count} takeaways."
         )
+    if ux.weekly_update_commits:
+        host_structure.append(
+            "- After the wrap-up and before the final sign-off, add a roughly "
+            "one-minute \"This week at ClawCast\" segment narrated by the primary "
+            "host. End that segment with a friendly note that the listener can "
+            "share feedback from the home page of the ClawCast app."
+        )
     host_structure.append(
         "- Close with a short, clear sign-off so the listener knows the episode "
         "is over (for example: \"That's it for today — see you next time.\")."
@@ -125,6 +132,32 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
     ]
     if listener_prefs:
         lines += ["Listener preferences:", *listener_prefs]
+    if ux.weekly_update_commits:
+        lines += [
+            "This week at ClawCast (raw change log — DO NOT read verbatim):",
+            "- The list below comes straight from engineering commit messages. "
+            "Use it as raw material only.",
+            "- Keep ONLY changes a listener would actually notice in the app or "
+            "the podcast. Skip anything technical: refactors, infrastructure, "
+            "deploys, migrations, internal renames, build tooling, tests.",
+            "- Translate engineering language into plain, friendly listener "
+            "language (e.g. \"per-user dispatch worker\" -> skip; \"new voice "
+            "options\" -> mention).",
+            "- Tone: warm, fun, helpful — like a host sharing what's new. Not "
+            "a press release, not a changelog readout.",
+            "- Target about 150 spoken words (roughly one minute) for this "
+            "segment. If nothing on the list is listener-noticeable, keep it "
+            "to one short sentence acknowledging quiet polish behind the scenes.",
+            "- Sign that segment off with a brief invitation to leave feedback "
+            "from the home page of the ClawCast app, then continue to the "
+            "regular episode sign-off.",
+            "Recent commits:",
+        ]
+        for commit_subject in ux.weekly_update_commits:
+            cleaned = commit_subject.strip()
+            if cleaned:
+                lines.append(f"- {cleaned}")
+        lines.append("")
     lines += [
         "Attribution requirements:",
         "- Keep spoken attribution light and natural by source name when relevant.",

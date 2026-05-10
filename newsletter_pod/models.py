@@ -71,6 +71,7 @@ class PodcastUxConfig(BaseModel):
     include_top_takeaways: bool = True
     custom_guidance: Optional[str] = None
     weather_summary: Optional[str] = None
+    weekly_update_commits: Optional[list[str]] = None
 
 
 class GeneratedEpisode(BaseModel):

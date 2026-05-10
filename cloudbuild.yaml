@@ -1,6 +1,15 @@
 steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: snapshot-weekly-changes
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        python3 scripts/snapshot_weekly_changes.py --days 21
+
   - name: gcr.io/cloud-builders/docker
     id: build
+    waitFor: ["snapshot-weekly-changes"]
     args:
       - build
       - -t

@@ -1,0 +1,32 @@
+# Mirrors .gitignore for `gcloud builds submit`, with one critical
+# difference: we do NOT exclude .git/. The cloudbuild.yaml snapshot step
+# runs `git log` to produce weekly_changes.json before docker build.
+
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+uv.lock
+.env
+.DS_Store
+.feed_token.bin
+.job_token.bin
+.job_token.txt
+.gcloud-proxy*.log
+.uvicorn*.log
+tmp-live-episode.mp3
+sample_episode.mp3
+welcome_v*.mp3
+build/
+DerivedData/
+*.xcworkspace
+*.xcodeproj/xcuserdata/
+*.xcuserstate
+ios/build/
+ios/
+design-tokens/node_modules/
+.claude/
+.gcloudignore

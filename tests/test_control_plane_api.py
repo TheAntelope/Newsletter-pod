@@ -462,3 +462,150 @@ def test_process_user_generation_records_visible_cap(monkeypatch):
     assert "**Sources**" in description
     assert "- **Source A** — [Story Two](https://example.com/2)" in description
     assert "https://example.com/1" not in description
+
+
+def test_weekly_update_segment_stamps_user_once_per_iso_week(monkeypatch):
+    from newsletter_pod import control_plane as cp_module
+
+    container, client = _build_app()
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier(
+        "weekly-user", "weekly@example.com"
+    )
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    user_id = auth.json()["user"]["id"]
+    session_token = auth.json()["session_token"]
+    headers = {"Authorization": f"Bearer {session_token}"}
+
+    catalog = client.get("/v1/sources/catalog").json()["sources"]
+    client.put(
+        "/v1/me/sources",
+        json={"sources": [{"source_id": catalog[0]["source_id"]}]},
+        headers=headers,
+    )
+    container.control_plane.podcast_client = FakePodcastClient()
+
+    captured_prompts: list[str] = []
+
+    class CapturingPodcastClient(FakePodcastClient):
+        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None):
+            captured_prompts.append(prompt)
+            return super().generate(
+                prompt,
+                title,
+                voice_id=voice_id,
+                secondary_voice_id=secondary_voice_id,
+                primary_speaker_name=primary_speaker_name,
+            )
+
+    container.control_plane.podcast_client = CapturingPodcastClient()
+
+    def fake_fetch(self, sources):
+        return IngestionResult(
+            items=[
+                SourceItem(
+                    source_id="source-a",
+                    source_name="Source A",
+                    guid="1",
+                    link="https://example.com/1",
+                    title="Story",
+                    summary="Summary",
+                    published_at=datetime(2026, 5, 4, 8, 0, tzinfo=timezone.utc),
+                    dedupe_key="1",
+                ),
+            ],
+            cursor_updates={"source-a": datetime(2026, 5, 4, 8, 0, tzinfo=timezone.utc)},
+        )
+
+    monkeypatch.setattr(RSSIngestionService, "fetch_new_items", fake_fetch)
+    monkeypatch.setattr(
+        cp_module,
+        "load_recent_commits",
+        lambda project_root: ["Add Last Week in Denmark to default News sources"],
+    )
+
+    first = client.post(
+        "/jobs/process-user-podcast", json={"user_id": user_id, "force": True}
+    )
+    assert first.status_code == 200
+    assert "This week at ClawCast" in captured_prompts[0]
+
+    user_after_first = container.control_repository.get_user(user_id)
+    assert user_after_first is not None
+    stamped_week = user_after_first.last_weekly_update_iso_week
+    assert stamped_week is not None
+    assert stamped_week.startswith(str(datetime.now(timezone.utc).year))
+
+    # Second run in the same ISO week should NOT include the segment.
+    second = client.post(
+        "/jobs/process-user-podcast", json={"user_id": user_id, "force": True}
+    )
+    assert second.status_code == 200
+    assert len(captured_prompts) == 2
+    assert "This week at ClawCast" not in captured_prompts[1]
+
+    # Stamp is unchanged.
+    user_after_second = container.control_repository.get_user(user_id)
+    assert user_after_second.last_weekly_update_iso_week == stamped_week
+
+
+def test_weekly_update_segment_skipped_when_no_commits(monkeypatch):
+    from newsletter_pod import control_plane as cp_module
+
+    container, client = _build_app()
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier(
+        "weekly-empty-user", "weekly2@example.com"
+    )
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    user_id = auth.json()["user"]["id"]
+    session_token = auth.json()["session_token"]
+    headers = {"Authorization": f"Bearer {session_token}"}
+
+    catalog = client.get("/v1/sources/catalog").json()["sources"]
+    client.put(
+        "/v1/me/sources",
+        json={"sources": [{"source_id": catalog[0]["source_id"]}]},
+        headers=headers,
+    )
+
+    captured_prompts: list[str] = []
+
+    class CapturingPodcastClient(FakePodcastClient):
+        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None):
+            captured_prompts.append(prompt)
+            return super().generate(
+                prompt,
+                title,
+                voice_id=voice_id,
+                secondary_voice_id=secondary_voice_id,
+                primary_speaker_name=primary_speaker_name,
+            )
+
+    container.control_plane.podcast_client = CapturingPodcastClient()
+
+    def fake_fetch(self, sources):
+        return IngestionResult(
+            items=[
+                SourceItem(
+                    source_id="source-a",
+                    source_name="Source A",
+                    guid="1",
+                    link="https://example.com/1",
+                    title="Story",
+                    summary="Summary",
+                    published_at=datetime(2026, 5, 4, 8, 0, tzinfo=timezone.utc),
+                    dedupe_key="1",
+                ),
+            ],
+            cursor_updates={"source-a": datetime(2026, 5, 4, 8, 0, tzinfo=timezone.utc)},
+        )
+
+    monkeypatch.setattr(RSSIngestionService, "fetch_new_items", fake_fetch)
+    monkeypatch.setattr(cp_module, "load_recent_commits", lambda project_root: [])
+
+    response = client.post(
+        "/jobs/process-user-podcast", json={"user_id": user_id, "force": True}
+    )
+    assert response.status_code == 200
+    assert "This week at ClawCast" not in captured_prompts[0]
+    user_after = container.control_repository.get_user(user_id)
+    assert user_after.last_weekly_update_iso_week is None

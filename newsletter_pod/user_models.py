@@ -15,6 +15,7 @@ class UserRecord(BaseModel):
     display_name: str = "Listener"
     timezone: str = "UTC"
     inbound_alias: Optional[str] = None
+    last_weekly_update_iso_week: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

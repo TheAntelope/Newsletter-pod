@@ -238,6 +238,41 @@ def test_prompt_wraps_custom_guidance_with_safety_framing():
     assert "Lean technical, assume I'm a developer." in prompt
 
 
+def test_prompt_omits_weekly_update_section_by_default():
+    prompt = build_digest_prompt(
+        _items_three(),
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(),
+    )
+
+    assert "This week at ClawCast" not in prompt
+    assert "Recent commits:" not in prompt
+
+
+def test_prompt_includes_weekly_update_section_when_commits_present():
+    prompt = build_digest_prompt(
+        _items_three(),
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(
+            weekly_update_commits=[
+                "Add Last Week in Denmark to default News sources",
+                "Show generation progress on home page during regenerate",
+                "Refactor cursor adapter for legibility",
+            ],
+        ),
+    )
+
+    assert "This week at ClawCast" in prompt
+    assert "Recent commits:" in prompt
+    assert "- Add Last Week in Denmark to default News sources" in prompt
+    assert "- Show generation progress on home page during regenerate" in prompt
+    assert "Skip anything technical" in prompt
+    assert "warm, fun, helpful" in prompt
+    assert "150 spoken words" in prompt
+    assert "feedback from the home page of the ClawCast app" in prompt
+    assert "After the wrap-up and before the final sign-off" in prompt
+
+
 def test_prompt_switches_to_thin_day_runtime_guidance():
     items = [
         SourceItem(
