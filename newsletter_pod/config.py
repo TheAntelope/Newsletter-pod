@@ -96,6 +96,16 @@ class Settings(BaseSettings):
     swipe_ranker_enabled: bool = Field(default=False, alias="SWIPE_RANKER_ENABLED")
     swipe_ranker_min_swipes: int = Field(default=5, alias="SWIPE_RANKER_MIN_SWIPES")
 
+    # Cold-start swipe deck (Phase 3). The deck is global, recomputed lazily
+    # on the first request after the TTL expires. Recent-items deck is per-user,
+    # never cached, drawn from items the user's currently-attached sources
+    # produced within the lookback window.
+    cold_start_deck_size: int = Field(default=20, alias="COLD_START_DECK_SIZE")
+    cold_start_deck_ttl_hours: int = Field(default=168, alias="COLD_START_DECK_TTL_HOURS")
+    cold_start_corpus_limit: int = Field(default=5000, alias="COLD_START_CORPUS_LIMIT")
+    recent_deck_size: int = Field(default=5, alias="RECENT_DECK_SIZE")
+    recent_deck_lookback_days: int = Field(default=14, alias="RECENT_DECK_LOOKBACK_DAYS")
+
     gcs_bucket_name: Optional[str] = Field(default=None, alias="GCS_BUCKET_NAME")
     gcs_prefix: str = Field(default="episodes", alias="GCS_PREFIX")
 

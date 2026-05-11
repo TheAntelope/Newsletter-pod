@@ -44,6 +44,19 @@ class SourceItem(BaseModel):
     dedupe_key: str
 
 
+class SwipeDeckRecord(BaseModel):
+    """Cached output of the cold-start k-means deck computation. Singleton per
+    deck_id (currently only `cold_start`). Refreshed lazily when older than
+    its TTL.
+    """
+
+    id: str
+    dedupe_keys: list[str]
+    corpus_size: int
+    computed_at: datetime
+    version: str = "v1"
+
+
 class SourceItemRecord(BaseModel):
     """Persistent form of a SourceItem — first-class doc in the source_items collection.
 

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from google.cloud import firestore
 
-from .models import SourceItemRecord
+from .models import SourceItemRecord, SwipeDeckRecord
+from .utils import utc_now
 from .user_models import (
     BillingEventRecord,
     CostRecord,
@@ -106,6 +107,27 @@ class ControlPlaneRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_embedded_source_items(self, limit: int = 5000) -> list[SourceItemRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_recent_source_items_for_sources(
+        self,
+        source_ids: list[str],
+        lookback_days: int,
+        limit: int,
+    ) -> list[SourceItemRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_swipe_deck(self, deck: SwipeDeckRecord) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_swipe_deck(self, deck_id: str) -> Optional[SwipeDeckRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
     def save_user_episode(self, episode: UserEpisodeRecord) -> None:
         raise NotImplementedError
 
@@ -201,6 +223,7 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         self._feedback: dict[str, FeedbackRecord] = {}
         self._source_items: dict[str, SourceItemRecord] = {}
         self._swipes: dict[str, SwipeRecord] = {}
+        self._swipe_decks: dict[str, SwipeDeckRecord] = {}
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         return self._users.get(user_id)
@@ -276,6 +299,37 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
 
     def get_source_items(self, dedupe_keys: list[str]) -> list[SourceItemRecord]:
         return [self._source_items[key] for key in dedupe_keys if key in self._source_items]
+
+    def list_embedded_source_items(self, limit: int = 5000) -> list[SourceItemRecord]:
+        items = [record for record in self._source_items.values() if record.embedding]
+        items.sort(key=lambda record: record.last_seen_at, reverse=True)
+        return items[:limit]
+
+    def list_recent_source_items_for_sources(
+        self,
+        source_ids: list[str],
+        lookback_days: int,
+        limit: int,
+    ) -> list[SourceItemRecord]:
+        if not source_ids or limit <= 0:
+            return []
+        source_id_set = set(source_ids)
+        cutoff = utc_now() - timedelta(days=lookback_days)
+        items = [
+            record
+            for record in self._source_items.values()
+            if record.source_id in source_id_set
+            and record.embedding
+            and record.last_seen_at >= cutoff
+        ]
+        items.sort(key=lambda record: record.last_seen_at, reverse=True)
+        return items[:limit]
+
+    def save_swipe_deck(self, deck: SwipeDeckRecord) -> None:
+        self._swipe_decks[deck.id] = deck.model_copy()
+
+    def get_swipe_deck(self, deck_id: str) -> Optional[SwipeDeckRecord]:
+        return self._swipe_decks.get(deck_id)
 
     def save_user_episode(self, episode: UserEpisodeRecord) -> None:
         self._episodes[episode.id] = episode
@@ -371,6 +425,7 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         self._feedback = self._db.collection(f"{collection_prefix}_feedback")
         self._source_items = self._db.collection(f"{collection_prefix}_source_items")
         self._swipes = self._db.collection(f"{collection_prefix}_swipes")
+        self._swipe_decks = self._db.collection(f"{collection_prefix}_swipe_decks")
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         doc = self._users.document(user_id).get()
@@ -497,6 +552,61 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
                 continue
             records.append(SourceItemRecord.model_validate(doc.to_dict()))
         return records
+
+    def list_embedded_source_items(self, limit: int = 5000) -> list[SourceItemRecord]:
+        # Firestore can't filter on "field is non-null" directly; we order by
+        # embedded_at (which is only set once an embedding is stored) and treat
+        # the order_by as the de-facto null filter.
+        docs = list(
+            self._source_items
+                .order_by("embedded_at", direction=firestore.Query.DESCENDING)
+                .limit(limit)
+                .stream()
+        )
+        records: list[SourceItemRecord] = []
+        for doc in docs:
+            data = doc.to_dict() or {}
+            if not data.get("embedding"):
+                continue
+            records.append(SourceItemRecord.model_validate(data))
+        return records
+
+    def list_recent_source_items_for_sources(
+        self,
+        source_ids: list[str],
+        lookback_days: int,
+        limit: int,
+    ) -> list[SourceItemRecord]:
+        if not source_ids or limit <= 0:
+            return []
+        cutoff = utc_now() - timedelta(days=lookback_days)
+        # Firestore "in" queries are limited to 30 values per query; chunk the
+        # source list and merge results in app code.
+        results: list[SourceItemRecord] = []
+        for chunk_start in range(0, len(source_ids), 30):
+            chunk = source_ids[chunk_start : chunk_start + 30]
+            docs = list(
+                self._source_items
+                    .where("source_id", "in", chunk)
+                    .where("last_seen_at", ">=", cutoff)
+                    .stream()
+            )
+            for doc in docs:
+                data = doc.to_dict() or {}
+                if not data.get("embedding"):
+                    continue
+                results.append(SourceItemRecord.model_validate(data))
+        results.sort(key=lambda record: record.last_seen_at, reverse=True)
+        return results[:limit]
+
+    def save_swipe_deck(self, deck: SwipeDeckRecord) -> None:
+        self._swipe_decks.document(deck.id).set(deck.model_dump(mode="python"))
+
+    def get_swipe_deck(self, deck_id: str) -> Optional[SwipeDeckRecord]:
+        doc = self._swipe_decks.document(deck_id).get()
+        if not doc.exists:
+            return None
+        return SwipeDeckRecord.model_validate(doc.to_dict())
 
     def save_user_episode(self, episode: UserEpisodeRecord) -> None:
         self._episodes.document(episode.id).set(episode.model_dump(mode="python"))

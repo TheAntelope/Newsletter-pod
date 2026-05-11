@@ -20,12 +20,13 @@ from .inbound import ensure_user_inbound_alias
 from .ingestion import RSSIngestionService
 from .interest_vector import compute_user_vector
 from .mailer import Mailer
-from .models import PodcastUxConfig, PublishStatus, SourceDefinition, SourceItem, SourceItemRef
+from .models import PodcastUxConfig, PublishStatus, SourceDefinition, SourceItem, SourceItemRecord, SourceItemRef
 from .podcast_api import PodcastApiClient
 from .prompting import build_digest_prompt
 from .ranker import rank_items
 from .source_persistence import SourceItemPersistenceService
 from .storage import AudioStorage
+from .swipe_deck import SwipeDeckService
 from .weather import fetch_weather_summary
 from .translation import TranslationError, translate_to_english
 from .weekly_update import iso_week_key, load_recent_commits
@@ -156,6 +157,10 @@ class ControlPlaneService:
             repository=self.repository,
             embeddings=self.embedding_provider,
         )
+        self._swipe_deck_service = SwipeDeckService(
+            repository=self.repository,
+            config=self.settings,
+        )
 
     def authenticate_with_apple(
         self,
@@ -247,6 +252,18 @@ class ControlPlaneService:
         )
         self.repository.save_feedback(record)
         return record.model_dump(mode="json")
+
+    def get_cold_start_swipe_deck(self, user_id: str) -> dict[str, Any]:
+        self._require_user(user_id)
+        records = self._swipe_deck_service.get_cold_start_deck(user_id)
+        return {"items": [_swipe_card_payload(record) for record in records]}
+
+    def get_recent_swipe_deck(self, user_id: str) -> dict[str, Any]:
+        self._require_user(user_id)
+        sources = self.repository.list_user_sources(user_id)
+        source_ids = [source.source_id for source in sources if source.enabled]
+        records = self._swipe_deck_service.get_recent_deck(user_id, source_ids)
+        return {"items": [_swipe_card_payload(record) for record in records]}
 
     def submit_swipe(
         self,
@@ -1262,6 +1279,18 @@ def _validate_timezone(timezone_name: str) -> None:
         ZoneInfo(timezone_name)
     except Exception as exc:  # pragma: no cover
         raise ControlPlaneError(f"Unknown timezone: {timezone_name}") from exc
+
+
+def _swipe_card_payload(record: SourceItemRecord) -> dict[str, Any]:
+    return {
+        "source_item_dedupe_key": record.dedupe_key,
+        "title": record.title,
+        "summary": record.summary,
+        "source_id": record.source_id,
+        "source_name": record.source_name,
+        "link": record.link,
+        "published_at": record.published_at.isoformat(),
+    }
 
 
 def _normalize_weekday(value: str) -> str:

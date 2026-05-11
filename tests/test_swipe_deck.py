@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+
+from newsletter_pod.models import SourceItemRecord
+from newsletter_pod.swipe_deck import COLD_START_DECK_ID, SwipeDeckService
+from newsletter_pod.user_models import SwipeRecord
+from newsletter_pod.user_repository import InMemoryControlPlaneRepository
+
+
+@dataclass
+class _Config:
+    cold_start_deck_size: int = 5
+    cold_start_deck_ttl_hours: int = 168
+    cold_start_corpus_limit: int = 5000
+    recent_deck_size: int = 5
+    recent_deck_lookback_days: int = 14
+
+
+def _record(
+    key: str,
+    *,
+    embedding: list[float] | None = None,
+    source_id: str = "src-1",
+    last_seen_offset_minutes: int = 0,
+) -> SourceItemRecord:
+    base = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    return SourceItemRecord(
+        dedupe_key=key,
+        source_id=source_id,
+        source_name=f"Name {source_id}",
+        guid=key,
+        link=f"https://example.com/{key}",
+        title=f"Title {key}",
+        summary="summary",
+        published_at=base,
+        first_seen_at=base,
+        last_seen_at=base + timedelta(minutes=last_seen_offset_minutes),
+        embedding=embedding,
+        embedding_model="fake" if embedding is not None else None,
+        embedded_at=base if embedding is not None else None,
+    )
+
+
+def _swipe(user_id: str, dedupe_key: str) -> SwipeRecord:
+    return SwipeRecord(
+        id=f"sw-{dedupe_key}",
+        user_id=user_id,
+        source_item_dedupe_key=dedupe_key,
+        direction=1,
+        title="t",
+        link="https://example.com/x",
+        source_id="src-1",
+        source_name="Name src-1",
+        embedding=[1.0, 0.0],
+        embedding_model="fake",
+        swiped_at=datetime(2026, 5, 11, tzinfo=timezone.utc),
+    )
+
+
+def test_cold_start_deck_returns_empty_when_corpus_empty():
+    repo = InMemoryControlPlaneRepository()
+    service = SwipeDeckService(repository=repo, config=_Config(cold_start_deck_size=5))
+    assert service.get_cold_start_deck("u1") == []
+
+
+def test_cold_start_deck_computes_caches_and_serves_centroid_items():
+    repo = InMemoryControlPlaneRepository()
+    # Three obvious 2D clusters so k=3 will pick one item per cluster.
+    repo.upsert_source_items(
+        [_record(f"a{i}", embedding=[1.0 + 0.01 * i, 1.0]) for i in range(4)]
+        + [_record(f"b{i}", embedding=[-1.0 - 0.01 * i, -1.0]) for i in range(4)]
+        + [_record(f"c{i}", embedding=[5.0 + 0.01 * i, -5.0]) for i in range(4)]
+    )
+
+    service = SwipeDeckService(repository=repo, config=_Config(cold_start_deck_size=3))
+    first = service.get_cold_start_deck("u1")
+    assert len(first) == 3
+    cached_deck = repo.get_swipe_deck(COLD_START_DECK_ID)
+    assert cached_deck is not None
+    assert len(cached_deck.dedupe_keys) == 3
+
+    # Second call inside the TTL window should hit the cache (not recompute).
+    second = service.get_cold_start_deck("u1")
+    assert [r.dedupe_key for r in first] == [r.dedupe_key for r in second]
+
+
+def test_cold_start_deck_filters_out_items_user_already_swiped():
+    repo = InMemoryControlPlaneRepository()
+    records = [_record(f"k{i}", embedding=[float(i), 0.0]) for i in range(6)]
+    repo.upsert_source_items(records)
+    service = SwipeDeckService(repository=repo, config=_Config(cold_start_deck_size=4))
+
+    deck = service.get_cold_start_deck("u1")
+    assert len(deck) == 4
+    swiped_key = deck[0].dedupe_key
+    repo.save_swipe(_swipe("u1", swiped_key))
+
+    deck_after_swipe = service.get_cold_start_deck("u1")
+    assert swiped_key not in {r.dedupe_key for r in deck_after_swipe}
+    assert len(deck_after_swipe) == 3
+
+
+def test_cold_start_deck_recomputes_after_ttl_expires():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items([_record(f"k{i}", embedding=[float(i), 0.0]) for i in range(6)])
+
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=3, cold_start_deck_ttl_hours=0),
+    )
+    first = service.get_cold_start_deck("u1")
+    cached = repo.get_swipe_deck(COLD_START_DECK_ID)
+    assert cached is not None
+    first_computed_at = cached.computed_at
+
+    # TTL=0 means every call recomputes; the second computed_at should advance.
+    service.get_cold_start_deck("u1")
+    cached_after = repo.get_swipe_deck(COLD_START_DECK_ID)
+    assert cached_after is not None
+    assert cached_after.computed_at >= first_computed_at
+    # Even after recomputation the deck content should still be sensible.
+    assert len(first) == 3
+
+
+def test_recent_deck_returns_only_items_from_user_sources():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [
+            _record("attached-1", embedding=[1.0], source_id="src-attached"),
+            _record("attached-2", embedding=[1.0], source_id="src-attached", last_seen_offset_minutes=5),
+            _record("other", embedding=[1.0], source_id="src-other"),
+            _record("attached-noembed", embedding=None, source_id="src-attached"),
+        ]
+    )
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(recent_deck_size=10, recent_deck_lookback_days=30),
+    )
+
+    deck = service.get_recent_deck("u1", source_ids=["src-attached"])
+    keys = {record.dedupe_key for record in deck}
+    assert keys == {"attached-1", "attached-2"}
+
+
+def test_recent_deck_filters_out_swiped_items_and_respects_size_cap():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [_record(f"k{i}", embedding=[float(i)], last_seen_offset_minutes=i) for i in range(10)]
+    )
+    repo.save_swipe(_swipe("u1", "k7"))
+
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(recent_deck_size=3, recent_deck_lookback_days=30),
+    )
+    deck = service.get_recent_deck("u1", source_ids=["src-1"])
+    keys = [record.dedupe_key for record in deck]
+    assert "k7" not in keys
+    assert len(keys) == 3

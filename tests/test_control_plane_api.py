@@ -328,6 +328,121 @@ def test_apply_swipe_ranker_orders_items_by_user_vector_when_enabled():
     assert [item.dedupe_key for item in ranked] == ["east", "north"]
 
 
+def test_cold_start_swipe_deck_endpoint_returns_centroid_items():
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("deck-cold-user", "dc@example.com"))
+
+    # Three obvious clusters in 2D space; deck size of 3 should land one per cluster.
+    for cluster_index, base_x in enumerate((1.0, -1.0, 5.0)):
+        for offset in range(3):
+            _seed_source_item(
+                container,
+                f"cluster-{cluster_index}-{offset}",
+                embedding=[base_x + 0.01 * offset, base_x],
+            )
+
+    container.control_plane.settings.cold_start_deck_size = 3
+    resp = client.get("/v1/me/swipe-deck/cold-start", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "items" in body
+    assert len(body["items"]) == 3
+    item = body["items"][0]
+    assert {
+        "source_item_dedupe_key",
+        "title",
+        "summary",
+        "source_id",
+        "source_name",
+        "link",
+        "published_at",
+    } <= item.keys()
+
+
+def test_cold_start_deck_drops_items_after_user_swipes_on_them():
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("deck-skip-user", "ds@example.com"))
+
+    for i in range(6):
+        _seed_source_item(container, f"k{i}", embedding=[float(i), 0.0])
+    container.control_plane.settings.cold_start_deck_size = 4
+
+    first = client.get("/v1/me/swipe-deck/cold-start", headers=headers).json()["items"]
+    swiped_key = first[0]["source_item_dedupe_key"]
+    assert client.post(
+        "/v1/me/swipes",
+        json={"source_item_dedupe_key": swiped_key, "direction": 1},
+        headers=headers,
+    ).status_code == 201
+
+    second = client.get("/v1/me/swipe-deck/cold-start", headers=headers).json()["items"]
+    second_keys = {item["source_item_dedupe_key"] for item in second}
+    assert swiped_key not in second_keys
+
+
+def test_recent_deck_endpoint_returns_items_from_user_sources_only():
+    from datetime import datetime, timezone
+
+    from newsletter_pod.user_models import UserSourceRecord
+
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("deck-recent-user", "dr@example.com"))
+
+    users = list(container.control_repository._users.values())
+    assert users, "auth flow should have created the user"
+    user_id = users[0].id
+
+    # Attach a single source to the user, and seed two items per source — only
+    # items from the attached source should come back.
+    container.control_repository.replace_user_sources(
+        user_id,
+        [
+            UserSourceRecord(
+                id=f"{user_id}:src-mine",
+                user_id=user_id,
+                source_id="src-mine",
+                name="Mine",
+                rss_url="https://example.com/rss-mine",
+                created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+                updated_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+            )
+        ],
+    )
+
+    _seed_source_item_with_source(container, "mine-1", source_id="src-mine", embedding=[1.0, 0.0])
+    _seed_source_item_with_source(container, "mine-2", source_id="src-mine", embedding=[1.0, 0.0])
+    _seed_source_item_with_source(container, "other-1", source_id="src-other", embedding=[1.0, 0.0])
+
+    resp = client.get("/v1/me/swipe-deck/recent", headers=headers)
+    assert resp.status_code == 200
+    keys = {item["source_item_dedupe_key"] for item in resp.json()["items"]}
+    assert keys == {"mine-1", "mine-2"}
+
+
+def _seed_source_item_with_source(container, dedupe_key: str, *, source_id: str, embedding) -> None:
+    from datetime import datetime, timezone
+
+    from newsletter_pod.models import SourceItemRecord
+
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    record = SourceItemRecord(
+        dedupe_key=dedupe_key,
+        source_id=source_id,
+        source_name=f"Name {source_id}",
+        guid=dedupe_key,
+        link=f"https://example.com/{dedupe_key}",
+        title=f"Title {dedupe_key}",
+        summary="summary",
+        published_at=now,
+        first_seen_at=now,
+        last_seen_at=now,
+        embedding=embedding,
+        embedding_model="fake" if embedding is not None else None,
+        embedded_at=now if embedding is not None else None,
+    )
+    container.control_repository.upsert_source_items([record])
+
+
 def test_voice_catalog_returns_only_enabled_voices():
     container, client = _build_app()
     catalog = client.get("/v1/voices/catalog")

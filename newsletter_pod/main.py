@@ -340,6 +340,18 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    @app.get("/v1/me/swipe-deck/cold-start")
+    def get_cold_start_swipe_deck(authorization: str | None = Header(default=None)) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        return container.control_plane.get_cold_start_swipe_deck(user.id)
+
+    @app.get("/v1/me/swipe-deck/recent")
+    def get_recent_swipe_deck(authorization: str | None = Header(default=None)) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        return container.control_plane.get_recent_swipe_deck(user.id)
+
     @app.get("/v1/me/episodes")
     def list_my_episodes(authorization: str | None = Header(default=None)) -> dict:
         user = _require_session_user(container, authorization)
