@@ -44,6 +44,29 @@ class SourceItem(BaseModel):
     dedupe_key: str
 
 
+class SourceItemRecord(BaseModel):
+    """Persistent form of a SourceItem — first-class doc in the source_items collection.
+
+    Document id is the dedupe_key. embedding/embedded_at are populated by the
+    embedding pipeline; they are nullable so an item can be persisted before
+    the embedding call (or when the embedding provider is disabled).
+    """
+
+    dedupe_key: str
+    source_id: str
+    source_name: str
+    guid: Optional[str] = None
+    link: str
+    title: str
+    summary: str
+    published_at: datetime
+    first_seen_at: datetime
+    last_seen_at: datetime
+    embedding: Optional[list[float]] = None
+    embedding_model: Optional[str] = None
+    embedded_at: Optional[datetime] = None
+
+
 class SourceItemRef(BaseModel):
     source_id: str
     source_name: str

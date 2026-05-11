@@ -77,6 +77,25 @@ class Settings(BaseSettings):
     podcast_thin_day_minutes: int = Field(default=2, alias="PODCAST_THIN_DAY_MINUTES")
     podcast_bootstrap_max_items_per_source: int = Field(default=3, alias="PODCAST_BOOTSTRAP_MAX_ITEMS_PER_SOURCE")
 
+    # Source-item embeddings (Phase 1 of the swipe-based interest learning workstream).
+    # When enabled, every fetched item is upserted to the source_items collection and
+    # embedded with the configured OpenAI model. The api_key falls back to podcast_api_key
+    # so a single OpenAI key can drive both script generation and embeddings.
+    source_item_embeddings_enabled: bool = Field(default=False, alias="SOURCE_ITEM_EMBEDDINGS_ENABLED")
+    openai_embedding_api_key: Optional[str] = Field(default=None, alias="OPENAI_EMBEDDING_API_KEY")
+    openai_embedding_model: str = Field(default="text-embedding-3-small", alias="OPENAI_EMBEDDING_MODEL")
+    openai_embedding_endpoint: str = Field(
+        default="https://api.openai.com/v1/embeddings", alias="OPENAI_EMBEDDING_ENDPOINT"
+    )
+
+    # Swipe-based ranker (Phase 2). When enabled, candidate items for a user's
+    # episode are scored by cosine similarity to the user's interest vector
+    # (mean of right-swipe embeddings minus mean of left-swipe embeddings)
+    # before tier caps are applied. Falls back to chronological ordering when
+    # the user has fewer than swipe_ranker_min_swipes recorded.
+    swipe_ranker_enabled: bool = Field(default=False, alias="SWIPE_RANKER_ENABLED")
+    swipe_ranker_min_swipes: int = Field(default=5, alias="SWIPE_RANKER_MIN_SWIPES")
+
     gcs_bucket_name: Optional[str] = Field(default=None, alias="GCS_BUCKET_NAME")
     gcs_prefix: str = Field(default="episodes", alias="GCS_PREFIX")
 
@@ -154,6 +173,9 @@ class Settings(BaseSettings):
         settings.session_signing_secret = _normalize_secret_value(
             _resolve_secret_reference(settings.session_signing_secret)
         ) or "dev-session-secret"
+        settings.openai_embedding_api_key = _normalize_secret_value(
+            _resolve_secret_reference(settings.openai_embedding_api_key)
+        ) or settings.podcast_api_key
         settings.google_cloud_project = settings.google_cloud_project or os.getenv("GCP_PROJECT")
         return settings
 

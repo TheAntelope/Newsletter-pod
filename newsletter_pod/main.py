@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from .auth import AppleIdentityVerifier, AuthError, SessionManager
 from .config import Settings
 from .control_plane import ControlPlaneError, ControlPlaneService, build_task_enqueuer
+from .embeddings import EmbeddingProvider, OpenAIEmbeddingProvider
 from .feed import build_feed_xml
 from .inbound import (
     InboundConfigError,
@@ -95,6 +96,11 @@ class SubmitFeedbackRequest(BaseModel):
     text: str
     locale_hint: Optional[str] = None
     source: Optional[str] = None
+
+
+class SubmitSwipeRequest(BaseModel):
+    source_item_dedupe_key: str
+    direction: int
 
 
 @dataclass
@@ -318,6 +324,22 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    @app.post("/v1/me/swipes", status_code=status.HTTP_201_CREATED)
+    def submit_swipe(
+        request_payload: SubmitSwipeRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.submit_swipe(
+                user_id=user.id,
+                source_item_dedupe_key=request_payload.source_item_dedupe_key,
+                direction=request_payload.direction,
+            )
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
     @app.get("/v1/me/episodes")
     def list_my_episodes(authorization: str | None = Header(default=None)) -> dict:
         user = _require_session_user(container, authorization)
@@ -534,6 +556,7 @@ def _build_control_plane(
     )
     apple_verifier = AppleIdentityVerifier(settings.apple_client_id)
     task_enqueuer = build_task_enqueuer(settings)
+    embedding_provider = _build_embedding_provider(settings)
     control_plane = ControlPlaneService(
         settings=settings,
         repository=control_repository,
@@ -543,8 +566,26 @@ def _build_control_plane(
         session_manager=session_manager,
         apple_identity_verifier=apple_verifier,
         task_enqueuer=task_enqueuer,
+        embedding_provider=embedding_provider,
     )
     return control_repository, control_plane
+
+
+def _build_embedding_provider(settings: Settings) -> EmbeddingProvider | None:
+    if not settings.source_item_embeddings_enabled:
+        return None
+    api_key = settings.openai_embedding_api_key
+    if not api_key:
+        logger.warning(
+            "Source-item embeddings enabled but no OPENAI_EMBEDDING_API_KEY (or "
+            "PODCAST_API_KEY fallback) is configured; persistence will run without embeddings"
+        )
+        return None
+    return OpenAIEmbeddingProvider(
+        api_key=api_key,
+        model=settings.openai_embedding_model,
+        endpoint=settings.openai_embedding_endpoint,
+    )
 
 
 def _validate_job_auth(

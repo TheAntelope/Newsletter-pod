@@ -15,12 +15,16 @@ import requests
 from .auth import AppleIdentityVerifier, SessionManager
 from .config import Settings, load_sources, load_voices
 from .costing import estimate_generation_cost
+from .embeddings import EmbeddingProvider
 from .inbound import ensure_user_inbound_alias
 from .ingestion import RSSIngestionService
+from .interest_vector import compute_user_vector
 from .mailer import Mailer
-from .models import PodcastUxConfig, PublishStatus, SourceDefinition, SourceItemRef
+from .models import PodcastUxConfig, PublishStatus, SourceDefinition, SourceItem, SourceItemRef
 from .podcast_api import PodcastApiClient
 from .prompting import build_digest_prompt
+from .ranker import rank_items
+from .source_persistence import SourceItemPersistenceService
 from .storage import AudioStorage
 from .weather import fetch_weather_summary
 from .translation import TranslationError, translate_to_english
@@ -33,6 +37,7 @@ from .user_models import (
     FeedTokenRecord,
     PodcastProfileRecord,
     SubscriptionRecord,
+    SwipeRecord,
     UserEntitlements,
     UserEpisodeRecord,
     UserRecord,
@@ -142,10 +147,15 @@ class ControlPlaneService:
     session_manager: SessionManager
     apple_identity_verifier: AppleIdentityVerifier
     task_enqueuer: TaskEnqueuer
+    embedding_provider: Optional[EmbeddingProvider] = None
 
     def __post_init__(self) -> None:
         self._catalog = {source.id: source for source in load_sources(self.settings.sources_file)}
         self._voice_catalog = {voice.id: voice for voice in load_voices(self.settings.voices_file)}
+        self._source_item_persistence = SourceItemPersistenceService(
+            repository=self.repository,
+            embeddings=self.embedding_provider,
+        )
 
     def authenticate_with_apple(
         self,
@@ -237,6 +247,36 @@ class ControlPlaneService:
         )
         self.repository.save_feedback(record)
         return record.model_dump(mode="json")
+
+    def submit_swipe(
+        self,
+        user_id: str,
+        source_item_dedupe_key: str,
+        direction: int,
+    ) -> dict[str, Any]:
+        self._require_user(user_id)
+        if direction not in (-1, 1):
+            raise ControlPlaneError("direction must be -1 or 1")
+        record = self.repository.get_source_item(source_item_dedupe_key)
+        if record is None:
+            raise ControlPlaneError("Unknown source item")
+        if not record.embedding or not record.embedding_model:
+            raise ControlPlaneError("Source item has no embedding yet")
+        swipe = SwipeRecord(
+            id=uuid4().hex,
+            user_id=user_id,
+            source_item_dedupe_key=source_item_dedupe_key,
+            direction=direction,
+            title=record.title,
+            link=record.link,
+            source_id=record.source_id,
+            source_name=record.source_name,
+            embedding=record.embedding,
+            embedding_model=record.embedding_model,
+            swiped_at=utc_now(),
+        )
+        self.repository.save_swipe(swipe)
+        return swipe.model_dump(mode="json")
 
     def _user_payload(self, user: UserRecord) -> dict[str, Any]:
         payload = user.model_dump(mode="json")
@@ -607,6 +647,14 @@ class ControlPlaneService:
             bootstrap_max_items_per_source=self.settings.podcast_bootstrap_max_items_per_source,
         )
         ingestion = ingestion_service.fetch_new_items(source_defs)
+        try:
+            self._source_item_persistence.persist(ingestion.items)
+        except Exception:  # pragma: no cover — persistence is best-effort
+            logger.warning(
+                "Source-item persistence failed for user=%s; continuing with in-memory items",
+                user_id,
+                exc_info=True,
+            )
         candidate_count = len(ingestion.items)
         if candidate_count == 0:
             self.repository.update_user_source_cursors(user_id, ingestion.cursor_updates)
@@ -626,7 +674,13 @@ class ControlPlaneService:
         items = ingestion.items
         dropped_count = 0
         cap_hit = False
-        if len(items) > entitlements.max_items_per_episode:
+        ranked_items = self._apply_swipe_ranker(user_id, items, entitlements.max_items_per_episode)
+        if ranked_items is not None:
+            if len(ranked_items) < len(items):
+                cap_hit = True
+                dropped_count = len(items) - len(ranked_items)
+            items = ranked_items
+        elif len(items) > entitlements.max_items_per_episode:
             cap_hit = True
             dropped_count = len(items) - entitlements.max_items_per_episode
             items = items[-entitlements.max_items_per_episode :]
@@ -1063,6 +1117,31 @@ class ControlPlaneService:
                 else self.settings.elevenlabs_voice_primary_id
             )
         return primary_id, secondary_id, self._voice_name(secondary_id, "Co-host")
+
+    def _apply_swipe_ranker(
+        self,
+        user_id: str,
+        items: list[SourceItem],
+        top_n: int,
+    ) -> Optional[list[SourceItem]]:
+        """Score and select items by similarity to the user's interest vector.
+
+        Returns None when the ranker is disabled, the user has too few swipes
+        to produce a meaningful vector, or no usable embeddings can be loaded —
+        in which case the caller falls back to chronological selection.
+        """
+        if not self.settings.swipe_ranker_enabled or top_n <= 0:
+            return None
+        swipe_count = self.repository.count_user_swipes(user_id)
+        if swipe_count < self.settings.swipe_ranker_min_swipes:
+            return None
+        swipes = self.repository.list_user_swipes(user_id)
+        user_vector = compute_user_vector(swipes)
+        if user_vector is None:
+            return None
+        records = self.repository.get_source_items([item.dedupe_key for item in items])
+        embedding_by_key = {record.dedupe_key: record.embedding for record in records}
+        return rank_items(items, user_vector, embedding_by_key.get, top_n)
 
     def _build_user_ux(
         self,

@@ -161,6 +161,26 @@ class FeedbackRecord(BaseModel):
     created_at: datetime
 
 
+class SwipeRecord(BaseModel):
+    """A single user reaction to a candidate item — the raw signal that drives
+    interest-vector learning. Embedding is snapshotted from the source item at
+    swipe time so the vector survives even if the source item is later
+    re-embedded with a different model or rolls off the corpus.
+    """
+
+    id: str
+    user_id: str
+    source_item_dedupe_key: str
+    direction: int  # +1 = right (more like this), -1 = left (less like this)
+    title: str
+    link: str
+    source_id: str
+    source_name: str
+    embedding: list[float]
+    embedding_model: str
+    swiped_at: datetime
+
+
 class BillingEventRecord(BaseModel):
     id: str
     user_id: Optional[str] = None

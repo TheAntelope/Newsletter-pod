@@ -155,6 +155,179 @@ def test_feedback_translation_failure_still_persists_raw(monkeypatch):
     assert len(stored) == 1
 
 
+def _seed_source_item(container, dedupe_key: str, *, embedding: list[float] | None = None) -> None:
+    from newsletter_pod.models import SourceItemRecord
+
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    record = SourceItemRecord(
+        dedupe_key=dedupe_key,
+        source_id="src-1",
+        source_name="Source 1",
+        guid=dedupe_key,
+        link=f"https://example.com/{dedupe_key}",
+        title=f"Title {dedupe_key}",
+        summary="summary",
+        published_at=now,
+        first_seen_at=now,
+        last_seen_at=now,
+        embedding=embedding,
+        embedding_model="fake" if embedding is not None else None,
+        embedded_at=now if embedding is not None else None,
+    )
+    container.control_repository.upsert_source_items([record])
+
+
+def test_swipe_endpoint_persists_swipe_with_snapshotted_embedding():
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("swipe-user-1", "swipe1@example.com"))
+
+    _seed_source_item(container, "k-right", embedding=[0.6, 0.8])
+
+    resp = client.post(
+        "/v1/me/swipes",
+        json={"source_item_dedupe_key": "k-right", "direction": 1},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["direction"] == 1
+    assert body["source_item_dedupe_key"] == "k-right"
+    assert body["embedding"] == [0.6, 0.8]
+    assert body["embedding_model"] == "fake"
+
+    user_id = body["user_id"]
+    swipes = container.control_repository.list_user_swipes(user_id)
+    assert len(swipes) == 1
+    assert swipes[0].embedding == [0.6, 0.8]
+
+
+def test_swipe_endpoint_rejects_unknown_source_item():
+    _, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("swipe-user-2", "swipe2@example.com"))
+
+    resp = client.post(
+        "/v1/me/swipes",
+        json={"source_item_dedupe_key": "does-not-exist", "direction": 1},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_swipe_endpoint_rejects_invalid_direction():
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("swipe-user-3", "swipe3@example.com"))
+    _seed_source_item(container, "k", embedding=[1.0, 0.0])
+
+    resp = client.post(
+        "/v1/me/swipes",
+        json={"source_item_dedupe_key": "k", "direction": 2},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_swipe_endpoint_rejects_source_item_without_embedding():
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("swipe-user-4", "swipe4@example.com"))
+    _seed_source_item(container, "k-no-embed", embedding=None)
+
+    resp = client.post(
+        "/v1/me/swipes",
+        json={"source_item_dedupe_key": "k-no-embed", "direction": -1},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_apply_swipe_ranker_returns_none_when_flag_disabled():
+    from newsletter_pod.models import SourceItem
+
+    container, _ = _build_app()
+    container.control_plane.settings.swipe_ranker_enabled = False
+    items = [
+        SourceItem(
+            source_id="src",
+            source_name="Source",
+            guid="k1",
+            link="https://example.com/k1",
+            title="t",
+            summary="s",
+            published_at=datetime(2026, 5, 11, tzinfo=timezone.utc),
+            dedupe_key="k1",
+        )
+    ]
+    assert container.control_plane._apply_swipe_ranker("u-anon", items, top_n=5) is None
+
+
+def test_apply_swipe_ranker_returns_none_when_too_few_swipes():
+    from newsletter_pod.models import SourceItem
+
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("ranker-thin-user", "rt@example.com"))
+    _seed_source_item(container, "k1", embedding=[1.0, 0.0])
+    client.post(
+        "/v1/me/swipes",
+        json={"source_item_dedupe_key": "k1", "direction": 1},
+        headers=headers,
+    )
+    user_id = container.control_repository.list_user_swipes
+    # Pull the actual user id from the only stored swipe.
+    swipes = list(container.control_repository._swipes.values())
+    assert len(swipes) == 1
+    user_id = swipes[0].user_id
+
+    container.control_plane.settings.swipe_ranker_enabled = True
+    container.control_plane.settings.swipe_ranker_min_swipes = 3
+    items = [
+        SourceItem(
+            source_id="src-1", source_name="Source 1", guid="k1",
+            link="https://example.com/k1", title="t", summary="s",
+            published_at=datetime(2026, 5, 11, tzinfo=timezone.utc),
+            dedupe_key="k1",
+        )
+    ]
+    assert container.control_plane._apply_swipe_ranker(user_id, items, top_n=5) is None
+
+
+def test_apply_swipe_ranker_orders_items_by_user_vector_when_enabled():
+    from newsletter_pod.models import SourceItem
+
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("ranker-active-user", "ra@example.com"))
+
+    # Seed three items with embeddings that point in three different directions
+    # in 2D space, plus three swipes (right on east-pointing, left on the
+    # north-pointing) so the user vector strongly favours east.
+    _seed_source_item(container, "east", embedding=[1.0, 0.0])
+    _seed_source_item(container, "north", embedding=[0.0, 1.0])
+    _seed_source_item(container, "west", embedding=[-1.0, 0.0])
+    for key, direction in [("east", 1), ("east", 1), ("north", -1)]:
+        client.post(
+            "/v1/me/swipes",
+            json={"source_item_dedupe_key": key, "direction": direction},
+            headers=headers,
+        )
+    user_id = list(container.control_repository._swipes.values())[0].user_id
+
+    container.control_plane.settings.swipe_ranker_enabled = True
+    container.control_plane.settings.swipe_ranker_min_swipes = 1
+    candidate_items = [
+        SourceItem(
+            source_id="s", source_name="S", guid=key, link=f"https://example.com/{key}",
+            title=key, summary="x",
+            published_at=datetime(2026, 5, 11, 12, idx, tzinfo=timezone.utc),
+            dedupe_key=key,
+        )
+        for idx, key in enumerate(["east", "north", "west"])
+    ]
+    ranked = container.control_plane._apply_swipe_ranker(user_id, candidate_items, top_n=2)
+    assert ranked is not None
+    # east scores highest (right-swiped), west lowest (opposite of east), north
+    # is below east (it was left-swiped). Top 2 should be east + north,
+    # restored to chronological order (east at index 0, north at index 1).
+    assert [item.dedupe_key for item in ranked] == ["east", "north"]
+
+
 def test_voice_catalog_returns_only_enabled_voices():
     container, client = _build_app()
     catalog = client.get("/v1/voices/catalog")

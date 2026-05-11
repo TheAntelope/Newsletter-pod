@@ -6,6 +6,7 @@ from typing import Optional
 
 from google.cloud import firestore
 
+from .models import SourceItemRecord
 from .user_models import (
     BillingEventRecord,
     CostRecord,
@@ -15,6 +16,7 @@ from .user_models import (
     InboundEmailItem,
     PodcastProfileRecord,
     SubscriptionRecord,
+    SwipeRecord,
     UserEpisodeRecord,
     UserRecord,
     UserRunRecord,
@@ -92,6 +94,18 @@ class ControlPlaneRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def upsert_source_items(self, records: list[SourceItemRecord]) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_source_item(self, dedupe_key: str) -> Optional[SourceItemRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_source_items(self, dedupe_keys: list[str]) -> list[SourceItemRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
     def save_user_episode(self, episode: UserEpisodeRecord) -> None:
         raise NotImplementedError
 
@@ -155,6 +169,18 @@ class ControlPlaneRepository(ABC):
     def list_recent_feedback(self, user_id: str, limit: int) -> list[FeedbackRecord]:
         raise NotImplementedError
 
+    @abstractmethod
+    def save_swipe(self, swipe: SwipeRecord) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_user_swipes(self, user_id: str, limit: int = 500) -> list[SwipeRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def count_user_swipes(self, user_id: str) -> int:
+        raise NotImplementedError
+
 
 class InMemoryControlPlaneRepository(ControlPlaneRepository):
     def __init__(self) -> None:
@@ -173,6 +199,8 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         self._billing_events: dict[str, BillingEventRecord] = {}
         self._inbound_items: dict[str, InboundEmailItem] = {}
         self._feedback: dict[str, FeedbackRecord] = {}
+        self._source_items: dict[str, SourceItemRecord] = {}
+        self._swipes: dict[str, SwipeRecord] = {}
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         return self._users.get(user_id)
@@ -228,6 +256,26 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
     def update_user_source_cursors(self, user_id: str, cursors: dict[str, datetime]) -> None:
         for source_id, value in cursors.items():
             self._cursors[(user_id, source_id)] = value
+
+    def upsert_source_items(self, records: list[SourceItemRecord]) -> None:
+        for record in records:
+            existing = self._source_items.get(record.dedupe_key)
+            if existing is None:
+                self._source_items[record.dedupe_key] = record.model_copy()
+                continue
+            updated = record.model_copy()
+            updated.first_seen_at = existing.first_seen_at
+            if updated.embedding is None and existing.embedding is not None:
+                updated.embedding = existing.embedding
+                updated.embedding_model = existing.embedding_model
+                updated.embedded_at = existing.embedded_at
+            self._source_items[record.dedupe_key] = updated
+
+    def get_source_item(self, dedupe_key: str) -> Optional[SourceItemRecord]:
+        return self._source_items.get(dedupe_key)
+
+    def get_source_items(self, dedupe_keys: list[str]) -> list[SourceItemRecord]:
+        return [self._source_items[key] for key in dedupe_keys if key in self._source_items]
 
     def save_user_episode(self, episode: UserEpisodeRecord) -> None:
         self._episodes[episode.id] = episode
@@ -293,6 +341,17 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         items.sort(key=lambda item: item.created_at, reverse=True)
         return items[:limit]
 
+    def save_swipe(self, swipe: SwipeRecord) -> None:
+        self._swipes[swipe.id] = swipe
+
+    def list_user_swipes(self, user_id: str, limit: int = 500) -> list[SwipeRecord]:
+        items = [swipe for swipe in self._swipes.values() if swipe.user_id == user_id]
+        items.sort(key=lambda swipe: swipe.swiped_at, reverse=True)
+        return items[:limit]
+
+    def count_user_swipes(self, user_id: str) -> int:
+        return sum(1 for swipe in self._swipes.values() if swipe.user_id == user_id)
+
 
 class FirestoreControlPlaneRepository(ControlPlaneRepository):
     def __init__(self, collection_prefix: str) -> None:
@@ -310,6 +369,8 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         self._billing_events = self._db.collection(f"{collection_prefix}_billing_events")
         self._inbound_items = self._db.collection(f"{collection_prefix}_inbound_items")
         self._feedback = self._db.collection(f"{collection_prefix}_feedback")
+        self._source_items = self._db.collection(f"{collection_prefix}_source_items")
+        self._swipes = self._db.collection(f"{collection_prefix}_swipes")
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         doc = self._users.document(user_id).get()
@@ -399,6 +460,43 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
             ref = self._cursors.document(f"{user_id}:{source_id}")
             batch.set(ref, {"user_id": user_id, "source_id": source_id, "cursor": cursor}, merge=True)
         batch.commit()
+
+    def upsert_source_items(self, records: list[SourceItemRecord]) -> None:
+        if not records:
+            return
+        batch = self._db.batch()
+        for record in records:
+            ref = self._source_items.document(record.dedupe_key)
+            existing_doc = ref.get()
+            payload = record.model_dump(mode="python")
+            if existing_doc.exists:
+                existing = existing_doc.to_dict() or {}
+                if "first_seen_at" in existing:
+                    payload["first_seen_at"] = existing["first_seen_at"]
+                if payload.get("embedding") is None and existing.get("embedding") is not None:
+                    payload["embedding"] = existing["embedding"]
+                    payload["embedding_model"] = existing.get("embedding_model")
+                    payload["embedded_at"] = existing.get("embedded_at")
+            batch.set(ref, payload)
+        batch.commit()
+
+    def get_source_item(self, dedupe_key: str) -> Optional[SourceItemRecord]:
+        doc = self._source_items.document(dedupe_key).get()
+        if not doc.exists:
+            return None
+        return SourceItemRecord.model_validate(doc.to_dict())
+
+    def get_source_items(self, dedupe_keys: list[str]) -> list[SourceItemRecord]:
+        if not dedupe_keys:
+            return []
+        refs = [self._source_items.document(key) for key in dedupe_keys]
+        docs = self._db.get_all(refs)
+        records: list[SourceItemRecord] = []
+        for doc in docs:
+            if not doc.exists:
+                continue
+            records.append(SourceItemRecord.model_validate(doc.to_dict()))
+        return records
 
     def save_user_episode(self, episode: UserEpisodeRecord) -> None:
         self._episodes.document(episode.id).set(episode.model_dump(mode="python"))
@@ -494,3 +592,19 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
                 .stream()
         )
         return [FeedbackRecord.model_validate(doc.to_dict()) for doc in docs]
+
+    def save_swipe(self, swipe: SwipeRecord) -> None:
+        self._swipes.document(swipe.id).set(swipe.model_dump(mode="python"))
+
+    def list_user_swipes(self, user_id: str, limit: int = 500) -> list[SwipeRecord]:
+        docs = list(
+            self._swipes
+                .where("user_id", "==", user_id)
+                .order_by("swiped_at", direction=firestore.Query.DESCENDING)
+                .limit(limit)
+                .stream()
+        )
+        return [SwipeRecord.model_validate(doc.to_dict()) for doc in docs]
+
+    def count_user_swipes(self, user_id: str) -> int:
+        return len(list(self._swipes.where("user_id", "==", user_id).stream()))
