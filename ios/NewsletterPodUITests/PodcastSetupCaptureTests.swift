@@ -4,43 +4,41 @@ import XCTest
 /// onboarding wizard (like the 3/4/5-min duration picker and the GPS-backed
 /// weather location row) get visual review on every CI build.
 ///
-/// Skips through onboarding via the welcome step's Skip button rather than
-/// walking the full flow — that's covered by `OnboardingFlowTests`.
+/// Launches with `-uiTestSkipOnboarding` alongside `-uiTestMode` so the app
+/// drops straight onto the dashboard — bypassing the force-reopen wizard
+/// behavior that `evaluateOnboardingTrigger` applies in plain `-uiTestMode`.
 final class PodcastSetupCaptureTests: XCTestCase {
     var app: XCUIApplication!
 
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments += ["-uiTestMode"]
+        app.launchArguments += ["-uiTestMode", "-uiTestSkipOnboarding"]
         app.launch()
     }
 
     func testPodcastSetupCapture() throws {
-        // Bail out of the wizard immediately to land on the dashboard.
-        let skip = app.buttons["Skip"]
-        XCTAssertTrue(skip.waitForExistence(timeout: 8), "Skip button on welcome step never appeared")
-        skip.tap()
-
-        // Switch to the Podcast tab. The label is "Podcast" (the navigation
-        // title inside the tab is "Podcast Setup").
+        // Wait for the dashboard's tab bar to settle before touching it.
         let podcastTab = app.tabBars.buttons["Podcast"]
-        XCTAssertTrue(podcastTab.waitForExistence(timeout: 8), "Podcast tab not found")
+        XCTAssertTrue(
+            podcastTab.waitForExistence(timeout: 8),
+            "Podcast tab not found on the dashboard"
+        )
         podcastTab.tap()
 
-        // The inline navigationTitle ("Podcast Setup") isn't queryable as a
-        // staticText in XCUITest, so wait for a Form section header that we
-        // know renders inside PodcastSetupView.
+        // The .navigationTitle("Podcast Setup") is exposed via the navigation
+        // bar — more reliable than chasing the title as a staticText.
+        let nav = app.navigationBars["Podcast Setup"]
         XCTAssertTrue(
-            app.staticTexts["Format"].waitForExistence(timeout: 8),
+            nav.waitForExistence(timeout: 8),
             "Podcast Setup screen did not appear"
         )
 
         // Top of the form: You / Format / Voice cast.
         attach("setup-01-top")
 
-        // Mid-form: scroll until the Style section's Include weather toggle is
-        // visible — that's where the new GPS-backed location row lives.
+        // Mid-form: scroll until the Style section's Include weather toggle
+        // is on screen — that's where the new GPS-backed location row lives.
         let weatherToggle = app.switches["Include weather"]
         var scrolls = 0
         while !weatherToggle.isHittable, scrolls < 6 {
@@ -49,12 +47,11 @@ final class PodcastSetupCaptureTests: XCTestCase {
         }
         attach("setup-02-style-weather")
 
-        // Bottom of form: scroll further to reveal the Duration circles + the
-        // delivery schedule section. The Duration label sits inside a Form
-        // section header; scroll until we can see it.
-        let durationHeader = app.staticTexts["Duration"]
+        // Bottom of form: scroll further to reveal the Duration circles and
+        // the delivery schedule. The "Time" picker is a DatePicker that
+        // XCUITest reliably exposes near the bottom of the form.
         scrolls = 0
-        while !durationHeader.isHittable, scrolls < 6 {
+        while !app.staticTexts["Time"].isHittable, scrolls < 6 {
             app.swipeUp()
             scrolls += 1
         }

@@ -36,6 +36,11 @@ final class AppViewModel: ObservableObject {
     let apiClient: APIClient
     let purchaseManager: PurchaseManager
     let isUITestMode: Bool
+    /// When -uiTestSkipOnboarding is passed alongside -uiTestMode, the seed
+    /// drops the user directly on the dashboard instead of opening the wizard.
+    /// Lets capture tests target screens past onboarding without fighting the
+    /// force-show logic in `evaluateOnboardingTrigger`.
+    let isUITestSkipOnboarding: Bool
 
     private var pollTask: Task<Void, Never>?
 
@@ -43,6 +48,7 @@ final class AppViewModel: ObservableObject {
         self.apiClient = apiClient
         self.purchaseManager = purchaseManager
         self.isUITestMode = ProcessInfo.processInfo.arguments.contains("-uiTestMode")
+        self.isUITestSkipOnboarding = ProcessInfo.processInfo.arguments.contains("-uiTestSkipOnboarding")
         if isUITestMode {
             applyUITestSeed()
         }
@@ -100,7 +106,7 @@ final class AppViewModel: ObservableObject {
             localTime: "07:00",
             cutoffTime: "06:00"
         )
-        showOnboarding = true
+        showOnboarding = !isUITestSkipOnboarding
     }
 
     var isAuthenticated: Bool { sessionToken != nil }
@@ -123,7 +129,11 @@ final class AppViewModel: ObservableObject {
 
     func evaluateOnboardingTrigger() {
         guard isAuthenticated else { return }
-        if isUITestMode { showOnboarding = true; return }
+        if isUITestMode {
+            if isUITestSkipOnboarding { return }
+            showOnboarding = true
+            return
+        }
         if UserDefaults.standard.bool(forKey: Self.onboardingCompleteKey) { return }
         if !selectedSources.isEmpty {
             UserDefaults.standard.set(true, forKey: Self.onboardingCompleteKey)
