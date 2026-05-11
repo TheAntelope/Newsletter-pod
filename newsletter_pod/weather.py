@@ -89,6 +89,11 @@ def _fetch(location: str, timeout_seconds: float) -> Optional[str]:
         return None
     pretty_name = place.get("name") or location
 
+    country_code = str(place.get("country_code") or "").strip().upper()
+    use_fahrenheit = country_code == "US"
+    unit_param = "fahrenheit" if use_fahrenheit else "celsius"
+    unit_symbol = "°F" if use_fahrenheit else "°C"
+
     forecast = requests.get(
         FORECAST_URL,
         params={
@@ -96,7 +101,7 @@ def _fetch(location: str, timeout_seconds: float) -> Optional[str]:
             "longitude": lon,
             "current": "temperature_2m,weather_code",
             "daily": "temperature_2m_max,temperature_2m_min",
-            "temperature_unit": "fahrenheit",
+            "temperature_unit": unit_param,
             "timezone": "auto",
             "forecast_days": 1,
         },
@@ -119,15 +124,15 @@ def _fetch(location: str, timeout_seconds: float) -> Optional[str]:
 
     parts: list[str] = []
     if temp_now is not None and condition:
-        parts.append(f"{round(temp_now)}°F and {condition}")
+        parts.append(f"{round(temp_now)}{unit_symbol} and {condition}")
     elif temp_now is not None:
-        parts.append(f"{round(temp_now)}°F")
+        parts.append(f"{round(temp_now)}{unit_symbol}")
     elif condition:
         parts.append(condition)
     if high is not None and low is not None:
-        parts.append(f"high {round(high)}°F, low {round(low)}°F")
+        parts.append(f"high {round(high)}{unit_symbol}, low {round(low)}{unit_symbol}")
     elif high is not None:
-        parts.append(f"high {round(high)}°F")
+        parts.append(f"high {round(high)}{unit_symbol}")
 
     if not parts:
         return None
