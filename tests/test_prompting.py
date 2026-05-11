@@ -53,7 +53,9 @@ def test_prompt_enforces_calm_daily_briefing_with_named_hosts():
     assert "top 3 takeaways" in prompt
     assert "spoken attribution light and natural" in prompt
     assert "Select the most useful themes" in prompt
-    assert "occasional interjections" in prompt
+    assert "60-70%" in prompt and "30-40%" in prompt
+    assert "at least 2 segments tagged role=secondary" in prompt
+    assert "`role`" in prompt and "primary, secondary" in prompt
     assert "Source: Source A" in prompt
     assert "Source: Source B" in prompt
     assert "Source: Source C" in prompt

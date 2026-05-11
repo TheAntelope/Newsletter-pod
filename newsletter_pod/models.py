@@ -53,6 +53,7 @@ class SourceItemRef(BaseModel):
 
 
 class AudioSegment(BaseModel):
+    role: str = "primary"
     speaker: str
     text: str
 

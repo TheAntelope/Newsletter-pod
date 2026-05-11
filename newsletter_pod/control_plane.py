@@ -678,6 +678,7 @@ class ControlPlaneService:
             voice_id=primary_voice_id,
             secondary_voice_id=secondary_voice_id,
             primary_speaker_name=ux.host_primary_name,
+            secondary_speaker_name=ux.host_secondary_name or None,
         )
 
         episode_id = f"{user_id[:8]}-{local_date.isoformat()}-{uuid4().hex[:8]}"

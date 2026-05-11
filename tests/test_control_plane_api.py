@@ -31,6 +31,7 @@ class FakePodcastClient:
         voice_id: str | None = None,
         secondary_voice_id: str | None = None,
         primary_speaker_name: str | None = None,
+        secondary_speaker_name: str | None = None,
     ) -> GeneratedEpisode:
         return GeneratedEpisode(
             episode_title="Weekly AI Briefing",
@@ -38,8 +39,8 @@ class FakePodcastClient:
             mime_type="audio/mpeg",
             show_notes="Generated notes",
             audio_segments=[
-                AudioSegment(speaker="Elena", text="Welcome."),
-                AudioSegment(speaker="Marcus", text="Here is the update."),
+                AudioSegment(role="primary", speaker="Elena", text="Welcome."),
+                AudioSegment(role="secondary", speaker="Marcus", text="Here is the update."),
             ],
             transcript="Elena: Welcome.\nMarcus: Here is the update.",
             duration_seconds=120,
@@ -487,7 +488,7 @@ def test_weekly_update_segment_stamps_user_once_per_iso_week(monkeypatch):
     captured_prompts: list[str] = []
 
     class CapturingPodcastClient(FakePodcastClient):
-        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None):
+        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None):
             captured_prompts.append(prompt)
             return super().generate(
                 prompt,
@@ -495,6 +496,7 @@ def test_weekly_update_segment_stamps_user_once_per_iso_week(monkeypatch):
                 voice_id=voice_id,
                 secondary_voice_id=secondary_voice_id,
                 primary_speaker_name=primary_speaker_name,
+                secondary_speaker_name=secondary_speaker_name,
             )
 
     container.control_plane.podcast_client = CapturingPodcastClient()
@@ -570,7 +572,7 @@ def test_weekly_update_segment_skipped_when_no_commits(monkeypatch):
     captured_prompts: list[str] = []
 
     class CapturingPodcastClient(FakePodcastClient):
-        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None):
+        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None):
             captured_prompts.append(prompt)
             return super().generate(
                 prompt,
@@ -578,6 +580,7 @@ def test_weekly_update_segment_skipped_when_no_commits(monkeypatch):
                 voice_id=voice_id,
                 secondary_voice_id=secondary_voice_id,
                 primary_speaker_name=primary_speaker_name,
+                secondary_speaker_name=secondary_speaker_name,
             )
 
     container.control_plane.podcast_client = CapturingPodcastClient()

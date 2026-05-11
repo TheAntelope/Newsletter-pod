@@ -61,24 +61,35 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
         host_structure.append(
             f"- Greet the listener by first name once during the intro: {greeting_name}."
         )
-    allowed_speakers = [ux.host_primary_name]
 
     secondary = ux.host_secondary_name.strip() if ux.host_secondary_name else ""
+    allowed_roles = ["primary"]
     if ux.format == "solo_host" or not secondary:
         secondary_host_line = "Secondary host: none"
         host_structure.append("- Keep the script as a single-host narration.")
     elif ux.format == "rotating_guest":
         secondary_host_line = f"Current guest: {secondary}"
         host_structure.append(
-            "- Use the guest only for occasional interjections, clarifying questions, or brief reactions."
+            "- Both voices must speak. The guest contributes roughly 30-40% of the "
+            "spoken words via reactions, follow-up questions, and short hand-offs; "
+            "the primary host carries the remaining 60-70%."
         )
-        allowed_speakers.append(secondary)
+        host_structure.append(
+            "- The script must contain at least 2 segments tagged role=secondary."
+        )
+        allowed_roles.append("secondary")
     else:
         secondary_host_line = f"Secondary host: {secondary}"
         host_structure.append(
-            "- Use the secondary host only for occasional interjections, clarifying questions, or brief reactions."
+            "- Both hosts must actually speak. Aim for roughly 60-70% of the spoken "
+            "words from the primary host and 30-40% from the secondary host — real "
+            "back-and-forth, not just naming the other host. Reactions, follow-up "
+            "questions, and short hand-offs all count."
         )
-        allowed_speakers.append(secondary)
+        host_structure.append(
+            "- The script must contain at least 2 segments tagged role=secondary."
+        )
+        allowed_roles.append("secondary")
     if ux.include_top_takeaways:
         host_structure.append(
             f"- End with a brief wrap-up and the top {ux.key_findings_count} takeaways."
@@ -171,8 +182,10 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
         "  * Do not include URLs in show_notes; the app appends a separate sources list.",
         "  * Do not write any paragraphs after the bullets.",
         "  * Keep total length under 700 characters.",
-        "- Return `audio_segments` as ordered speaker-tagged segments.",
-        f"- Allowed speakers are only: {', '.join(allowed_speakers)}.",
+        "- Return `audio_segments` as ordered role-tagged segments.",
+        f"- Tag each segment with `role`: one of {', '.join(allowed_roles)}. "
+        f"`primary` = {ux.host_primary_name}"
+        + (f"; `secondary` = {secondary}." if "secondary" in allowed_roles else "."),
         "- Do not include stage directions.",
         "",
         "Newsletters to synthesize:",

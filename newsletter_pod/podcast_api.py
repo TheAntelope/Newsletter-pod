@@ -47,6 +47,7 @@ class PodcastApiClient:
         voice_id: Optional[str] = None,
         secondary_voice_id: Optional[str] = None,
         primary_speaker_name: Optional[str] = None,
+        secondary_speaker_name: Optional[str] = None,
     ) -> GeneratedEpisode:
         if not self.enabled:
             raise PodcastApiUnavailable("Podcast API is disabled")
@@ -59,6 +60,7 @@ class PodcastApiClient:
                 voice_id=voice_id,
                 secondary_voice_id=secondary_voice_id,
                 primary_speaker_name=primary_speaker_name,
+                secondary_speaker_name=secondary_speaker_name,
             )
         if provider == "generic":
             return self._generate_with_generic(prompt=prompt, title=title)
@@ -71,6 +73,7 @@ class PodcastApiClient:
         voice_id: Optional[str] = None,
         secondary_voice_id: Optional[str] = None,
         primary_speaker_name: Optional[str] = None,
+        secondary_speaker_name: Optional[str] = None,
     ) -> GeneratedEpisode:
         if not self.api_key:
             raise PodcastApiUnavailable("OpenAI API key is not configured")
@@ -78,7 +81,11 @@ class PodcastApiClient:
         structured = self._generate_openai_script(prompt=prompt, title=title)
         episode_title = (structured.get("episode_title") or title).strip()
         show_notes = structured.get("show_notes", "").strip()
-        audio_segments = self._parse_audio_segments(structured.get("audio_segments", []))
+        audio_segments = self._parse_audio_segments(
+            structured.get("audio_segments", []),
+            primary_speaker_name=primary_speaker_name,
+            secondary_speaker_name=secondary_speaker_name,
+        )
         if not audio_segments:
             raise PodcastApiError("Structured response missing audio segments")
 
@@ -89,14 +96,10 @@ class PodcastApiClient:
                     f"Audio segment exceeds speech input limit ({speech_max_chars} chars)"
                 )
 
-        primary_key = (primary_speaker_name or "").strip().casefold()
-
         def _voice_for(segment: AudioSegment) -> Optional[str]:
-            if not secondary_voice_id or not primary_key:
+            if not secondary_voice_id:
                 return voice_id
-            if segment.speaker.strip().casefold() == primary_key:
-                return voice_id
-            return secondary_voice_id
+            return voice_id if segment.role == "primary" else secondary_voice_id
 
         audio_chunks = [self._synthesize_speech(segment.text, _voice_for(segment)) for segment in audio_segments]
         transcript = "\n\n".join(f"{segment.speaker}: {segment.text}" for segment in audio_segments)
@@ -160,13 +163,16 @@ class PodcastApiClient:
                                     "type": "object",
                                     "additionalProperties": False,
                                     "properties": {
-                                        "speaker": {"type": "string"},
+                                        "role": {
+                                            "type": "string",
+                                            "enum": ["primary", "secondary"],
+                                        },
                                         "text": {
                                             "type": "string",
                                             "maxLength": OPENAI_SPEECH_MAX_CHARS,
                                         },
                                     },
-                                    "required": ["speaker", "text"],
+                                    "required": ["role", "text"],
                                 },
                             },
                         },
@@ -343,17 +349,40 @@ class PodcastApiClient:
         self,
         raw_segments: list[Any],
         allow_plain_strings: bool = False,
+        primary_speaker_name: Optional[str] = None,
+        secondary_speaker_name: Optional[str] = None,
     ) -> list[AudioSegment]:
+        primary_display = (primary_speaker_name or "").strip() or "Host"
+        secondary_display = (secondary_speaker_name or "").strip() or "Co-host"
+
+        def _resolve(raw_role: str, raw_speaker: str) -> tuple[str, str]:
+            role = raw_role.strip().casefold()
+            if role in ("primary", "secondary"):
+                return role, primary_display if role == "primary" else secondary_display
+            # Legacy/free-form speaker name — keep prior behaviour by mapping
+            # known names back to a role and falling through to primary otherwise.
+            speaker_key = raw_speaker.strip().casefold()
+            if speaker_key and speaker_key == primary_display.casefold():
+                return "primary", primary_display
+            if speaker_key and speaker_key == secondary_display.casefold():
+                return "secondary", secondary_display
+            return "primary", raw_speaker.strip() or primary_display
+
         segments: list[AudioSegment] = []
         for raw_segment in raw_segments:
             if isinstance(raw_segment, dict):
-                speaker = str(raw_segment.get("speaker") or "").strip()
+                raw_role = str(raw_segment.get("role") or "").strip()
+                raw_speaker = str(raw_segment.get("speaker") or "").strip()
                 text = str(raw_segment.get("text") or "").strip()
-                if speaker and text:
-                    segments.append(AudioSegment(speaker=speaker, text=text))
+                if not text:
+                    continue
+                role, speaker = _resolve(raw_role, raw_speaker)
+                segments.append(AudioSegment(role=role, speaker=speaker, text=text))
                 continue
             if allow_plain_strings and isinstance(raw_segment, str) and raw_segment.strip():
-                segments.append(AudioSegment(speaker="Narrator", text=raw_segment.strip()))
+                segments.append(
+                    AudioSegment(role="primary", speaker=primary_display, text=raw_segment.strip())
+                )
         return segments
 
 

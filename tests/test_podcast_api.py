@@ -34,8 +34,8 @@ def test_openai_provider_generates_structured_script_and_chunked_speech(monkeypa
                                         '{"episode_title":"2026-03-09: AI and Markets",'
                                         '"show_notes":"- Source A: https://example.com/a",'
                                         '"audio_segments":['
-                                        '{"speaker":"Elena","text":"Hello there."},'
-                                        '{"speaker":"Marcus","text":"More detail here."}'
+                                        '{"role":"primary","text":"Hello there."},'
+                                        '{"role":"secondary","text":"More detail here."}'
                                         "]}"
                                     ),
                                 }
@@ -62,14 +62,21 @@ def test_openai_provider_generates_structured_script_and_chunked_speech(monkeypa
         tts_voice="alloy",
     )
 
-    generated = client.generate(prompt="Source content", title="Daily Newsletter Digest")
+    generated = client.generate(
+        prompt="Source content",
+        title="Daily Newsletter Digest",
+        primary_speaker_name="Elena",
+        secondary_speaker_name="Marcus",
+    )
 
     assert generated.episode_title == "2026-03-09: AI and Markets"
     assert generated.mime_type == "audio/mpeg"
     assert generated.show_notes == "- Source A: https://example.com/a"
     assert generated.transcript == "Elena: Hello there.\n\nMarcus: More detail here."
     assert generated.audio_bytes == b"Hello there.More detail here."
+    assert generated.audio_segments[0].role == "primary"
     assert generated.audio_segments[0].speaker == "Elena"
+    assert generated.audio_segments[1].role == "secondary"
     assert generated.audio_segments[1].speaker == "Marcus"
     assert len(calls) == 3
     assert calls[0][0].endswith("/v1/responses")
@@ -94,7 +101,7 @@ def test_elevenlabs_tts_uses_user_voice_id(monkeypatch):
                                         '{"episode_title":"2026-04-26: AI",'
                                         '"show_notes":"- Source A",'
                                         '"audio_segments":['
-                                        '{"speaker":"Demi Dreams","text":"Hello there."}'
+                                        '{"role":"primary","text":"Hello there."}'
                                         "]}"
                                     ),
                                 }
@@ -137,7 +144,7 @@ def test_elevenlabs_tts_uses_user_voice_id(monkeypatch):
     assert tts_call[2]["xi-api-key"] == "el-key"
 
 
-def test_elevenlabs_routes_segments_to_two_voices_by_speaker(monkeypatch):
+def test_elevenlabs_routes_segments_to_two_voices_by_role(monkeypatch):
     calls: list[tuple[str, dict]] = []
 
     def fake_post(url, json, headers, timeout):
@@ -154,9 +161,9 @@ def test_elevenlabs_routes_segments_to_two_voices_by_speaker(monkeypatch):
                                         '{"episode_title":"2026-04-28: AI",'
                                         '"show_notes":"- Source A",'
                                         '"audio_segments":['
-                                        '{"speaker":"Vinnie","text":"Top story today."},'
-                                        '{"speaker":"Demi","text":"Quick reaction."},'
-                                        '{"speaker":"Vinnie","text":"And here is the wrap-up."}'
+                                        '{"role":"primary","text":"Top story today."},'
+                                        '{"role":"secondary","text":"Quick reaction."},'
+                                        '{"role":"primary","text":"And here is the wrap-up."}'
                                         "]}"
                                     ),
                                 }
@@ -193,7 +200,8 @@ def test_elevenlabs_routes_segments_to_two_voices_by_speaker(monkeypatch):
         title="Daily Briefing",
         voice_id=primary_id,
         secondary_voice_id=secondary_id,
-        primary_speaker_name="Vinnie",
+        primary_speaker_name="Vinnie Chase",
+        secondary_speaker_name="Demi Dreams",
     )
 
     tts_urls = [call[0] for call in calls if "/v1/text-to-speech/" in call[0]]
@@ -201,8 +209,10 @@ def test_elevenlabs_routes_segments_to_two_voices_by_speaker(monkeypatch):
     assert tts_urls[0].endswith(f"/v1/text-to-speech/{primary_id}")
     assert tts_urls[1].endswith(f"/v1/text-to-speech/{secondary_id}")
     assert tts_urls[2].endswith(f"/v1/text-to-speech/{primary_id}")
-    assert generated.audio_segments[0].speaker == "Vinnie"
-    assert generated.audio_segments[1].speaker == "Demi"
+    assert generated.audio_segments[0].role == "primary"
+    assert generated.audio_segments[0].speaker == "Vinnie Chase"
+    assert generated.audio_segments[1].role == "secondary"
+    assert generated.audio_segments[1].speaker == "Demi Dreams"
 
 
 def test_openai_endpoint_builder_accepts_base_url_with_v1():
