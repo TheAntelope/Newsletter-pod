@@ -26,12 +26,14 @@ final class PodcastSetupCaptureTests: XCTestCase {
         )
         podcastTab.tap()
 
-        // The .navigationTitle("Podcast Setup") is exposed via the navigation
-        // bar — more reliable than chasing the title as a staticText.
-        let nav = app.navigationBars["Podcast Setup"]
+        // SwiftUI navigation bar identifiers and Form section headers are
+        // both unreliable across iOS versions; anchor on the seeded
+        // "First name" text field instead — XCUITest exposes TextField
+        // placeholders consistently.
+        let firstNameField = app.textFields["First name"]
         XCTAssertTrue(
-            nav.waitForExistence(timeout: 8),
-            "Podcast Setup screen did not appear"
+            firstNameField.waitForExistence(timeout: 12),
+            "Podcast Setup screen did not appear (First name field never showed up)"
         )
 
         // Top of the form: You / Format / Voice cast.
