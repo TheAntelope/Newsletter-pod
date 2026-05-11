@@ -194,6 +194,23 @@ final class APIClient {
         try await request(path: "/v1/me/runs/\(runID)", method: "GET", body: Optional<Int>.none, token: token)
     }
 
+    func fetchRecentSwipeDeck(token: String) async throws -> SwipeDeckEnvelope {
+        try await request(path: "/v1/me/swipe-deck/recent", method: "GET", body: Optional<Int>.none, token: token)
+    }
+
+    func fetchColdStartSwipeDeck(token: String) async throws -> SwipeDeckEnvelope {
+        try await request(path: "/v1/me/swipe-deck/cold-start", method: "GET", body: Optional<Int>.none, token: token)
+    }
+
+    func submitSwipe(token: String, dedupeKey: String, direction: Int) async throws {
+        let _: SwipeAck = try await request(
+            path: "/v1/me/swipes",
+            method: "POST",
+            body: SubmitSwipeBody(sourceItemDedupeKey: dedupeKey, direction: direction),
+            token: token
+        )
+    }
+
     private func request<T: Decodable, Body: Encodable>(
         path: String,
         method: String,
@@ -329,4 +346,18 @@ private struct UpdateScheduleBody: Encodable {
     let timezone: String
     let weekdays: [String]
     let local_time: String?
+}
+
+private struct SubmitSwipeBody: Encodable {
+    let sourceItemDedupeKey: String
+    let direction: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceItemDedupeKey = "source_item_dedupe_key"
+        case direction
+    }
+}
+
+private struct SwipeAck: Decodable {
+    let id: String
 }

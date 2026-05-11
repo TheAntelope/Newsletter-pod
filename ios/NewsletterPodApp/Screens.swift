@@ -144,6 +144,7 @@ struct DashboardTabView: View {
 
 struct HomeView: View {
     @EnvironmentObject private var viewModel: AppViewModel
+    @State private var isShowingSwipeDeck: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -153,6 +154,7 @@ struct HomeView: View {
                     HeroEpisodeCard()
                     AboutPodcastCard()
                     SourcesSummaryCard()
+                    TuneYourPodCard(isPresenting: $isShowingSwipeDeck)
                     LibraryEntryCard()
                     SetupChecklistCard()
                     FeedbackComposer()
@@ -163,7 +165,39 @@ struct HomeView: View {
             }
             .navigationTitle("Your Briefing")
             .editorialBackground()
+            .sheet(isPresented: $isShowingSwipeDeck) {
+                SwipeDeckView()
+                    .environmentObject(viewModel)
+            }
         }
+    }
+}
+
+private struct TuneYourPodCard: View {
+    @Binding var isPresenting: Bool
+
+    var body: some View {
+        Button {
+            isPresenting = true
+        } label: {
+            EditorialCard {
+                HStack {
+                    MetaLabel(text: "Tune your pod")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.muted)
+                }
+                Text("Train the picker with a few quick swipes")
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(Theme.Palette.ink)
+                Text("Swipe right on items you'd want to hear more about, left on the ones to skip. Your podcast learns from every card.")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Palette.inkSoft)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens the swipe deck to tune your pod")
     }
 }
 
@@ -3515,5 +3549,361 @@ private struct LibraryEpisodeRow: View {
                 if !ok { UIApplication.shared.open(url) }
             }
         }
+    }
+}
+
+// MARK: - Swipe Deck (Tune Your Pod)
+
+struct SwipeDeckView: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var cards: [SwipeDeckCardDTO] = []
+    @State private var isLoading: Bool = true
+    @State private var loadError: String?
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.Palette.cream.ignoresSafeArea()
+                content
+            }
+            .navigationTitle("Tune your pod")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                }
+            }
+        }
+        .task { await loadInitialDeck() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if isLoading {
+            ProgressView()
+                .controlSize(.large)
+                .tint(Theme.Palette.amberDeep)
+        } else if let loadError {
+            SwipeDeckErrorState(message: loadError) {
+                Task { await loadInitialDeck() }
+            }
+        } else if cards.isEmpty {
+            SwipeDeckEmptyState {
+                Task { await loadInitialDeck() }
+            }
+        } else {
+            SwipeDeckCardStack(cards: $cards) { card, direction in
+                Task { await viewModel.submitSwipe(card: card, direction: direction) }
+            }
+        }
+    }
+
+    private func loadInitialDeck() async {
+        isLoading = true
+        loadError = nil
+        let fresh = await viewModel.fetchRecentSwipeDeck()
+        if fresh.isEmpty, let error = viewModel.errorMessage {
+            loadError = error
+        } else {
+            cards = fresh
+        }
+        isLoading = false
+    }
+}
+
+private struct SwipeDeckCardStack: View {
+    @Binding var cards: [SwipeDeckCardDTO]
+    let onSwipe: (SwipeDeckCardDTO, Int) -> Void
+
+    private let stackDepth = 3
+
+    var body: some View {
+        VStack(spacing: Theme.Spacing.l) {
+            ZStack {
+                ForEach(Array(visibleCards.reversed())) { card in
+                    if let topCard = cards.first, card.id == topCard.id {
+                        SwipeDeckCardView(card: card) { direction in
+                            onSwipe(card, direction)
+                            removeTopCard()
+                        }
+                        .transition(.identity)
+                    } else {
+                        SwipeDeckBackgroundCard(card: card, depth: stackOffset(for: card))
+                            .allowsHitTesting(false)
+                            .transition(.identity)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Theme.Spacing.l)
+            .padding(.top, Theme.Spacing.xl)
+
+            SwipeDeckActionBar(
+                onPass: { commitSwipe(direction: -1) },
+                onLike: { commitSwipe(direction: 1) }
+            )
+            .padding(.horizontal, Theme.Spacing.l)
+            .padding(.bottom, Theme.Spacing.xl)
+        }
+    }
+
+    private var visibleCards: [SwipeDeckCardDTO] {
+        Array(cards.prefix(stackDepth))
+    }
+
+    private func stackOffset(for card: SwipeDeckCardDTO) -> Int {
+        guard let index = cards.firstIndex(of: card) else { return 0 }
+        return index
+    }
+
+    private func commitSwipe(direction: Int) {
+        guard let top = cards.first else { return }
+        onSwipe(top, direction)
+        removeTopCard()
+    }
+
+    private func removeTopCard() {
+        guard !cards.isEmpty else { return }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            _ = cards.removeFirst()
+        }
+    }
+}
+
+private struct SwipeDeckCardView: View {
+    let card: SwipeDeckCardDTO
+    let onCommit: (Int) -> Void
+
+    @State private var dragOffset: CGSize = .zero
+    @State private var isFlying: Bool = false
+
+    private let swipeThreshold: CGFloat = 110
+
+    var body: some View {
+        SwipeCardChrome(card: card)
+            .offset(dragOffset)
+            .rotationEffect(.degrees(rotationDegrees))
+            .overlay(alignment: .topLeading) {
+                SwipeDecisionLabel(text: "MORE LIKE THIS", color: .green, opacity: likeOpacity)
+                    .padding(Theme.Spacing.l)
+            }
+            .overlay(alignment: .topTrailing) {
+                SwipeDecisionLabel(text: "PASS", color: .red, opacity: passOpacity)
+                    .padding(Theme.Spacing.l)
+            }
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        guard !isFlying else { return }
+                        dragOffset = value.translation
+                    }
+                    .onEnded { value in
+                        guard !isFlying else { return }
+                        let horizontal = value.translation.width
+                        if abs(horizontal) > swipeThreshold {
+                            commit(direction: horizontal > 0 ? 1 : -1)
+                        } else {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                                dragOffset = .zero
+                            }
+                        }
+                    }
+            )
+    }
+
+    private var rotationDegrees: Double {
+        let normalized = Double(dragOffset.width / 18)
+        return max(-15, min(15, normalized))
+    }
+
+    private var likeOpacity: Double {
+        max(0, min(1, Double(dragOffset.width / swipeThreshold)))
+    }
+
+    private var passOpacity: Double {
+        max(0, min(1, Double(-dragOffset.width / swipeThreshold)))
+    }
+
+    private func commit(direction: Int) {
+        isFlying = true
+        let flyDistance: CGFloat = 600
+        withAnimation(.easeOut(duration: 0.25)) {
+            dragOffset = CGSize(width: CGFloat(direction) * flyDistance, height: dragOffset.height)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            onCommit(direction)
+        }
+    }
+}
+
+private struct SwipeCardChrome: View {
+    let card: SwipeDeckCardDTO
+
+    var body: some View {
+        EditorialCard {
+            MetaLabel(text: card.sourceName)
+            Text(card.title)
+                .font(Theme.Typography.title)
+                .foregroundStyle(Theme.Palette.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(card.summary)
+                .font(Theme.Typography.callout)
+                .foregroundStyle(Theme.Palette.inkSoft)
+                .lineLimit(8)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            HStack(spacing: Theme.Spacing.s) {
+                Image(systemName: "calendar")
+                Text(SwipeCardChrome.dateFormatter.string(from: card.publishedAt))
+                Spacer()
+                if let url = URL(string: card.link) {
+                    Link(destination: url) {
+                        HStack(spacing: 4) {
+                            Text("Read")
+                            Image(systemName: "arrow.up.right")
+                        }
+                        .font(Theme.Typography.calloutStrong)
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                    }
+                }
+            }
+            .font(Theme.Typography.callout)
+            .foregroundStyle(Theme.Palette.muted)
+        }
+        .frame(minHeight: 420)
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
+}
+
+private struct SwipeDeckBackgroundCard: View {
+    let card: SwipeDeckCardDTO
+    let depth: Int
+
+    var body: some View {
+        SwipeCardChrome(card: card)
+            .scaleEffect(scale)
+            .offset(y: yOffset)
+            .opacity(opacity)
+    }
+
+    private var scale: CGFloat {
+        max(0.85, 1.0 - CGFloat(depth) * 0.05)
+    }
+
+    private var yOffset: CGFloat {
+        CGFloat(depth) * 12
+    }
+
+    private var opacity: Double {
+        max(0.4, 1.0 - Double(depth) * 0.2)
+    }
+}
+
+private struct SwipeDecisionLabel: View {
+    let text: String
+    let color: Color
+    let opacity: Double
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 18, weight: .heavy, design: .rounded))
+            .tracking(2)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(color, lineWidth: 3)
+            )
+            .foregroundStyle(color)
+            .opacity(opacity)
+    }
+}
+
+private struct SwipeDeckActionBar: View {
+    let onPass: () -> Void
+    let onLike: () -> Void
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.l) {
+            Button(action: onPass) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 22, weight: .bold))
+                    .frame(width: 64, height: 64)
+            }
+            .buttonStyle(.amberOutlined)
+            .accessibilityLabel("Pass")
+
+            Button(action: onLike) {
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 22, weight: .bold))
+                    .frame(width: 64, height: 64)
+            }
+            .buttonStyle(.amberFilled)
+            .accessibilityLabel("More like this")
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct SwipeDeckEmptyState: View {
+    let onReload: () -> Void
+
+    var body: some View {
+        VStack(spacing: Theme.Spacing.m) {
+            Image(systemName: "checkmark.seal")
+                .font(.system(size: 44))
+                .foregroundStyle(Theme.Palette.amberDeep)
+            Text("All caught up")
+                .font(Theme.Typography.title)
+                .foregroundStyle(Theme.Palette.ink)
+            Text("You've swiped through every fresh item from your sources. Check back after your next episode for more.")
+                .font(Theme.Typography.callout)
+                .foregroundStyle(Theme.Palette.inkSoft)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, Theme.Spacing.xl)
+            Button(action: onReload) {
+                Text("Reload")
+            }
+            .buttonStyle(.amberOutlined)
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.top, Theme.Spacing.s)
+        }
+        .padding(Theme.Spacing.l)
+    }
+}
+
+private struct SwipeDeckErrorState: View {
+    let message: String
+    let onRetry: () -> Void
+
+    var body: some View {
+        VStack(spacing: Theme.Spacing.m) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 44))
+                .foregroundStyle(.red)
+            Text("Couldn't load deck")
+                .font(Theme.Typography.title)
+                .foregroundStyle(Theme.Palette.ink)
+            Text(message)
+                .font(Theme.Typography.callout)
+                .foregroundStyle(Theme.Palette.inkSoft)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, Theme.Spacing.xl)
+            Button(action: onRetry) {
+                Text("Try again")
+            }
+            .buttonStyle(.amberFilled)
+            .padding(.horizontal, Theme.Spacing.xl)
+        }
+        .padding(Theme.Spacing.l)
     }
 }

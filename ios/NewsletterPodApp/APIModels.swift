@@ -359,3 +359,29 @@ struct LibraryEpisodeDTO: Codable, Identifiable, Hashable {
         case transcriptText = "transcript_text"
     }
 }
+
+struct SwipeDeckEnvelope: Codable {
+    let items: [SwipeDeckCardDTO]
+}
+
+struct SwipeDeckCardDTO: Codable, Identifiable, Equatable {
+    let sourceItemDedupeKey: String
+    let title: String
+    let summary: String
+    let sourceID: String
+    let sourceName: String
+    let link: String
+    let publishedAt: Date
+
+    var id: String { sourceItemDedupeKey }
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceItemDedupeKey = "source_item_dedupe_key"
+        case title
+        case summary
+        case sourceID = "source_id"
+        case sourceName = "source_name"
+        case link
+        case publishedAt = "published_at"
+    }
+}

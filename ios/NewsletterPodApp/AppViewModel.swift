@@ -364,6 +364,30 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func fetchRecentSwipeDeck() async -> [SwipeDeckCardDTO] {
+        guard let sessionToken else { return [] }
+        do {
+            let envelope = try await apiClient.fetchRecentSwipeDeck(token: sessionToken)
+            return envelope.items
+        } catch {
+            errorMessage = error.localizedDescription
+            return []
+        }
+    }
+
+    func submitSwipe(card: SwipeDeckCardDTO, direction: Int) async {
+        guard let sessionToken else { return }
+        do {
+            try await apiClient.submitSwipe(
+                token: sessionToken,
+                dedupeKey: card.sourceItemDedupeKey,
+                direction: direction
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func saveSchedule(timezone: String, weekdays: [String], localTime: String? = nil) async {
         guard let sessionToken else { return }
         await load {
