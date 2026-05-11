@@ -36,6 +36,10 @@ steps:
       - --region=europe-west1
       - --platform=managed
       - --no-cpu-throttling
+      # --update-env-vars only touches the listed keys; existing env vars and
+      # secret bindings on the service are preserved (unlike --set-env-vars,
+      # which would re-create the May 2026 secret-binding regression).
+      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true
       - --quiet
 
 images:
