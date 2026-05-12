@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from abc import ABC, abstractmethod
 from datetime import date, datetime, timedelta
 from typing import Optional
@@ -8,6 +9,18 @@ from google.cloud import firestore
 
 from .models import SourceItemRecord, SwipeDeckRecord
 from .utils import utc_now
+
+
+def _source_item_doc_id(dedupe_key: str) -> str:
+    """Hash the (potentially URL-shaped) dedupe_key into a Firestore-safe doc id.
+
+    Raw RSS guids frequently look like `https://example.com/post/123`. Firestore
+    rejects document ids that contain `/` (path separator), exceed 1500 bytes,
+    or hit a few other reserved patterns. The dedupe_key still lives on the
+    document as a field for queries / readability; this function only derives
+    the id used to address the doc.
+    """
+    return hashlib.sha256(dedupe_key.encode("utf-8")).hexdigest()
 from .user_models import (
     BillingEventRecord,
     CostRecord,
@@ -521,7 +534,7 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
             return
         batch = self._db.batch()
         for record in records:
-            ref = self._source_items.document(record.dedupe_key)
+            ref = self._source_items.document(_source_item_doc_id(record.dedupe_key))
             existing_doc = ref.get()
             payload = record.model_dump(mode="python")
             if existing_doc.exists:
@@ -536,7 +549,7 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         batch.commit()
 
     def get_source_item(self, dedupe_key: str) -> Optional[SourceItemRecord]:
-        doc = self._source_items.document(dedupe_key).get()
+        doc = self._source_items.document(_source_item_doc_id(dedupe_key)).get()
         if not doc.exists:
             return None
         return SourceItemRecord.model_validate(doc.to_dict())
@@ -544,7 +557,7 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
     def get_source_items(self, dedupe_keys: list[str]) -> list[SourceItemRecord]:
         if not dedupe_keys:
             return []
-        refs = [self._source_items.document(key) for key in dedupe_keys]
+        refs = [self._source_items.document(_source_item_doc_id(key)) for key in dedupe_keys]
         docs = self._db.get_all(refs)
         records: list[SourceItemRecord] = []
         for doc in docs:
@@ -581,21 +594,26 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
             return []
         cutoff = utc_now() - timedelta(days=lookback_days)
         # Firestore "in" queries are limited to 30 values per query; chunk the
-        # source list and merge results in app code.
+        # source list and merge in app code. The date filter is also applied
+        # app-side because combining `in` with a range filter requires a
+        # composite index per source-id arity — more ops surface than is
+        # warranted at the current corpus size.
         results: list[SourceItemRecord] = []
         for chunk_start in range(0, len(source_ids), 30):
             chunk = source_ids[chunk_start : chunk_start + 30]
             docs = list(
                 self._source_items
                     .where("source_id", "in", chunk)
-                    .where("last_seen_at", ">=", cutoff)
                     .stream()
             )
             for doc in docs:
                 data = doc.to_dict() or {}
                 if not data.get("embedding"):
                     continue
-                results.append(SourceItemRecord.model_validate(data))
+                record = SourceItemRecord.model_validate(data)
+                if record.last_seen_at < cutoff:
+                    continue
+                results.append(record)
         results.sort(key=lambda record: record.last_seen_at, reverse=True)
         return results[:limit]
 
@@ -707,14 +725,15 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         self._swipes.document(swipe.id).set(swipe.model_dump(mode="python"))
 
     def list_user_swipes(self, user_id: str, limit: int = 500) -> list[SwipeRecord]:
-        docs = list(
-            self._swipes
-                .where("user_id", "==", user_id)
-                .order_by("swiped_at", direction=firestore.Query.DESCENDING)
-                .limit(limit)
-                .stream()
-        )
-        return [SwipeRecord.model_validate(doc.to_dict()) for doc in docs]
+        # No order_by/limit at query time: combining where(user_id) with
+        # order_by(swiped_at) requires a composite index. Per-user swipe
+        # counts are small enough at current scale that pulling all rows
+        # and sorting in app code is fine. Revisit when a single user's
+        # history exceeds a few thousand swipes.
+        docs = list(self._swipes.where("user_id", "==", user_id).stream())
+        records = [SwipeRecord.model_validate(doc.to_dict()) for doc in docs]
+        records.sort(key=lambda swipe: swipe.swiped_at, reverse=True)
+        return records[:limit]
 
     def count_user_swipes(self, user_id: str) -> int:
         return len(list(self._swipes.where("user_id", "==", user_id).stream()))

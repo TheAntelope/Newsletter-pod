@@ -103,3 +103,33 @@ def test_persist_empty_input_returns_empty_list():
     repo = InMemoryControlPlaneRepository()
     service = SourceItemPersistenceService(repository=repo, embeddings=None)
     assert service.persist([]) == []
+
+
+def test_persist_round_trips_url_shaped_dedupe_keys_with_slashes():
+    """Regression: RSS feeds emit guid values that look like full URLs
+    (e.g. https://example.com/post/123). The Firestore impl now hashes the
+    dedupe_key for the doc id; the in-memory impl uses dict keys directly,
+    but both paths must preserve the dedupe_key as a logical field and
+    return the same record on lookup.
+    """
+    repo = InMemoryControlPlaneRepository()
+    service = SourceItemPersistenceService(repository=repo, embeddings=None)
+
+    item = _item("https://example.com/post/123-with/slashes/and?query=true")
+    service.persist([item])
+
+    stored = repo.get_source_item("https://example.com/post/123-with/slashes/and?query=true")
+    assert stored is not None
+    assert stored.dedupe_key == "https://example.com/post/123-with/slashes/and?query=true"
+
+
+def test_source_item_doc_id_hashes_to_firestore_safe_string():
+    from newsletter_pod.user_repository import _source_item_doc_id
+
+    safe_id = _source_item_doc_id("https://example.com/post/123")
+    assert "/" not in safe_id
+    assert len(safe_id) == 64  # sha256 hex digest
+    # Same input → same id (deterministic, used for upsert/get parity).
+    assert safe_id == _source_item_doc_id("https://example.com/post/123")
+    # Different input → different id.
+    assert safe_id != _source_item_doc_id("https://example.com/post/124")
