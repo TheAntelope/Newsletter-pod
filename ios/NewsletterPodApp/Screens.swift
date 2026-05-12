@@ -3855,6 +3855,7 @@ private struct SwipeDeckActionBar: View {
 }
 
 private struct SwipeDeckEmptyState: View {
+    @EnvironmentObject private var viewModel: AppViewModel
     let onReload: () -> Void
 
     var body: some View {
@@ -3865,15 +3866,33 @@ private struct SwipeDeckEmptyState: View {
             Text("All caught up")
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Palette.ink)
-            Text("You've swiped through every fresh item from your sources. Check back after your next episode for more.")
+            Text("Either you've swiped through every fresh item from your sources, or no episode has run yet to pull them in. Generate an episode to fetch new items, then come back here to swipe.")
                 .font(Theme.Typography.callout)
                 .foregroundStyle(Theme.Palette.inkSoft)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, Theme.Spacing.xl)
-            Button(action: onReload) {
-                Text("Reload")
+            VStack(spacing: Theme.Spacing.s) {
+                Button {
+                    Task { await viewModel.generateNow() }
+                } label: {
+                    if viewModel.isGenerating {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(.white)
+                            Text("Generating…")
+                        }
+                    } else {
+                        Label("Generate episode now", systemImage: "wand.and.stars")
+                    }
+                }
+                .buttonStyle(.amberFilled)
+                .disabled(viewModel.isGenerating || viewModel.selectedSources.isEmpty)
+
+                Button(action: onReload) {
+                    Text("Reload")
+                }
+                .buttonStyle(.amberOutlined)
+                .disabled(viewModel.isGenerating)
             }
-            .buttonStyle(.amberOutlined)
             .padding(.horizontal, Theme.Spacing.xl)
             .padding(.top, Theme.Spacing.s)
         }
