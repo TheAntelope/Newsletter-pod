@@ -129,6 +129,7 @@ class PodcastApiClient:
                                 f"Split the narration into 1-6 audio_segments, each at most {OPENAI_SPEECH_MAX_CHARS} "
                                 "characters because they will be sent separately to a text-to-speech endpoint. "
                                 "Preserve natural transitions across segments. "
+                                "The anchor must always round off and close out the podcast with a clear sign-off so the listener knows the episode is over. "
                                 "Write show_notes as markdown with source attributions and links."
                             ),
                         }
