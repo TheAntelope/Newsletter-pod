@@ -388,6 +388,21 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    @Published var isRefreshingCorpus: Bool = false
+
+    func refreshCorpus() async -> Bool {
+        guard let sessionToken else { return false }
+        isRefreshingCorpus = true
+        defer { isRefreshingCorpus = false }
+        do {
+            _ = try await apiClient.refreshCorpus(token: sessionToken)
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     func saveSchedule(timezone: String, weekdays: [String], localTime: String? = nil) async {
         guard let sessionToken else { return }
         await load {

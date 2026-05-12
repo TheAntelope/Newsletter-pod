@@ -226,14 +226,20 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
     @app.put("/v1/me/sources")
     def put_user_sources(
         request_payload: ReplaceSourcesRequest,
+        background_tasks: BackgroundTasks,
         authorization: str | None = Header(default=None),
     ) -> dict:
         user = _require_session_user(container, authorization)
         assert container.control_plane is not None
         try:
-            return container.control_plane.replace_user_sources(user.id, request_payload.sources)
+            result = container.control_plane.replace_user_sources(user.id, request_payload.sources)
         except Exception as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        # Warm the swipe-deck corpus for the newly-attached sources after the
+        # response is sent. Bootstrap cursor caps the cost; sources the user
+        # already had won't re-fetch.
+        background_tasks.add_task(_warm_corpus_safely, container, user.id)
+        return result
 
     @app.get("/v1/me/podcast-config")
     def get_podcast_config(authorization: str | None = Header(default=None)) -> dict:
@@ -327,18 +333,24 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
     @app.post("/v1/me/swipes", status_code=status.HTTP_201_CREATED)
     def submit_swipe(
         request_payload: SubmitSwipeRequest,
+        background_tasks: BackgroundTasks,
         authorization: str | None = Header(default=None),
     ) -> dict:
         user = _require_session_user(container, authorization)
         assert container.control_plane is not None
         try:
-            return container.control_plane.submit_swipe(
+            result = container.control_plane.submit_swipe(
                 user_id=user.id,
                 source_item_dedupe_key=request_payload.source_item_dedupe_key,
                 direction=request_payload.direction,
             )
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        # Auto-attach happened? Warm the corpus so the newly-attached source
+        # shows up in the deck on next pull.
+        if result.get("auto_attached_source_id"):
+            background_tasks.add_task(_warm_corpus_safely, container, user.id)
+        return result
 
     @app.get("/v1/me/swipe-deck/cold-start")
     def get_cold_start_swipe_deck(authorization: str | None = Header(default=None)) -> dict:
@@ -351,6 +363,12 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         user = _require_session_user(container, authorization)
         assert container.control_plane is not None
         return container.control_plane.get_recent_swipe_deck(user.id)
+
+    @app.post("/v1/me/corpus/refresh")
+    def refresh_corpus(authorization: str | None = Header(default=None)) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        return container.control_plane.warm_user_corpus(user.id)
 
     @app.get("/v1/me/episodes")
     def list_my_episodes(authorization: str | None = Header(default=None)) -> dict:
@@ -534,6 +552,19 @@ def _build_container(settings: Settings) -> ServiceContainer:
         control_repository=control_repository,
         control_plane=control_plane,
     )
+
+
+def _warm_corpus_safely(container, user_id: str) -> None:
+    """Background-task wrapper around warm_user_corpus that swallows
+    exceptions so a failed warm never bubbles into a request that already
+    returned a successful response.
+    """
+    if container.control_plane is None:
+        return
+    try:
+        container.control_plane.warm_user_corpus(user_id)
+    except Exception:  # pragma: no cover — best-effort
+        logger.warning("Background corpus warm failed for user=%s", user_id, exc_info=True)
 
 
 def _build_control_plane(

@@ -330,6 +330,128 @@ def test_left_swipes_do_not_count_toward_auto_attach():
     assert "news-fresh" not in attached_ids
 
 
+def test_corpus_refresh_endpoint_ingests_and_embeds_attached_sources(monkeypatch):
+    from datetime import datetime, timezone
+
+    from newsletter_pod.ingestion import IngestionResult, RSSIngestionService
+    from newsletter_pod.models import SourceItem
+    from newsletter_pod.user_models import UserSourceRecord
+
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("warm-user-1", "warm1@example.com")
+    )
+    user_id = list(container.control_repository._users.values())[0].id
+
+    container.control_repository.replace_user_sources(
+        user_id,
+        [
+            UserSourceRecord(
+                id=f"{user_id}:warm-src",
+                user_id=user_id,
+                source_id="warm-src",
+                name="Warm Source",
+                rss_url="https://example.com/warm.rss",
+                created_at=datetime(2026, 5, 12, tzinfo=timezone.utc),
+                updated_at=datetime(2026, 5, 12, tzinfo=timezone.utc),
+            )
+        ],
+    )
+
+    captured: dict = {}
+
+    def fake_fetch(self, source_defs):
+        captured["source_ids"] = [s.id for s in source_defs]
+        item = SourceItem(
+            source_id="warm-src",
+            source_name="Warm Source",
+            guid="warm-1",
+            link="https://example.com/warm-1",
+            title="Warm Item 1",
+            summary="warm summary",
+            published_at=datetime(2026, 5, 12, 10, 0, tzinfo=timezone.utc),
+            dedupe_key="warm-1",
+        )
+        return IngestionResult(items=[item], cursor_updates={"warm-src": item.published_at})
+
+    monkeypatch.setattr(RSSIngestionService, "fetch_new_items", fake_fetch)
+
+    resp = client.post("/v1/me/corpus/refresh", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["sources_processed"] == 1
+    assert body["items_ingested"] == 1
+    assert captured["source_ids"] == ["warm-src"]
+
+    # The persisted item should now be in source_items.
+    stored = container.control_repository.get_source_item("warm-1")
+    assert stored is not None
+    assert stored.source_id == "warm-src"
+
+
+def test_recent_deck_lazy_warms_when_empty(monkeypatch):
+    from datetime import datetime, timezone
+
+    from newsletter_pod.embeddings import DeterministicFakeEmbeddingProvider
+    from newsletter_pod.ingestion import IngestionResult, RSSIngestionService
+    from newsletter_pod.models import SourceItem
+    from newsletter_pod.source_persistence import SourceItemPersistenceService
+    from newsletter_pod.user_models import UserSourceRecord
+
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("lazy-warm-user", "lw@example.com")
+    )
+    user_id = list(container.control_repository._users.values())[0].id
+
+    # Inject an embedding provider so warmed items are deck-eligible (the
+    # recent-deck filter only surfaces items that carry an embedding).
+    container.control_plane._source_item_persistence = SourceItemPersistenceService(
+        repository=container.control_repository,
+        embeddings=DeterministicFakeEmbeddingProvider(dimensions=8),
+    )
+
+    container.control_repository.replace_user_sources(
+        user_id,
+        [
+            UserSourceRecord(
+                id=f"{user_id}:lazy-src",
+                user_id=user_id,
+                source_id="lazy-src",
+                name="Lazy Source",
+                rss_url="https://example.com/lazy.rss",
+                created_at=datetime(2026, 5, 12, tzinfo=timezone.utc),
+                updated_at=datetime(2026, 5, 12, tzinfo=timezone.utc),
+            )
+        ],
+    )
+
+    call_count = {"n": 0}
+
+    def fake_fetch(self, source_defs):
+        call_count["n"] += 1
+        item = SourceItem(
+            source_id="lazy-src",
+            source_name="Lazy Source",
+            guid="lazy-1",
+            link="https://example.com/lazy-1",
+            title="Lazy Item 1",
+            summary="lazy summary",
+            published_at=datetime(2026, 5, 12, 10, 0, tzinfo=timezone.utc),
+            dedupe_key="lazy-1",
+        )
+        return IngestionResult(items=[item], cursor_updates={"lazy-src": item.published_at})
+
+    monkeypatch.setattr(RSSIngestionService, "fetch_new_items", fake_fetch)
+
+    resp = client.get("/v1/me/swipe-deck/recent", headers=headers)
+    assert resp.status_code == 200
+    assert call_count["n"] >= 1, "empty deck should trigger an inline warm"
+    body = resp.json()
+    assert len(body["items"]) == 1
+    assert body["items"][0]["source_item_dedupe_key"] == "lazy-1"
+
+
 def test_right_swipe_does_not_auto_attach_non_catalog_sources():
     container, client = _build_app()
     _, headers = _auth_headers(

@@ -263,7 +263,56 @@ class ControlPlaneService:
         sources = self.repository.list_user_sources(user_id)
         source_ids = [source.source_id for source in sources if source.enabled]
         records = self._swipe_deck_service.get_recent_deck(user_id, source_ids)
+        # Lazy warm: if the user has sources attached but the corpus turned up
+        # nothing to swipe, fetch + embed their feeds inline and try again
+        # once. The cold-start case (fresh sign-up, never generated) shouldn't
+        # require the user to manually trigger a generation just to see cards.
+        if not records and source_ids:
+            try:
+                self.warm_user_corpus(user_id)
+            except Exception:  # pragma: no cover — best-effort warm
+                logger.warning(
+                    "Lazy corpus warm failed for user=%s; returning empty deck",
+                    user_id,
+                    exc_info=True,
+                )
+            records = self._swipe_deck_service.get_recent_deck(user_id, source_ids)
         return {"items": [_swipe_card_payload(record) for record in records]}
+
+    def warm_user_corpus(self, user_id: str) -> dict[str, Any]:
+        """Fetch + embed items from the user's currently-attached sources
+        WITHOUT generating an episode. Used to populate `source_items` so the
+        swipe deck has cards to show before the first generation. Idempotent
+        and bounded by the per-source cursor — sources with a cursor only get
+        new items; first-time sources bootstrap with
+        `podcast_bootstrap_max_items_per_source`.
+        """
+        self._require_user(user_id)
+        sources = [s for s in self.repository.list_user_sources(user_id) if s.enabled]
+        if not sources:
+            return {"sources_processed": 0, "items_ingested": 0}
+        source_defs = [
+            SourceDefinition(id=s.source_id, name=s.name, rss_url=s.rss_url, enabled=s.enabled)
+            for s in sources
+        ]
+        cursor_repo = _UserCursorRepositoryAdapter(self.repository, user_id)
+        ingestion_service = RSSIngestionService(
+            repository=cursor_repo,
+            bootstrap_max_items_per_source=self.settings.podcast_bootstrap_max_items_per_source,
+        )
+        ingestion = ingestion_service.fetch_new_items(source_defs)
+        try:
+            self._source_item_persistence.persist(ingestion.items)
+        except Exception:  # pragma: no cover — embeddings are best-effort
+            logger.warning(
+                "Corpus warm: persistence failed for user=%s", user_id, exc_info=True
+            )
+        if ingestion.cursor_updates:
+            self.repository.update_user_source_cursors(user_id, ingestion.cursor_updates)
+        return {
+            "sources_processed": len(source_defs),
+            "items_ingested": len(ingestion.items),
+        }
 
     def submit_swipe(
         self,
@@ -293,11 +342,14 @@ class ControlPlaneService:
             swiped_at=utc_now(),
         )
         self.repository.save_swipe(swipe)
+        result = swipe.model_dump(mode="json")
         if direction > 0:
-            self._maybe_auto_attach_source(user_id, record.source_id)
-        return swipe.model_dump(mode="json")
+            attached_source_id = self._maybe_auto_attach_source(user_id, record.source_id)
+            if attached_source_id:
+                result["auto_attached_source_id"] = attached_source_id
+        return result
 
-    def _maybe_auto_attach_source(self, user_id: str, source_id: str) -> None:
+    def _maybe_auto_attach_source(self, user_id: str, source_id: str) -> Optional[str]:
         """Silently attach a catalog source after enough right-swipes from it.
 
         Only triggers for catalog sources (custom user-pasted RSS is never
@@ -306,22 +358,22 @@ class ControlPlaneService:
         """
         threshold = self.settings.auto_attach_right_swipe_threshold
         if threshold <= 0:
-            return
+            return None
         try:
             catalog_source = self._catalog.get(source_id)
             if catalog_source is None:
-                return  # Custom or no-longer-curated source; skip.
+                return None  # Custom or no-longer-curated source; skip.
             already_attached = any(
                 existing.source_id == source_id
                 for existing in self.repository.list_user_sources(user_id)
             )
             if already_attached:
-                return
+                return None
             right_swipes = self.repository.count_user_right_swipes_for_source(
                 user_id, source_id
             )
             if right_swipes < threshold:
-                return
+                return None
             now = utc_now()
             attached = self.repository.add_user_source(
                 UserSourceRecord(
@@ -344,6 +396,8 @@ class ControlPlaneService:
                     user_id,
                     right_swipes,
                 )
+                return catalog_source.id
+            return None
         except Exception:  # pragma: no cover — best-effort, never block a swipe
             logger.warning(
                 "auto-attach failed for user=%s source=%s",
@@ -351,6 +405,7 @@ class ControlPlaneService:
                 source_id,
                 exc_info=True,
             )
+            return None
 
     def _user_payload(self, user: UserRecord) -> dict[str, Any]:
         payload = user.model_dump(mode="json")

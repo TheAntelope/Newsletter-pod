@@ -211,6 +211,15 @@ final class APIClient {
         )
     }
 
+    func refreshCorpus(token: String) async throws -> CorpusRefreshAck {
+        try await request(
+            path: "/v1/me/corpus/refresh",
+            method: "POST",
+            body: Optional<Int>.none,
+            token: token
+        )
+    }
+
     private func request<T: Decodable, Body: Encodable>(
         path: String,
         method: String,
@@ -360,4 +369,14 @@ private struct SubmitSwipeBody: Encodable {
 
 private struct SwipeAck: Decodable {
     let id: String
+}
+
+struct CorpusRefreshAck: Decodable {
+    let sourcesProcessed: Int
+    let itemsIngested: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case sourcesProcessed = "sources_processed"
+        case itemsIngested = "items_ingested"
+    }
 }

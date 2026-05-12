@@ -3866,33 +3866,28 @@ private struct SwipeDeckEmptyState: View {
             Text("All caught up")
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Palette.ink)
-            Text("Either you've swiped through every fresh item from your sources, or no episode has run yet to pull them in. Generate an episode to fetch new items, then come back here to swipe.")
+            Text("You've swiped through every item we've pulled in for your sources. Tap refresh to fetch the latest from your subscriptions — no podcast generation needed.")
                 .font(Theme.Typography.callout)
                 .foregroundStyle(Theme.Palette.inkSoft)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, Theme.Spacing.xl)
-            VStack(spacing: Theme.Spacing.s) {
-                Button {
-                    Task { await viewModel.generateNow() }
-                } label: {
-                    if viewModel.isGenerating {
-                        HStack(spacing: 8) {
-                            ProgressView().tint(.white)
-                            Text("Generating…")
-                        }
-                    } else {
-                        Label("Generate episode now", systemImage: "wand.and.stars")
+            Button {
+                Task {
+                    let ok = await viewModel.refreshCorpus()
+                    if ok { onReload() }
+                }
+            } label: {
+                if viewModel.isRefreshingCorpus {
+                    HStack(spacing: 8) {
+                        ProgressView().tint(.white)
+                        Text("Refreshing…")
                     }
+                } else {
+                    Label("Refresh items", systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(.amberFilled)
-                .disabled(viewModel.isGenerating || viewModel.selectedSources.isEmpty)
-
-                Button(action: onReload) {
-                    Text("Reload")
-                }
-                .buttonStyle(.amberOutlined)
-                .disabled(viewModel.isGenerating)
             }
+            .buttonStyle(.amberFilled)
+            .disabled(viewModel.isRefreshingCorpus || viewModel.selectedSources.isEmpty)
             .padding(.horizontal, Theme.Spacing.xl)
             .padding(.top, Theme.Spacing.s)
         }
