@@ -105,6 +105,20 @@ class Settings(BaseSettings):
     cold_start_corpus_limit: int = Field(default=5000, alias="COLD_START_CORPUS_LIMIT")
     recent_deck_size: int = Field(default=5, alias="RECENT_DECK_SIZE")
     recent_deck_lookback_days: int = Field(default=14, alias="RECENT_DECK_LOOKBACK_DAYS")
+    # Fraction of the recent deck drawn from sources the user has NOT attached,
+    # so the swipe loop can discover new interests instead of only refining
+    # within already-subscribed sources. 0.0 = no exploration; 1.0 = pure
+    # exploration. Items from non-attached sources are interleaved with
+    # attached-source items, not visually distinguished.
+    recent_deck_exploration_ratio: float = Field(
+        default=0.3, alias="RECENT_DECK_EXPLORATION_RATIO"
+    )
+    # After this many right-swipes on items from a single non-attached source,
+    # the source is silently attached to the user. Failures (e.g. source not
+    # in the curated catalog) are swallowed — auto-attach never blocks a swipe.
+    auto_attach_right_swipe_threshold: int = Field(
+        default=3, alias="AUTO_ATTACH_RIGHT_SWIPE_THRESHOLD"
+    )
 
     gcs_bucket_name: Optional[str] = Field(default=None, alias="GCS_BUCKET_NAME")
     gcs_prefix: str = Field(default="episodes", alias="GCS_PREFIX")

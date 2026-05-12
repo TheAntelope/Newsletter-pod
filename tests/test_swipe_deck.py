@@ -16,6 +16,7 @@ class _Config:
     cold_start_corpus_limit: int = 5000
     recent_deck_size: int = 5
     recent_deck_lookback_days: int = 14
+    recent_deck_exploration_ratio: float = 0.0
 
 
 def _record(
@@ -159,3 +160,91 @@ def test_recent_deck_filters_out_swiped_items_and_respects_size_cap():
     keys = [record.dedupe_key for record in deck]
     assert "k7" not in keys
     assert len(keys) == 3
+
+
+def test_recent_deck_mixes_in_exploration_items_from_other_sources():
+    repo = InMemoryControlPlaneRepository()
+    # Plenty on both sides so the ratio is honored without backfill kicking in.
+    repo.upsert_source_items(
+        [_record(f"mine-{i}", embedding=[1.0], source_id="src-mine") for i in range(10)]
+        + [_record(f"other-{i}", embedding=[1.0], source_id="src-other") for i in range(10)]
+    )
+
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(
+            recent_deck_size=10,
+            recent_deck_lookback_days=30,
+            recent_deck_exploration_ratio=0.3,
+        ),
+    )
+    deck = service.get_recent_deck("u1", source_ids=["src-mine"])
+    source_ids_in_deck = [record.source_id for record in deck]
+    # 30% of 10 = 3 exploration slots expected.
+    assert source_ids_in_deck.count("src-other") == 3
+    assert source_ids_in_deck.count("src-mine") == 7
+
+
+def test_recent_deck_returns_pure_attached_when_exploration_ratio_zero():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [_record(f"mine-{i}", embedding=[1.0], source_id="src-mine") for i in range(4)]
+        + [_record(f"other-{i}", embedding=[1.0], source_id="src-other") for i in range(4)]
+    )
+
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(
+            recent_deck_size=4,
+            recent_deck_lookback_days=30,
+            recent_deck_exploration_ratio=0.0,
+        ),
+    )
+    deck = service.get_recent_deck("u1", source_ids=["src-mine"])
+    assert all(record.source_id == "src-mine" for record in deck)
+    assert len(deck) == 4
+
+
+def test_recent_deck_falls_back_to_pure_exploration_when_user_has_no_sources():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [_record(f"other-{i}", embedding=[1.0], source_id="src-other") for i in range(5)]
+    )
+
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(
+            recent_deck_size=3,
+            recent_deck_lookback_days=30,
+            recent_deck_exploration_ratio=0.3,
+        ),
+    )
+    deck = service.get_recent_deck("u1", source_ids=[])
+    # No attached sources → entire deck is exploration.
+    assert len(deck) == 3
+    assert all(record.source_id == "src-other" for record in deck)
+
+
+def test_recent_deck_backfills_exploration_shortfall_from_attached():
+    repo = InMemoryControlPlaneRepository()
+    # Attached side has plenty; exploration side has only 1 item to offer.
+    repo.upsert_source_items(
+        [_record(f"mine-{i}", embedding=[1.0], source_id="src-mine") for i in range(8)]
+        + [_record("other-0", embedding=[1.0], source_id="src-other")]
+    )
+
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(
+            recent_deck_size=5,
+            recent_deck_lookback_days=30,
+            recent_deck_exploration_ratio=0.4,
+        ),
+    )
+    deck = service.get_recent_deck("u1", source_ids=["src-mine"])
+    # Two exploration slots were requested but only one item exists; the
+    # remaining slot backfills from attached so the deck still totals 5.
+    assert len(deck) == 5
+    sources = [r.source_id for r in deck]
+    assert sources.count("src-other") == 1
+    assert sources.count("src-mine") == 4

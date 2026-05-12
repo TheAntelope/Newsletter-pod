@@ -239,6 +239,121 @@ def test_swipe_endpoint_rejects_source_item_without_embedding():
     assert resp.status_code == 400
 
 
+def _seed_catalog_source(container, source_id: str) -> None:
+    from newsletter_pod.models import SourceDefinition
+
+    container.control_plane._catalog[source_id] = SourceDefinition(
+        id=source_id,
+        name=f"Catalog {source_id}",
+        rss_url=f"https://example.com/rss/{source_id}",
+        enabled=True,
+        topic="News",
+    )
+
+
+def test_right_swipe_auto_attaches_catalog_source_at_threshold():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("auto-attach-user", "aa@example.com")
+    )
+    container.control_plane.settings.auto_attach_right_swipe_threshold = 3
+    _seed_catalog_source(container, "news-fresh")
+
+    # Three distinct items from a non-attached catalog source.
+    for i in range(3):
+        _seed_source_item_with_source(
+            container, f"fresh-{i}", source_id="news-fresh", embedding=[1.0, 0.0]
+        )
+
+    user_id = list(container.control_repository._users.values())[0].id
+    assert not any(
+        s.source_id == "news-fresh"
+        for s in container.control_repository.list_user_sources(user_id)
+    )
+
+    for i in range(3):
+        resp = client.post(
+            "/v1/me/swipes",
+            json={"source_item_dedupe_key": f"fresh-{i}", "direction": 1},
+            headers=headers,
+        )
+        assert resp.status_code == 201
+
+    attached = container.control_repository.list_user_sources(user_id)
+    assert any(s.source_id == "news-fresh" and s.enabled for s in attached)
+
+
+def test_right_swipe_does_not_attach_below_threshold():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("below-thresh-user", "bt@example.com")
+    )
+    container.control_plane.settings.auto_attach_right_swipe_threshold = 3
+    _seed_catalog_source(container, "news-fresh")
+    _seed_source_item_with_source(
+        container, "fresh-0", source_id="news-fresh", embedding=[1.0, 0.0]
+    )
+
+    user_id = list(container.control_repository._users.values())[0].id
+    resp = client.post(
+        "/v1/me/swipes",
+        json={"source_item_dedupe_key": "fresh-0", "direction": 1},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+
+    attached_ids = {s.source_id for s in container.control_repository.list_user_sources(user_id)}
+    assert "news-fresh" not in attached_ids
+
+
+def test_left_swipes_do_not_count_toward_auto_attach():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("left-swipe-user", "ls@example.com")
+    )
+    container.control_plane.settings.auto_attach_right_swipe_threshold = 2
+    _seed_catalog_source(container, "news-fresh")
+    for i in range(3):
+        _seed_source_item_with_source(
+            container, f"fresh-{i}", source_id="news-fresh", embedding=[1.0, 0.0]
+        )
+
+    user_id = list(container.control_repository._users.values())[0].id
+    for i in range(3):
+        client.post(
+            "/v1/me/swipes",
+            json={"source_item_dedupe_key": f"fresh-{i}", "direction": -1},
+            headers=headers,
+        )
+
+    attached_ids = {s.source_id for s in container.control_repository.list_user_sources(user_id)}
+    assert "news-fresh" not in attached_ids
+
+
+def test_right_swipe_does_not_auto_attach_non_catalog_sources():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("custom-source-user", "cu@example.com")
+    )
+    container.control_plane.settings.auto_attach_right_swipe_threshold = 2
+    # NOT seeded into the catalog; auto-attach should refuse to add it.
+    for i in range(2):
+        _seed_source_item_with_source(
+            container, f"custom-{i}", source_id="custom-unknown", embedding=[1.0, 0.0]
+        )
+
+    user_id = list(container.control_repository._users.values())[0].id
+    for i in range(2):
+        client.post(
+            "/v1/me/swipes",
+            json={"source_item_dedupe_key": f"custom-{i}", "direction": 1},
+            headers=headers,
+        )
+
+    attached_ids = {s.source_id for s in container.control_repository.list_user_sources(user_id)}
+    assert "custom-unknown" not in attached_ids
+
+
 def test_apply_swipe_ranker_returns_none_when_flag_disabled():
     from newsletter_pod.models import SourceItem
 
@@ -380,7 +495,7 @@ def test_cold_start_deck_drops_items_after_user_swipes_on_them():
     assert swiped_key not in second_keys
 
 
-def test_recent_deck_endpoint_returns_items_from_user_sources_only():
+def test_recent_deck_endpoint_returns_items_from_user_sources_when_exploration_off():
     from datetime import datetime, timezone
 
     from newsletter_pod.user_models import UserSourceRecord
@@ -388,12 +503,13 @@ def test_recent_deck_endpoint_returns_items_from_user_sources_only():
     container, client = _build_app()
     _, headers = _auth_headers(client, FakeAppleVerifier("deck-recent-user", "dr@example.com"))
 
+    # Exploration off for this scenario — assert the pure-attached behaviour.
+    container.control_plane.settings.recent_deck_exploration_ratio = 0.0
+
     users = list(container.control_repository._users.values())
     assert users, "auth flow should have created the user"
     user_id = users[0].id
 
-    # Attach a single source to the user, and seed two items per source — only
-    # items from the attached source should come back.
     container.control_repository.replace_user_sources(
         user_id,
         [

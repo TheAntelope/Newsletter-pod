@@ -22,6 +22,10 @@ class _DeckRepository(Protocol):
         self, source_ids: list[str], lookback_days: int, limit: int
     ) -> list[SourceItemRecord]: ...
 
+    def list_recent_embedded_items_excluding_sources(
+        self, excluded_source_ids: list[str], lookback_days: int, limit: int
+    ) -> list[SourceItemRecord]: ...
+
     def get_source_items(self, dedupe_keys: list[str]) -> list[SourceItemRecord]: ...
 
     def list_user_swipes(self, user_id: str, limit: int = 500) -> list[SwipeRecord]: ...
@@ -41,6 +45,7 @@ class SwipeDeckConfig(Protocol):
     cold_start_corpus_limit: int
     recent_deck_size: int
     recent_deck_lookback_days: int
+    recent_deck_exploration_ratio: float
 
 
 class SwipeDeckService:
@@ -83,21 +88,70 @@ class SwipeDeckService:
     def get_recent_deck(
         self, user_id: str, source_ids: list[str]
     ) -> list[SourceItemRecord]:
-        if not source_ids:
-            return []
         deck_size = self._config.recent_deck_size
+        if deck_size <= 0:
+            return []
+        lookback_days = self._config.recent_deck_lookback_days
+        ratio = max(0.0, min(1.0, self._config.recent_deck_exploration_ratio))
         already_swiped = self._user_swiped_keys(user_id)
-        # Pull a wider candidate window than we need so the swipe filter has
-        # something to chew on without re-querying.
-        candidates = self._repository.list_recent_source_items_for_sources(
-            source_ids=source_ids,
-            lookback_days=self._config.recent_deck_lookback_days,
-            limit=deck_size * 4,
-        )
-        filtered = [
-            record for record in candidates if record.dedupe_key not in already_swiped
-        ]
-        return filtered[:deck_size]
+
+        # Split target counts. With no attached sources, the deck is pure
+        # exploration; otherwise the ratio governs how many slots go to
+        # discovery vs. familiar.
+        if not source_ids:
+            attached_target, exploration_target = 0, deck_size
+        else:
+            exploration_target = max(1, int(round(deck_size * ratio))) if ratio > 0 else 0
+            exploration_target = min(exploration_target, deck_size)
+            attached_target = deck_size - exploration_target
+
+        attached_candidates: list[SourceItemRecord] = []
+        if attached_target > 0 and source_ids:
+            attached_candidates = self._repository.list_recent_source_items_for_sources(
+                source_ids=source_ids,
+                lookback_days=lookback_days,
+                limit=attached_target * 4,
+            )
+
+        exploration_candidates: list[SourceItemRecord] = []
+        if exploration_target > 0:
+            exploration_candidates = (
+                self._repository.list_recent_embedded_items_excluding_sources(
+                    excluded_source_ids=source_ids,
+                    lookback_days=lookback_days,
+                    limit=exploration_target * 4,
+                )
+            )
+
+        attached_filtered = [
+            record for record in attached_candidates if record.dedupe_key not in already_swiped
+        ][:attached_target]
+        exploration_filtered = [
+            record for record in exploration_candidates if record.dedupe_key not in already_swiped
+        ][:exploration_target]
+
+        # If one side underdelivered (e.g. corpus thin on exploration items),
+        # backfill from the other so the user still gets a full deck.
+        attached_shortfall = attached_target - len(attached_filtered)
+        exploration_shortfall = exploration_target - len(exploration_filtered)
+        if exploration_shortfall > 0:
+            extras = [
+                record
+                for record in attached_candidates
+                if record.dedupe_key not in already_swiped
+                and record not in attached_filtered
+            ][:exploration_shortfall]
+            attached_filtered += extras
+        if attached_shortfall > 0:
+            extras = [
+                record
+                for record in exploration_candidates
+                if record.dedupe_key not in already_swiped
+                and record not in exploration_filtered
+            ][:attached_shortfall]
+            exploration_filtered += extras
+
+        return _interleave(attached_filtered, exploration_filtered, ratio)[:deck_size]
 
     def _load_or_refresh_cold_start_deck(self) -> Optional[SwipeDeckRecord]:
         existing = self._repository.get_swipe_deck(COLD_START_DECK_ID)
@@ -149,3 +203,49 @@ def _ensure_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _interleave(
+    attached: list[SourceItemRecord],
+    exploration: list[SourceItemRecord],
+    exploration_ratio: float,
+) -> list[SourceItemRecord]:
+    """Round-robin merge with the cadence shaped by `exploration_ratio`.
+
+    At ratio=0.3 the resulting deck spaces exploration items roughly 1 in 3.
+    Order within each list is preserved; ties go to attached so the first
+    card the user sees is usually from a familiar source.
+    """
+    if not exploration:
+        return list(attached)
+    if not attached:
+        return list(exploration)
+    if exploration_ratio <= 0:
+        return attached + exploration
+    if exploration_ratio >= 1:
+        return exploration + attached
+
+    merged: list[SourceItemRecord] = []
+    attached_idx, exploration_idx = 0, 0
+    # Position-based decision: take from exploration when the running ratio
+    # of exploration picks is below the target. Cheap and deterministic.
+    total_target = len(attached) + len(exploration)
+    for _ in range(total_target):
+        exploration_so_far = exploration_idx
+        emitted = len(merged)
+        want_exploration = (
+            exploration_idx < len(exploration)
+            and (emitted == 0 or exploration_so_far / max(emitted, 1) < exploration_ratio)
+        )
+        if want_exploration and attached_idx < len(attached):
+            merged.append(exploration[exploration_idx])
+            exploration_idx += 1
+        elif attached_idx < len(attached):
+            merged.append(attached[attached_idx])
+            attached_idx += 1
+        elif exploration_idx < len(exploration):
+            merged.append(exploration[exploration_idx])
+            exploration_idx += 1
+        else:
+            break
+    return merged

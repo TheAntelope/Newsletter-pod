@@ -133,6 +133,15 @@ class ControlPlaneRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_recent_embedded_items_excluding_sources(
+        self,
+        excluded_source_ids: list[str],
+        lookback_days: int,
+        limit: int,
+    ) -> list[SourceItemRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
     def save_swipe_deck(self, deck: SwipeDeckRecord) -> None:
         raise NotImplementedError
 
@@ -214,6 +223,18 @@ class ControlPlaneRepository(ABC):
 
     @abstractmethod
     def count_user_swipes(self, user_id: str) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
+    def count_user_right_swipes_for_source(self, user_id: str, source_id: str) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
+    def add_user_source(self, source: UserSourceRecord) -> bool:
+        """Attach a source to a user. Idempotent: returns False (and does
+        nothing) if a record for the same (user_id, source_id) already
+        exists; returns True on actual insert.
+        """
         raise NotImplementedError
 
 
@@ -338,6 +359,26 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         items.sort(key=lambda record: record.last_seen_at, reverse=True)
         return items[:limit]
 
+    def list_recent_embedded_items_excluding_sources(
+        self,
+        excluded_source_ids: list[str],
+        lookback_days: int,
+        limit: int,
+    ) -> list[SourceItemRecord]:
+        if limit <= 0:
+            return []
+        excluded = set(excluded_source_ids)
+        cutoff = utc_now() - timedelta(days=lookback_days)
+        items = [
+            record
+            for record in self._source_items.values()
+            if record.source_id not in excluded
+            and record.embedding
+            and record.last_seen_at >= cutoff
+        ]
+        items.sort(key=lambda record: record.last_seen_at, reverse=True)
+        return items[:limit]
+
     def save_swipe_deck(self, deck: SwipeDeckRecord) -> None:
         self._swipe_decks[deck.id] = deck.model_copy()
 
@@ -418,6 +459,23 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
 
     def count_user_swipes(self, user_id: str) -> int:
         return sum(1 for swipe in self._swipes.values() if swipe.user_id == user_id)
+
+    def count_user_right_swipes_for_source(self, user_id: str, source_id: str) -> int:
+        return sum(
+            1
+            for swipe in self._swipes.values()
+            if swipe.user_id == user_id
+            and swipe.source_id == source_id
+            and swipe.direction > 0
+        )
+
+    def add_user_source(self, source: UserSourceRecord) -> bool:
+        existing = self._sources.setdefault(source.user_id, [])
+        for record in existing:
+            if record.source_id == source.source_id:
+                return False
+        existing.append(source.model_copy())
+        return True
 
 
 class FirestoreControlPlaneRepository(ControlPlaneRepository):
@@ -617,6 +675,42 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         results.sort(key=lambda record: record.last_seen_at, reverse=True)
         return results[:limit]
 
+    def list_recent_embedded_items_excluding_sources(
+        self,
+        excluded_source_ids: list[str],
+        lookback_days: int,
+        limit: int,
+    ) -> list[SourceItemRecord]:
+        if limit <= 0:
+            return []
+        excluded = set(excluded_source_ids)
+        cutoff = utc_now() - timedelta(days=lookback_days)
+        # Firestore has no cheap "not in" filter at arbitrary cardinality, so
+        # we scan recent embedded items and filter app-side. `embedded_at`
+        # ordering gives us a stable, recency-biased traversal; we read ~4x
+        # the requested limit to absorb the filter without re-querying.
+        scan_size = max(limit * 4, 50)
+        docs = list(
+            self._source_items
+                .order_by("embedded_at", direction=firestore.Query.DESCENDING)
+                .limit(scan_size)
+                .stream()
+        )
+        results: list[SourceItemRecord] = []
+        for doc in docs:
+            data = doc.to_dict() or {}
+            if not data.get("embedding"):
+                continue
+            record = SourceItemRecord.model_validate(data)
+            if record.source_id in excluded:
+                continue
+            if record.last_seen_at < cutoff:
+                continue
+            results.append(record)
+            if len(results) >= limit:
+                break
+        return results
+
     def save_swipe_deck(self, deck: SwipeDeckRecord) -> None:
         self._swipe_decks.document(deck.id).set(deck.model_dump(mode="python"))
 
@@ -737,3 +831,28 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
 
     def count_user_swipes(self, user_id: str) -> int:
         return len(list(self._swipes.where("user_id", "==", user_id).stream()))
+
+    def count_user_right_swipes_for_source(self, user_id: str, source_id: str) -> int:
+        # Single equality where + app-side filter on source_id + direction
+        # so we don't need a composite index. Per-user swipe counts are
+        # bounded enough at current scale that this is fine.
+        docs = list(self._swipes.where("user_id", "==", user_id).stream())
+        return sum(
+            1
+            for doc in docs
+            if (data := doc.to_dict() or {}).get("source_id") == source_id
+            and data.get("direction", 0) > 0
+        )
+
+    def add_user_source(self, source: UserSourceRecord) -> bool:
+        # Idempotent against (user_id, source_id). Fetching the user's
+        # attachments (bounded by max_sources_safety_cap) and filtering
+        # source_id app-side avoids needing a composite index for two
+        # equality `where` clauses.
+        existing = list(self._sources.where("user_id", "==", source.user_id).stream())
+        for doc in existing:
+            data = doc.to_dict() or {}
+            if data.get("source_id") == source.source_id:
+                return False
+        self._sources.document(source.id).set(source.model_dump(mode="python"))
+        return True

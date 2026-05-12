@@ -293,7 +293,64 @@ class ControlPlaneService:
             swiped_at=utc_now(),
         )
         self.repository.save_swipe(swipe)
+        if direction > 0:
+            self._maybe_auto_attach_source(user_id, record.source_id)
         return swipe.model_dump(mode="json")
+
+    def _maybe_auto_attach_source(self, user_id: str, source_id: str) -> None:
+        """Silently attach a catalog source after enough right-swipes from it.
+
+        Only triggers for catalog sources (custom user-pasted RSS is never
+        auto-attached). Any failure is swallowed — auto-attach is a quality
+        improvement, never a reason to fail a swipe.
+        """
+        threshold = self.settings.auto_attach_right_swipe_threshold
+        if threshold <= 0:
+            return
+        try:
+            catalog_source = self._catalog.get(source_id)
+            if catalog_source is None:
+                return  # Custom or no-longer-curated source; skip.
+            already_attached = any(
+                existing.source_id == source_id
+                for existing in self.repository.list_user_sources(user_id)
+            )
+            if already_attached:
+                return
+            right_swipes = self.repository.count_user_right_swipes_for_source(
+                user_id, source_id
+            )
+            if right_swipes < threshold:
+                return
+            now = utc_now()
+            attached = self.repository.add_user_source(
+                UserSourceRecord(
+                    id=f"{user_id}:{catalog_source.id}",
+                    user_id=user_id,
+                    source_id=catalog_source.id,
+                    name=catalog_source.name,
+                    rss_url=catalog_source.rss_url,
+                    is_custom=False,
+                    enabled=True,
+                    validated_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            if attached:
+                logger.info(
+                    "auto-attached source %s for user %s after %d right-swipes",
+                    source_id,
+                    user_id,
+                    right_swipes,
+                )
+        except Exception:  # pragma: no cover — best-effort, never block a swipe
+            logger.warning(
+                "auto-attach failed for user=%s source=%s",
+                user_id,
+                source_id,
+                exc_info=True,
+            )
 
     def _user_payload(self, user: UserRecord) -> dict[str, Any]:
         payload = user.model_dump(mode="json")
