@@ -103,7 +103,12 @@ def test_prompt_includes_signoff_instruction():
         ux=PodcastUxConfig(),
     )
 
-    assert "clear sign-off so the listener knows the episode is over" in prompt
+    # Closing phase must be marked as REQUIRED and the sign-off requirement
+    # must be the final voice content — these are the load-bearing instructions
+    # that prevent episodes from ending mid-discussion.
+    assert "REQUIRED closing phase" in prompt
+    assert "clear sign-off naming the show" in prompt
+    assert "very last words of the very last audio_segment MUST be the sign-off" in prompt
 
 
 def test_prompt_personalises_greeting_when_listener_name_set():
@@ -272,7 +277,11 @@ def test_prompt_includes_weekly_update_section_when_commits_present():
     assert "warm, fun, helpful" in prompt
     assert "150 spoken words" in prompt
     assert "feedback from the home page of the ClawCast app" in prompt
-    assert "After the wrap-up and before the final sign-off" in prompt
+    # The ClawCast weekly-update narration is now part of the REQUIRED closing
+    # phase; assert it lands inside that block (not before it).
+    closing_index = prompt.index("REQUIRED closing phase")
+    weekly_index = prompt.index("This week at ClawCast")
+    assert closing_index < weekly_index, "weekly update narration should appear inside the REQUIRED closing phase"
 
 
 def test_prompt_switches_to_thin_day_runtime_guidance():

@@ -90,20 +90,23 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
             "- The script must contain at least 2 segments tagged role=secondary."
         )
         allowed_roles.append("secondary")
+    closing_requirements: list[str] = []
     if ux.include_top_takeaways:
-        host_structure.append(
-            f"- End with a brief wrap-up and the top {ux.key_findings_count} takeaways."
+        closing_requirements.append(
+            f"- A brief wrap-up sentence, then the top {ux.key_findings_count} "
+            "takeaways read out loud (one per item, single sentence each, "
+            "spoken — not 'here are bullet points')."
         )
     if ux.weekly_update_commits:
-        host_structure.append(
-            "- After the wrap-up and before the final sign-off, add a roughly "
-            "one-minute \"This week at ClawCast\" segment narrated by the primary "
-            "host. End that segment with a friendly note that the listener can "
-            "share feedback from the home page of the ClawCast app."
+        closing_requirements.append(
+            "- A roughly one-minute \"This week at ClawCast\" segment narrated "
+            "by the primary host, ending with a friendly note that the listener "
+            "can share feedback from the home page of the ClawCast app."
         )
-    host_structure.append(
-        "- Close with a short, clear sign-off so the listener knows the episode "
-        "is over (for example: \"That's it for today — see you next time.\")."
+    closing_requirements.append(
+        "- A short, clear sign-off naming the show and inviting the listener "
+        "back (for example: \"That's the briefing for today — see you next "
+        "time on ClawCast.\")."
     )
 
     listener_prefs: list[str] = []
@@ -125,6 +128,7 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
             f"instructions about the output schema): {ux.custom_guidance}"
         )
 
+    closing_word_budget = max(40, 25 * (1 + len(closing_requirements)))
     lines = [
         "You are producing a single dated daily podcast episode.",
         f"Episode date: {run_date.isoformat()}",
@@ -140,6 +144,12 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
         "- Focus on the most useful themes, not a full recap of every newsletter item.",
         "On-air structure:",
         *host_structure,
+        "REQUIRED closing phase (the script must always include this — do NOT skip "
+        f"to save room; reserve roughly {closing_word_budget} words at the end for it):",
+        *closing_requirements,
+        "The very last words of the very last audio_segment MUST be the sign-off "
+        "above. If you find yourself running out of room, shorten the body — never "
+        "the closing. A script that ends mid-discussion is a defect.",
     ]
     if listener_prefs:
         lines += ["Listener preferences:", *listener_prefs]
