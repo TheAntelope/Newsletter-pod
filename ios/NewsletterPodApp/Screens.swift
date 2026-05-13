@@ -849,6 +849,7 @@ struct SourcesView: View {
     @EnvironmentObject private var viewModel: AppViewModel
     @State private var selectedCatalogIDs: Set<String> = []
     @State private var customURLs: [String] = [""]
+    @State private var isShowingAddSubstack = false
 
     private struct TopicGroup: Identifiable {
         let name: String
@@ -899,6 +900,10 @@ struct SourcesView: View {
                 .listRowBackground(Color.clear)
 
                 if let address = viewModel.user?.inboundAddress, !address.isEmpty {
+                    Section("Your Substacks") {
+                        SubstackSubscriptionsList(isShowingAddSheet: $isShowingAddSubstack)
+                    }
+
                     Section("Recent Newsletters") {
                         InboundItemsList()
                     }
@@ -953,10 +958,18 @@ struct SourcesView: View {
             .navigationTitle("Sources")
             .editorialBackground()
             .refreshable {
-                await viewModel.loadInboundItems()
+                async let inbound: Void = viewModel.loadInboundItems()
+                async let intents: Void = viewModel.loadSubstackIntents()
+                _ = await (inbound, intents)
             }
             .task {
-                await viewModel.loadInboundItems()
+                async let inbound: Void = viewModel.loadInboundItems()
+                async let intents: Void = viewModel.loadSubstackIntents()
+                _ = await (inbound, intents)
+            }
+            .sheet(isPresented: $isShowingAddSubstack) {
+                AddSubstackSheet()
+                    .environmentObject(viewModel)
             }
             .onAppear {
                 selectedCatalogIDs = Set(
@@ -1072,6 +1085,322 @@ private struct InboundItemRow: View {
             }
             .font(Theme.Typography.callout)
             .foregroundStyle(Theme.Palette.muted)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Substack subscriptions
+
+struct SubstackSubscriptionsList: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @Binding var isShowingAddSheet: Bool
+
+    var body: some View {
+        Group {
+            if viewModel.substackIntents.isEmpty {
+                HStack(spacing: Theme.Spacing.s) {
+                    Image(systemName: "envelope.badge")
+                        .foregroundStyle(Theme.Palette.muted)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("No Substacks yet")
+                            .font(Theme.Typography.body)
+                            .foregroundStyle(.primary)
+                        Text("Tap below to subscribe to a Substack with your ClawCast address.")
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+            } else {
+                ForEach(viewModel.substackIntents) { intent in
+                    SubstackSubscriptionRow(intent: intent)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                Task { await viewModel.deleteSubstackIntent(intent) }
+                            } label: {
+                                Label("Remove", systemImage: "trash")
+                            }
+                        }
+                }
+            }
+
+            Button {
+                isShowingAddSheet = true
+            } label: {
+                Label("Add a Substack", systemImage: "plus.circle.fill")
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(Theme.Palette.amberDeep)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+}
+
+private struct SubstackSubscriptionRow: View {
+    let intent: SubstackIntentDTO
+
+    private static let timestampFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(intent.displayTitle)
+                    .font(Theme.Typography.bodyStrong)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: Theme.Spacing.s)
+                statusBadge
+            }
+            statusDetail
+                .font(Theme.Typography.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var statusBadge: some View {
+        switch intent.displayStatus {
+        case .confirmed:
+            Label("Confirmed", systemImage: "checkmark.circle.fill")
+                .labelStyle(.iconOnly)
+                .foregroundStyle(.green)
+                .imageScale(.medium)
+                .accessibilityLabel("Confirmed")
+        default:
+            Image(systemName: "hourglass")
+                .foregroundStyle(Theme.Palette.amberDeep)
+                .imageScale(.medium)
+                .accessibilityLabel("Pending")
+        }
+    }
+
+    @ViewBuilder
+    private var statusDetail: some View {
+        switch intent.displayStatus {
+        case .confirmed:
+            if let confirmedAt = intent.confirmedAt {
+                Text("Confirmed " + Self.timestampFormatter.localizedString(for: confirmedAt, relativeTo: Date()))
+            } else {
+                Text("Confirmed")
+            }
+        default:
+            // Per product decision: keep this as pending until a real post
+            // arrives, with copy that sets the expectation it may take days
+            // for low-volume publications.
+            Text("Pending — waiting for the first post. Low-volume Substacks can take a few days.")
+        }
+    }
+}
+
+struct AddSubstackSheet: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+
+    @State private var input: String = ""
+    @State private var preview: SubstackProbeDTO?
+    @State private var isProbing = false
+    @State private var probeError: String?
+    @State private var hasContinued = false
+    @State private var probeTask: Task<Void, Never>?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("e.g. heathercoxrichardson.substack.com", text: $input)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .submitLabel(.done)
+                        .onSubmit { triggerProbe() }
+                        .onChange(of: input) { _, _ in scheduleProbe() }
+                } header: {
+                    Text("Substack URL or handle")
+                } footer: {
+                    if let probeError {
+                        Text(probeError)
+                            .foregroundStyle(.red)
+                    } else {
+                        Text("Paste a URL like `lenny.substack.com` or `@lenny`.")
+                    }
+                }
+
+                if let preview {
+                    Section("Publication") {
+                        SubstackPreviewCard(preview: preview)
+                    }
+
+                    if preview.hasPaidTier {
+                        Section {
+                            Label {
+                                Text("Free posts will arrive at your ClawCast address. Paid posts won't — those go to whatever email is on your Substack account.")
+                                    .font(Theme.Typography.callout)
+                            } icon: {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(Theme.Palette.amberDeep)
+                            }
+                        }
+                    }
+
+                    Section {
+                        Label {
+                            Text("Substack may prefill your email — make sure to paste your ClawCast address. We'll copy it to your clipboard when you continue.")
+                                .font(Theme.Typography.callout)
+                                .foregroundStyle(.secondary)
+                        } icon: {
+                            Image(systemName: "doc.on.doc")
+                                .foregroundStyle(Theme.Palette.muted)
+                        }
+                    }
+                } else if isProbing {
+                    Section {
+                        HStack(spacing: Theme.Spacing.s) {
+                            ProgressView()
+                            Text("Looking up that Substack…")
+                                .font(Theme.Typography.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                if hasContinued {
+                    Section {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("We'll show this as Pending until the first post lands at your alias.")
+                                Text("This doesn't affect any subscription at your personal inbox.")
+                            }
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(.secondary)
+                        } icon: {
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(Theme.Palette.amberDeep)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add a Substack")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                continueButton
+                    .padding(.horizontal, Theme.Spacing.m)
+                    .padding(.bottom, Theme.Spacing.m)
+                    .background(.thinMaterial)
+            }
+        }
+        .onDisappear { probeTask?.cancel() }
+    }
+
+    @ViewBuilder
+    private var continueButton: some View {
+        Button {
+            Task { await handleContinue() }
+        } label: {
+            HStack {
+                Spacer()
+                if hasContinued {
+                    Label("Subscribed — open Substack again", systemImage: "arrow.up.right.square")
+                } else {
+                    Label("Continue on Substack", systemImage: "arrow.up.right.square")
+                }
+                Spacer()
+            }
+            .frame(minHeight: 44)
+        }
+        .buttonStyle(.amberFilled)
+        .disabled(preview == nil)
+    }
+
+    private func scheduleProbe() {
+        probeTask?.cancel()
+        preview = nil
+        probeError = nil
+        hasContinued = false
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 3 else { return }
+        probeTask = Task {
+            // Debounce so we don't fire a probe on every keystroke.
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            if Task.isCancelled { return }
+            await runProbe()
+        }
+    }
+
+    private func triggerProbe() {
+        probeTask?.cancel()
+        Task { await runProbe() }
+    }
+
+    @MainActor
+    private func runProbe() async {
+        isProbing = true
+        defer { isProbing = false }
+        let result = await viewModel.probeSubstack(url: input)
+        if let result {
+            preview = result
+            probeError = nil
+        } else {
+            preview = nil
+            probeError = viewModel.errorMessage ?? "Could not reach that Substack."
+        }
+    }
+
+    @MainActor
+    private func handleContinue() async {
+        guard let preview else { return }
+        guard let intent = await viewModel.createSubstackIntent(pubURL: preview.pubURL) else { return }
+        // Stash the alias in the clipboard so the user can paste it into
+        // Substack's subscribe form in Safari.
+        UIPasteboard.general.string = intent.aliasEmail
+        if let url = intent.subscribeURL {
+            openURL(url)
+        }
+        hasContinued = true
+    }
+}
+
+private struct SubstackPreviewCard: View {
+    let preview: SubstackProbeDTO
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(preview.title ?? preview.pubHost)
+                .font(Theme.Typography.bodyStrong)
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+            if let author = preview.author, !author.isEmpty {
+                Text(author)
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: Theme.Spacing.s) {
+                Text(preview.pubHost)
+                    .font(Theme.Typography.meta)
+                    .foregroundStyle(.secondary)
+                if preview.hasPaidTier {
+                    Text("Paid tier")
+                        .font(Theme.Typography.meta)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Theme.Palette.amber.opacity(0.2))
+                        )
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                }
+            }
         }
         .padding(.vertical, 4)
     }

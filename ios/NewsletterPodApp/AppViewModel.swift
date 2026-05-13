@@ -24,6 +24,8 @@ final class AppViewModel: ObservableObject {
     @Published var feed: FeedEnvelope?
     @Published var inboundItems: [InboundItemDTO] = []
     @Published var isLoadingInbound = false
+    @Published var substackIntents: [SubstackIntentDTO] = []
+    @Published var isLoadingSubstackIntents = false
     @Published var libraryEpisodes: [LibraryEpisodeDTO] = []
     @Published var isLoadingEpisodes = false
     @Published var isLoading = false
@@ -327,6 +329,80 @@ final class AppViewModel: ObservableObject {
             inboundItems = envelope.items
         } catch {
             // Non-fatal: leave existing items in place.
+        }
+    }
+
+    func loadSubstackIntents() async {
+        if isUITestMode { return }
+        guard let sessionToken else { return }
+        isLoadingSubstackIntents = true
+        defer { isLoadingSubstackIntents = false }
+        do {
+            let envelope = try await apiClient.fetchSubstackIntents(token: sessionToken)
+            substackIntents = envelope.intents
+        } catch {
+            // Non-fatal: leave existing intents in place.
+        }
+    }
+
+    /// Probe a user-typed Substack URL. Returns the preview metadata for the
+    /// AddSubstackSheet's preview card, or nil if the probe failed (caller
+    /// can read `errorMessage` for the reason).
+    func probeSubstack(url: String) async -> SubstackProbeDTO? {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        do {
+            errorMessage = nil
+            return try await apiClient.probeSubstack(url: trimmed)
+        } catch let APIError.server(message) {
+            errorMessage = message
+            return nil
+        } catch {
+            errorMessage = "Could not reach that Substack — double-check the URL."
+            return nil
+        }
+    }
+
+    /// Create (or fetch existing) intent for a publication. Returns the
+    /// intent so the caller can deep-link to its subscribe page.
+    func createSubstackIntent(pubURL: String) async -> SubstackIntentDTO? {
+        guard let sessionToken else { return nil }
+        do {
+            errorMessage = nil
+            let envelope = try await apiClient.createSubstackIntent(token: sessionToken, pubURL: pubURL)
+            // Refresh the in-memory list so the new intent shows up
+            // immediately on the Sources page.
+            if !substackIntents.contains(where: { $0.id == envelope.intent.id }) {
+                substackIntents.insert(envelope.intent, at: 0)
+            } else {
+                substackIntents = substackIntents.map { existing in
+                    existing.id == envelope.intent.id ? envelope.intent : existing
+                }
+            }
+            return envelope.intent
+        } catch let APIError.server(message) {
+            errorMessage = message
+            return nil
+        } catch {
+            errorMessage = "Could not add that Substack — try again."
+            return nil
+        }
+    }
+
+    func deleteSubstackIntent(_ intent: SubstackIntentDTO) async {
+        guard let sessionToken else { return }
+        // Optimistic remove so the row disappears immediately. On failure
+        // we leave the error toast up; the user can reload to recover.
+        let before = substackIntents
+        substackIntents.removeAll { $0.id == intent.id }
+        do {
+            try await apiClient.deleteSubstackIntent(token: sessionToken, intentID: intent.id)
+        } catch let APIError.server(message) {
+            errorMessage = message
+            substackIntents = before
+        } catch {
+            errorMessage = "Could not remove that subscription."
+            substackIntents = before
         }
     }
 

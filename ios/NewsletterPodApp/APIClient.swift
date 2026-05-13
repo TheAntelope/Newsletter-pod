@@ -220,6 +220,37 @@ final class APIClient {
         )
     }
 
+    func probeSubstack(url: String) async throws -> SubstackProbeDTO {
+        guard var components = URLComponents(string: "/v1/substack/probe") else {
+            throw APIError.invalidResponse
+        }
+        components.queryItems = [URLQueryItem(name: "url", value: url)]
+        let path = components.string ?? "/v1/substack/probe"
+        return try await request(path: path, method: "GET", body: Optional<Int>.none, token: nil)
+    }
+
+    func fetchSubstackIntents(token: String) async throws -> SubstackIntentsEnvelope {
+        try await request(path: "/v1/me/substack/intents", method: "GET", body: Optional<Int>.none, token: token)
+    }
+
+    func createSubstackIntent(token: String, pubURL: String) async throws -> SubstackIntentEnvelope {
+        try await request(
+            path: "/v1/me/substack/intents",
+            method: "POST",
+            body: CreateSubstackIntentBody(pubURL: pubURL),
+            token: token
+        )
+    }
+
+    func deleteSubstackIntent(token: String, intentID: String) async throws {
+        let _: SubstackDeleteAck = try await request(
+            path: "/v1/me/substack/intents/\(intentID)",
+            method: "DELETE",
+            body: Optional<Int>.none,
+            token: token
+        )
+    }
+
     private func request<T: Decodable, Body: Encodable>(
         path: String,
         method: String,
@@ -379,4 +410,16 @@ struct CorpusRefreshAck: Decodable {
         case sourcesProcessed = "sources_processed"
         case itemsIngested = "items_ingested"
     }
+}
+
+private struct CreateSubstackIntentBody: Encodable {
+    let pubURL: String
+
+    private enum CodingKeys: String, CodingKey {
+        case pubURL = "pub_url"
+    }
+}
+
+private struct SubstackDeleteAck: Decodable {
+    let deleted: Bool
 }

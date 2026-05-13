@@ -312,6 +312,96 @@ struct RunStatusEnvelope: Codable {
     let episode: UserEpisodeDTO?
 }
 
+struct SubstackProbeDTO: Codable, Hashable {
+    let pubURL: String
+    let pubHost: String
+    let title: String?
+    let author: String?
+    let iconURL: String?
+    let hasPaidTier: Bool
+    let feedURL: String
+
+    private enum CodingKeys: String, CodingKey {
+        case pubURL = "pub_url"
+        case pubHost = "pub_host"
+        case title
+        case author
+        case iconURL = "icon_url"
+        case hasPaidTier = "has_paid_tier"
+        case feedURL = "feed_url"
+    }
+}
+
+enum SubstackIntentStatus: String, Codable {
+    case pending
+    case autoConfirmed = "auto_confirmed"
+    case confirmed
+}
+
+struct SubstackIntentDTO: Codable, Identifiable, Hashable {
+    let id: String
+    let userID: String
+    let pubURL: String
+    let pubHost: String
+    let pubTitle: String?
+    let pubAuthor: String?
+    let pubIconURL: String?
+    let hasPaidTier: Bool
+    let aliasEmail: String
+    let createdAt: Date
+    let autoConfirmedAt: Date?
+    let confirmedAt: Date?
+    let status: SubstackIntentStatus
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case userID = "user_id"
+        case pubURL = "pub_url"
+        case pubHost = "pub_host"
+        case pubTitle = "pub_title"
+        case pubAuthor = "pub_author"
+        case pubIconURL = "pub_icon_url"
+        case hasPaidTier = "has_paid_tier"
+        case aliasEmail = "alias_email"
+        case createdAt = "created_at"
+        case autoConfirmedAt = "auto_confirmed_at"
+        case confirmedAt = "confirmed_at"
+        case status
+    }
+
+    /// Display title: the publication title if we have it, otherwise the host.
+    var displayTitle: String {
+        if let title = pubTitle, !title.isEmpty { return title }
+        return pubHost
+    }
+
+    /// User-facing status. Per product decision, an intent stays in `.pending`
+    /// until a real post arrives (status == .confirmed). The intermediate
+    /// `.autoConfirmed` state is internal-only.
+    var displayStatus: SubstackIntentStatus {
+        status == .confirmed ? .confirmed : .pending
+    }
+
+    /// Build the publication's subscribe page URL the deep-link should open.
+    var subscribeURL: URL? {
+        URL(string: "\(pubURL)/subscribe")
+    }
+}
+
+struct SubstackIntentsEnvelope: Codable {
+    let inboundAddress: String?
+    let intents: [SubstackIntentDTO]
+
+    private enum CodingKeys: String, CodingKey {
+        case inboundAddress = "inbound_address"
+        case intents
+    }
+}
+
+struct SubstackIntentEnvelope: Codable {
+    let intent: SubstackIntentDTO
+}
+
 struct EpisodesEnvelope: Codable {
     let episodes: [LibraryEpisodeDTO]
 }
