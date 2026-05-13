@@ -412,6 +412,12 @@ sources:
     topic: Culture
     enabled: true
 
+  - id: culture-buzzfeed
+    name: BuzzFeed
+    rss_url: https://www.buzzfeed.com/index.xml
+    topic: Culture
+    enabled: true
+
   # =====================================================================
   # Health & Wellness
   # =====================================================================
