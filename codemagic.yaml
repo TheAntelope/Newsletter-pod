@@ -96,13 +96,11 @@ workflows:
     name: iOS UI Tests
     max_build_duration: 30
     instance_type: mac_mini_m2
-    triggering:
-      events:
-        - push
-      branch_patterns:
-        - pattern: main
-          include: true
-          source: true
+    # Manual-only. UI tests are useful as a pre-release smoke check but
+    # auto-running them on every push made the iOS pipeline visibly red on
+    # any flake (Xcode/iOS-26 animation issues, simulator warm-up jitter,
+    # etc.) without blocking TestFlight ships. Trigger from the Codemagic
+    # UI when capturing screenshots or validating an iOS upgrade.
     environment:
       vars:
         XCODE_PROJECT: "ios/NewsletterPod.xcodeproj"
