@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
 import requests
 
-from .models import AudioSegment, GeneratedEpisode
+from .models import AudioSegment, GeneratedEpisode, PodcastUxConfig
+from .prompting import build_closing_prompt, fallback_closing_text
+
+logger = logging.getLogger(__name__)
 
 OPENAI_DEFAULT_BASE_URL = "https://api.openai.com"
 OPENAI_SPEECH_MAX_CHARS = 4096
@@ -48,6 +52,7 @@ class PodcastApiClient:
         secondary_voice_id: Optional[str] = None,
         primary_speaker_name: Optional[str] = None,
         secondary_speaker_name: Optional[str] = None,
+        ux: Optional[PodcastUxConfig] = None,
     ) -> GeneratedEpisode:
         if not self.enabled:
             raise PodcastApiUnavailable("Podcast API is disabled")
@@ -61,6 +66,7 @@ class PodcastApiClient:
                 secondary_voice_id=secondary_voice_id,
                 primary_speaker_name=primary_speaker_name,
                 secondary_speaker_name=secondary_speaker_name,
+                ux=ux,
             )
         if provider == "generic":
             return self._generate_with_generic(prompt=prompt, title=title)
@@ -74,6 +80,7 @@ class PodcastApiClient:
         secondary_voice_id: Optional[str] = None,
         primary_speaker_name: Optional[str] = None,
         secondary_speaker_name: Optional[str] = None,
+        ux: Optional[PodcastUxConfig] = None,
     ) -> GeneratedEpisode:
         if not self.api_key:
             raise PodcastApiUnavailable("OpenAI API key is not configured")
@@ -88,6 +95,18 @@ class PodcastApiClient:
         )
         if not audio_segments:
             raise PodcastApiError("Structured response missing audio segments")
+
+        if ux is not None:
+            primary_display = (primary_speaker_name or "").strip() or "Host"
+            body_transcript = "\n\n".join(
+                f"{segment.speaker}: {segment.text}" for segment in audio_segments
+            )
+            closing_segment = self._build_closing_segment(
+                body_transcript=body_transcript,
+                ux=ux,
+                primary_display=primary_display,
+            )
+            audio_segments.append(closing_segment)
 
         speech_max_chars = self._speech_max_chars()
         for segment in audio_segments:
@@ -126,7 +145,7 @@ class PodcastApiClient:
                             "text": (
                                 "You write spoken-word daily digests on the user's selected sources. "
                                 "Return valid JSON only. "
-                                f"Split the narration into 1-6 audio_segments, each at most {OPENAI_SPEECH_MAX_CHARS} "
+                                f"Split the narration into 1-12 audio_segments, each at most {OPENAI_SPEECH_MAX_CHARS} "
                                 "characters because they will be sent separately to a text-to-speech endpoint. "
                                 "Preserve natural transitions across segments. "
                                 "The anchor must always round off and close out the podcast with a clear sign-off so the listener knows the episode is over. "
@@ -159,7 +178,7 @@ class PodcastApiClient:
                             "audio_segments": {
                                 "type": "array",
                                 "minItems": 1,
-                                "maxItems": 6,
+                                "maxItems": 12,
                                 "items": {
                                     "type": "object",
                                     "additionalProperties": False,
@@ -201,6 +220,89 @@ class PodcastApiClient:
         if not isinstance(data, dict):
             raise PodcastApiError("OpenAI structured response was not an object")
         return data
+
+    def _build_closing_segment(
+        self,
+        body_transcript: str,
+        ux: PodcastUxConfig,
+        primary_display: str,
+    ) -> AudioSegment:
+        """Stage-2: generate a dedicated closing segment.
+
+        Falls back to a deterministic sign-off if the API call fails for any
+        reason so episodes always end with a wrap.
+        """
+        try:
+            text = self._generate_closing_text(body_transcript=body_transcript, ux=ux)
+        except Exception as exc:  # noqa: BLE001 — closing must never block publish
+            logger.warning("Stage-2 closing call failed, using fallback: %s", exc)
+            text = fallback_closing_text()
+        text = text.strip() or fallback_closing_text()
+        if len(text) > OPENAI_SPEECH_MAX_CHARS:
+            text = text[:OPENAI_SPEECH_MAX_CHARS]
+        return AudioSegment(role="primary", speaker=primary_display, text=text)
+
+    def _generate_closing_text(self, body_transcript: str, ux: PodcastUxConfig) -> str:
+        if not self.api_key:
+            raise PodcastApiUnavailable("OpenAI API key is not configured")
+        user_prompt = build_closing_prompt(body_transcript=body_transcript, ux=ux)
+        payload = {
+            "model": self.text_model,
+            "input": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "You write the closing segment for a podcast "
+                                "episode. Return valid JSON only. The text "
+                                "field is one spoken segment delivered by the "
+                                "primary host: a brief lead-in, the requested "
+                                "takeaways as single spoken sentences, and a "
+                                "sign-off naming the show. No stage "
+                                "directions, no speaker labels."
+                            ),
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": user_prompt}],
+                },
+            ],
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "closing_segment",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "text": {
+                                "type": "string",
+                                "maxLength": OPENAI_SPEECH_MAX_CHARS,
+                            },
+                        },
+                        "required": ["text"],
+                    },
+                }
+            },
+        }
+        response = requests.post(
+            self._build_openai_endpoint("/responses"),
+            json=payload,
+            headers=self._build_openai_headers(),
+            timeout=60,
+        )
+        self._raise_for_availability(response)
+        response.raise_for_status()
+        output_text = _extract_output_text(response.json())
+        data = json.loads(output_text)
+        if not isinstance(data, dict) or not isinstance(data.get("text"), str):
+            raise PodcastApiError("Closing response missing text field")
+        return data["text"]
 
     def _synthesize_speech(self, script: str, voice_id: Optional[str]) -> bytes:
         provider = (self.tts_provider or "openai").strip().lower()

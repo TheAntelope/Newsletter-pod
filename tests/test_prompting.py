@@ -3,7 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from newsletter_pod.models import PodcastUxConfig, SourceItem
-from newsletter_pod.prompting import build_digest_prompt
+from newsletter_pod.prompting import (
+    build_closing_prompt,
+    build_digest_prompt,
+    fallback_closing_text,
+)
 
 
 def test_prompt_enforces_calm_daily_briefing_with_named_hosts():
@@ -306,3 +310,47 @@ def test_prompt_switches_to_thin_day_runtime_guidance():
 
     assert "2-4 minutes" in prompt
     assert "thin-news day" in prompt
+
+
+def test_prompt_skip_closing_drops_required_closing_phase():
+    # With skip_closing=True the body prompt must NOT instruct the model to
+    # produce takeaways or a sign-off — those move to the stage-2 closing call.
+    prompt = build_digest_prompt(
+        _items_three(),
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(),
+        skip_closing=True,
+    )
+
+    assert "REQUIRED closing phase" not in prompt
+    assert "read out loud" not in prompt
+    assert "very last words of the very last audio_segment" not in prompt
+    assert "A separate closing segment will be generated" in prompt
+
+
+def test_closing_prompt_includes_takeaway_count_and_show_name():
+    body = "Host A: Welcome.\n\nHost B: First story summary."
+    prompt = build_closing_prompt(
+        body_transcript=body,
+        ux=PodcastUxConfig(key_findings_count=3, include_top_takeaways=True),
+    )
+
+    assert "Exactly 3 key takeaways" in prompt
+    assert "ClawCast" in prompt
+    assert "Vinnie" in prompt
+    assert body in prompt
+
+
+def test_closing_prompt_omits_takeaways_when_disabled():
+    prompt = build_closing_prompt(
+        body_transcript="Host A: Welcome.",
+        ux=PodcastUxConfig(include_top_takeaways=False),
+    )
+
+    assert "takeaways" not in prompt
+    assert "sign-off" in prompt
+    assert "ClawCast" in prompt
+
+
+def test_fallback_closing_names_show():
+    assert "ClawCast" in fallback_closing_text()

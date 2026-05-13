@@ -32,6 +32,7 @@ class FakePodcastClient:
         secondary_voice_id: str | None = None,
         primary_speaker_name: str | None = None,
         secondary_speaker_name: str | None = None,
+        ux=None,
     ) -> GeneratedEpisode:
         return GeneratedEpisode(
             episode_title="Weekly AI Briefing",
@@ -1014,7 +1015,7 @@ def test_weekly_update_segment_stamps_user_once_per_iso_week(monkeypatch):
     captured_prompts: list[str] = []
 
     class CapturingPodcastClient(FakePodcastClient):
-        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None):
+        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None, ux=None):
             captured_prompts.append(prompt)
             return super().generate(
                 prompt,
@@ -1023,6 +1024,7 @@ def test_weekly_update_segment_stamps_user_once_per_iso_week(monkeypatch):
                 secondary_voice_id=secondary_voice_id,
                 primary_speaker_name=primary_speaker_name,
                 secondary_speaker_name=secondary_speaker_name,
+                ux=ux,
             )
 
     container.control_plane.podcast_client = CapturingPodcastClient()
@@ -1098,7 +1100,7 @@ def test_weekly_update_segment_skipped_when_no_commits(monkeypatch):
     captured_prompts: list[str] = []
 
     class CapturingPodcastClient(FakePodcastClient):
-        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None):
+        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None, ux=None):
             captured_prompts.append(prompt)
             return super().generate(
                 prompt,
@@ -1107,6 +1109,7 @@ def test_weekly_update_segment_skipped_when_no_commits(monkeypatch):
                 secondary_voice_id=secondary_voice_id,
                 primary_speaker_name=primary_speaker_name,
                 secondary_speaker_name=secondary_speaker_name,
+                ux=ux,
             )
 
     container.control_plane.podcast_client = CapturingPodcastClient()

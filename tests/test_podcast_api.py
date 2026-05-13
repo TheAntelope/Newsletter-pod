@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from newsletter_pod.models import PodcastUxConfig
 from newsletter_pod.podcast_api import PodcastApiClient
 
 
@@ -213,6 +214,147 @@ def test_elevenlabs_routes_segments_to_two_voices_by_role(monkeypatch):
     assert generated.audio_segments[0].speaker == "Vinnie Chase"
     assert generated.audio_segments[1].role == "secondary"
     assert generated.audio_segments[1].speaker == "Demi Dreams"
+
+
+def test_stage_two_closing_segment_is_appended_when_ux_provided(monkeypatch):
+    responses_calls: list[dict] = []
+
+    def fake_post(url, json, headers, timeout):
+        if url.endswith("/v1/responses"):
+            responses_calls.append(json)
+            # First call = body script (no closing). Second call = stage-2 closing.
+            if len(responses_calls) == 1:
+                return FakeResponse(
+                    json_data={
+                        "output": [
+                            {
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "text": (
+                                            '{"episode_title":"2026-05-13: Briefing",'
+                                            '"show_notes":"- A: https://example.com/a",'
+                                            '"audio_segments":['
+                                            '{"role":"primary","text":"Top story."},'
+                                            '{"role":"secondary","text":"Reaction."}'
+                                            "]}"
+                                        ),
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                )
+            return FakeResponse(
+                json_data={
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": (
+                                        '{"text":"Three takeaways today. First, A. '
+                                        "Second, B. Third, C. That's the briefing — "
+                                        'see you next time on ClawCast."}'
+                                    ),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        if url.endswith("/v1/audio/speech"):
+            return FakeResponse(content=json["input"].encode("utf-8"))
+        raise AssertionError(url)
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="gpt-4o-mini-tts",
+        tts_voice="alloy",
+    )
+
+    generated = client.generate(
+        prompt="Source content",
+        title="Daily Briefing",
+        primary_speaker_name="Vinnie",
+        secondary_speaker_name="Demi",
+        ux=PodcastUxConfig(key_findings_count=3, include_top_takeaways=True),
+    )
+
+    # Body produced 2 segments, stage-2 appended a third primary-host closing.
+    assert len(generated.audio_segments) == 3
+    assert generated.audio_segments[-1].role == "primary"
+    assert generated.audio_segments[-1].speaker == "Vinnie"
+    assert "ClawCast" in generated.audio_segments[-1].text
+    # Two responses calls (body + closing) and three TTS calls.
+    assert len(responses_calls) == 2
+
+
+def test_stage_two_closing_falls_back_when_api_fails(monkeypatch):
+    state = {"calls": 0}
+
+    def fake_post(url, json, headers, timeout):
+        if url.endswith("/v1/responses"):
+            state["calls"] += 1
+            if state["calls"] == 1:
+                return FakeResponse(
+                    json_data={
+                        "output": [
+                            {
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "text": (
+                                            '{"episode_title":"E",'
+                                            '"show_notes":"x",'
+                                            '"audio_segments":['
+                                            '{"role":"primary","text":"Body."}'
+                                            "]}"
+                                        ),
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                )
+            # Stage-2 call fails — the closing must still appear via fallback.
+            return FakeResponse(status_code=503)
+        if url.endswith("/v1/audio/speech"):
+            return FakeResponse(content=json["input"].encode("utf-8"))
+        raise AssertionError(url)
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="gpt-4o-mini-tts",
+        tts_voice="alloy",
+    )
+
+    generated = client.generate(
+        prompt="Source content",
+        title="Daily Briefing",
+        primary_speaker_name="Vinnie",
+        ux=PodcastUxConfig(include_top_takeaways=False),
+    )
+
+    assert len(generated.audio_segments) == 2
+    assert generated.audio_segments[-1].role == "primary"
+    assert "ClawCast" in generated.audio_segments[-1].text
 
 
 def test_openai_endpoint_builder_accepts_base_url_with_v1():

@@ -963,7 +963,7 @@ class ControlPlaneService:
             else:
                 weekly_update_due = False
         guest_name = secondary_speaker_name if profile.format_preset == "rotating_guest" else None
-        prompt = build_digest_prompt(items, run_date=local_date, ux=ux)
+        prompt = build_digest_prompt(items, run_date=local_date, ux=ux, skip_closing=True)
         title_hint = f"{local_date.isoformat()} weekly briefing"
         generated = self.podcast_client.generate(
             prompt=prompt,
@@ -972,6 +972,7 @@ class ControlPlaneService:
             secondary_voice_id=secondary_voice_id,
             primary_speaker_name=ux.host_primary_name,
             secondary_speaker_name=ux.host_secondary_name or None,
+            ux=ux,
         )
 
         episode_id = f"{user_id[:8]}-{local_date.isoformat()}-{uuid4().hex[:8]}"

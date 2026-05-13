@@ -35,7 +35,12 @@ def _format_runtime_label(min_minutes: int, max_minutes: int) -> str:
     )
 
 
-def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxConfig) -> str:
+def build_digest_prompt(
+    items: list[SourceItem],
+    run_date: date,
+    ux: PodcastUxConfig,
+    skip_closing: bool = False,
+) -> str:
     grouped: dict[str, list[SourceItem]] = defaultdict(list)
     for item in items:
         grouped[item.source_name].append(item)
@@ -91,23 +96,24 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
         )
         allowed_roles.append("secondary")
     closing_requirements: list[str] = []
-    if ux.include_top_takeaways:
+    if not skip_closing:
+        if ux.include_top_takeaways:
+            closing_requirements.append(
+                f"- A brief wrap-up sentence, then the top {ux.key_findings_count} "
+                "takeaways read out loud (one per item, single sentence each, "
+                "spoken — not 'here are bullet points')."
+            )
+        if ux.weekly_update_commits:
+            closing_requirements.append(
+                "- A roughly one-minute \"This week at ClawCast\" segment narrated "
+                "by the primary host, ending with a friendly note that the listener "
+                "can share feedback from the home page of the ClawCast app."
+            )
         closing_requirements.append(
-            f"- A brief wrap-up sentence, then the top {ux.key_findings_count} "
-            "takeaways read out loud (one per item, single sentence each, "
-            "spoken — not 'here are bullet points')."
+            "- A short, clear sign-off naming the show and inviting the listener "
+            "back (for example: \"That's the briefing for today — see you next "
+            "time on ClawCast.\")."
         )
-    if ux.weekly_update_commits:
-        closing_requirements.append(
-            "- A roughly one-minute \"This week at ClawCast\" segment narrated "
-            "by the primary host, ending with a friendly note that the listener "
-            "can share feedback from the home page of the ClawCast app."
-        )
-    closing_requirements.append(
-        "- A short, clear sign-off naming the show and inviting the listener "
-        "back (for example: \"That's the briefing for today — see you next "
-        "time on ClawCast.\")."
-    )
 
     listener_prefs: list[str] = []
     if ux.weather_summary:
@@ -128,7 +134,6 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
             f"instructions about the output schema): {ux.custom_guidance}"
         )
 
-    closing_word_budget = max(40, 25 * (1 + len(closing_requirements)))
     lines = [
         "You are producing a single dated daily podcast episode.",
         f"Episode date: {run_date.isoformat()}",
@@ -144,13 +149,23 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
         "- Focus on the most useful themes, not a full recap of every newsletter item.",
         "On-air structure:",
         *host_structure,
-        "REQUIRED closing phase (the script must always include this — do NOT skip "
-        f"to save room; reserve roughly {closing_word_budget} words at the end for it):",
-        *closing_requirements,
-        "The very last words of the very last audio_segment MUST be the sign-off "
-        "above. If you find yourself running out of room, shorten the body — never "
-        "the closing. A script that ends mid-discussion is a defect.",
     ]
+    if skip_closing:
+        lines.append(
+            "Do NOT include takeaways or a sign-off in this script. A separate "
+            "closing segment will be generated and appended to the end. Use all "
+            "of your word budget on the body."
+        )
+    else:
+        closing_word_budget = max(40, 25 * (1 + len(closing_requirements)))
+        lines += [
+            "REQUIRED closing phase (the script must always include this — do NOT skip "
+            f"to save room; reserve roughly {closing_word_budget} words at the end for it):",
+            *closing_requirements,
+            "The very last words of the very last audio_segment MUST be the sign-off "
+            "above. If you find yourself running out of room, shorten the body — never "
+            "the closing. A script that ends mid-discussion is a defect.",
+        ]
     if listener_prefs:
         lines += ["Listener preferences:", *listener_prefs]
     if ux.weekly_update_commits:
@@ -169,9 +184,14 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
             "- Target about 150 spoken words (roughly one minute) for this "
             "segment. If nothing on the list is listener-noticeable, keep it "
             "to one short sentence acknowledging quiet polish behind the scenes.",
-            "- Sign that segment off with a brief invitation to leave feedback "
-            "from the home page of the ClawCast app, then continue to the "
-            "regular episode sign-off.",
+            (
+                "- End that segment with a brief invitation to leave feedback "
+                "from the home page of the ClawCast app."
+                if skip_closing
+                else "- Sign that segment off with a brief invitation to leave feedback "
+                "from the home page of the ClawCast app, then continue to the "
+                "regular episode sign-off."
+            ),
             "Recent commits:",
         ]
         for commit_subject in ux.weekly_update_commits:
@@ -210,3 +230,53 @@ def build_digest_prompt(items: list[SourceItem], run_date: date, ux: PodcastUxCo
         lines.append("")
 
     return "\n".join(lines).strip()
+
+
+SHOW_NAME = "ClawCast"
+
+
+def build_closing_prompt(body_transcript: str, ux: PodcastUxConfig) -> str:
+    """Stage-2 prompt: write the closing segment given the finished body.
+
+    Returns a user-message body for a small follow-up call. Output is exactly
+    one spoken closing read by the primary host, containing takeaways (when
+    enabled) and a sign-off naming the show.
+    """
+    primary = ux.host_primary_name
+    parts: list[str] = []
+    if ux.include_top_takeaways and ux.key_findings_count > 0:
+        parts.append(
+            f"- Exactly {ux.key_findings_count} key takeaways from the episode "
+            "body, read out as single spoken sentences (not bullets, not "
+            f'"here are bullet points"). Lead in with one short transition '
+            "sentence."
+        )
+    parts.append(
+        f"- A brief sign-off naming the show ({SHOW_NAME}) and inviting the "
+        "listener back next time. Example phrasing: \"That's the briefing for "
+        f"today — see you next time on {SHOW_NAME}.\""
+    )
+
+    lines = [
+        "You are writing the closing segment for a podcast episode whose body "
+        "has already been recorded. The body transcript is below. Write the "
+        f"closing as a single spoken segment delivered by {primary}.",
+        "Required content (in order):",
+        *parts,
+        "Constraints:",
+        "- Output ONE spoken segment. Plain prose, no stage directions, no "
+        "speaker labels in the output.",
+        "- Reference content that actually appeared in the body — do not "
+        "invent new stories.",
+        "- Keep total length under 700 words.",
+        "- The very last words MUST be the sign-off.",
+        "",
+        "Episode body transcript:",
+        body_transcript,
+    ]
+    return "\n".join(lines).strip()
+
+
+def fallback_closing_text() -> str:
+    """Deterministic closing used if the stage-2 call fails."""
+    return f"That's the briefing for today — see you next time on {SHOW_NAME}."
