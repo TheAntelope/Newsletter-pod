@@ -300,3 +300,166 @@ def test_handler_rejects_when_signing_key_missing():
     )
     with pytest.raises(Exception):
         handler.handle({"recipient": "a7f2bk9q@theclawcast.com"})
+
+
+# ---------- Substack auto-confirm + confirmed-by-first-post flows ----------
+
+
+def _make_substack_intent(user_id: str, pub_host: str):
+    from newsletter_pod.substack import build_intent_id
+    from newsletter_pod.user_models import UserSubstackIntent
+
+    now = datetime(2026, 5, 12, tzinfo=timezone.utc)
+    return UserSubstackIntent(
+        id=build_intent_id(user_id, pub_host),
+        user_id=user_id,
+        pub_url=f"https://{pub_host}",
+        pub_host=pub_host,
+        pub_title="Test Publication",
+        pub_author=None,
+        pub_icon_url=None,
+        has_paid_tier=False,
+        alias_email="a7f2bk9q@theclawcast.com",
+        created_at=now,
+    )
+
+
+def test_substack_confirmation_email_auto_confirms_matching_intent():
+    container, repo, user, _ = _build_app_with_user()
+    intent = _make_substack_intent(user.id, "heathercoxrichardson.substack.com")
+    repo.save_substack_intent(intent)
+
+    fetched_urls: list[str] = []
+
+    def fake_fetcher(url: str) -> bool:
+        fetched_urls.append(url)
+        return True
+
+    handler = InboundEmailHandler(
+        repository=repo,
+        inbound_email_domain="theclawcast.com",
+        mailgun_signing_key=SIGNING_KEY,
+        substack_confirm_fetcher=fake_fetcher,
+    )
+
+    payload = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender="no-reply@substack.com",
+        subject="Please confirm your subscription",
+        body=(
+            "Click here to confirm your subscription to Letters from an American: "
+            "https://substack.com/redeem/abc123?token=xyz "
+            "Linked from heathercoxrichardson.substack.com"
+        ),
+    )
+    result = handler.handle(payload)
+    assert result["status"] == "skipped"
+    assert result["reason"] == "confirmation"
+    # Fetched the confirm link.
+    assert fetched_urls == ["https://substack.com/redeem/abc123?token=xyz"]
+    # Intent stamped with auto_confirmed_at.
+    updated = repo.get_substack_intent(intent.id)
+    assert updated is not None
+    assert updated.auto_confirmed_at is not None
+    assert updated.confirmed_at is None  # not flipped until first real post
+
+
+def test_substack_confirmation_email_without_matching_intent_does_not_call_fetcher():
+    container, repo, user, _ = _build_app_with_user()
+    # No intents saved.
+
+    fetched: list[str] = []
+
+    def fake_fetcher(url: str) -> bool:
+        fetched.append(url)
+        return True
+
+    handler = InboundEmailHandler(
+        repository=repo,
+        inbound_email_domain="theclawcast.com",
+        mailgun_signing_key=SIGNING_KEY,
+        substack_confirm_fetcher=fake_fetcher,
+    )
+    payload = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender="no-reply@substack.com",
+        subject="Please confirm your subscription",
+        body="Click here to confirm your subscription. https://substack.com/redeem/abc123",
+    )
+    result = handler.handle(payload)
+    assert result["status"] == "skipped"
+    assert fetched == []
+
+
+def test_non_substack_confirmation_email_does_not_trigger_fetch():
+    container, repo, user, _ = _build_app_with_user()
+    # Pre-save a Substack intent so we'd notice a false positive.
+    repo.save_substack_intent(_make_substack_intent(user.id, "lenny.substack.com"))
+
+    fetched: list[str] = []
+
+    handler = InboundEmailHandler(
+        repository=repo,
+        inbound_email_domain="theclawcast.com",
+        mailgun_signing_key=SIGNING_KEY,
+        substack_confirm_fetcher=lambda url: (fetched.append(url) or True),
+    )
+    payload = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender="newsletter@beehiiv.com",
+        subject="Please confirm your subscription",
+        body="Click here to confirm your subscription. https://beehiiv.com/confirm/...",
+    )
+    result = handler.handle(payload)
+    assert result["status"] == "skipped"
+    assert fetched == []
+
+
+def test_first_post_from_substack_flips_intent_confirmed_at():
+    container, repo, user, _ = _build_app_with_user()
+    intent = _make_substack_intent(user.id, "heathercoxrichardson.substack.com")
+    repo.save_substack_intent(intent)
+
+    handler = InboundEmailHandler(
+        repository=repo,
+        inbound_email_domain="theclawcast.com",
+        mailgun_signing_key=SIGNING_KEY,
+    )
+    payload = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender='"Heather Cox Richardson" <hcr@heathercoxrichardson.substack.com>',
+        subject="May 12, 2026",
+        body="Today in American history... read on the web: https://heathercoxrichardson.substack.com/p/may-12-2026",
+        message_id="<post-1@hcr.substack.com>",
+    )
+    result = handler.handle(payload)
+    assert result["status"] == "stored"
+    # Intent's confirmed_at is now set.
+    updated = repo.get_substack_intent(intent.id)
+    assert updated is not None
+    assert updated.confirmed_at is not None
+
+
+def test_post_not_matching_any_intent_does_not_flip_confirmed_at():
+    container, repo, user, _ = _build_app_with_user()
+    intent = _make_substack_intent(user.id, "lenny.substack.com")
+    repo.save_substack_intent(intent)
+
+    handler = InboundEmailHandler(
+        repository=repo,
+        inbound_email_domain="theclawcast.com",
+        mailgun_signing_key=SIGNING_KEY,
+    )
+    # Unrelated newsletter; nothing about lenny.substack.com in the body.
+    payload = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender='"Ben Thompson" <newsletter@stratechery.com>',
+        subject="Today's Stratechery",
+        body="Read on the web: https://stratechery.com/2026/article/",
+        message_id="<post-1@stratechery.com>",
+    )
+    result = handler.handle(payload)
+    assert result["status"] == "stored"
+    updated = repo.get_substack_intent(intent.id)
+    assert updated is not None
+    assert updated.confirmed_at is None

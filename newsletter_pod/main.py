@@ -103,6 +103,10 @@ class SubmitSwipeRequest(BaseModel):
     direction: int
 
 
+class CreateSubstackIntentRequest(BaseModel):
+    pub_url: str
+
+
 @dataclass
 class ServiceContainer:
     settings: Settings
@@ -312,6 +316,44 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         user = _require_session_user(container, authorization)
         assert container.control_plane is not None
         return container.control_plane.list_inbound_items(user.id)
+
+    @app.get("/v1/substack/probe")
+    def probe_substack(url: str) -> dict:
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.probe_substack_publication(url)
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    @app.get("/v1/me/substack/intents")
+    def list_substack_intents(authorization: str | None = Header(default=None)) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        return container.control_plane.list_substack_intents(user.id)
+
+    @app.post("/v1/me/substack/intents", status_code=status.HTTP_201_CREATED)
+    def create_substack_intent(
+        request_payload: CreateSubstackIntentRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.create_substack_intent(user.id, request_payload.pub_url)
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    @app.delete("/v1/me/substack/intents/{intent_id}")
+    def delete_substack_intent(
+        intent_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.delete_substack_intent(user.id, intent_id)
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
     @app.post("/v1/me/feedback", status_code=status.HTTP_201_CREATED)
     def submit_feedback(

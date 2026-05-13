@@ -17,6 +17,12 @@ from .config import Settings, load_sources, load_voices
 from .costing import estimate_generation_cost
 from .embeddings import EmbeddingProvider
 from .inbound import ensure_user_inbound_alias
+from .substack import (
+    SubstackProbeResult,
+    build_intent_id,
+    canonicalize_pub_url,
+    probe_publication,
+)
 from .ingestion import RSSIngestionService
 from .interest_vector import compute_user_vector
 from .mailer import Mailer
@@ -44,6 +50,7 @@ from .user_models import (
     UserRecord,
     UserRunRecord,
     UserSourceRecord,
+    UserSubstackIntent,
 )
 from .user_repository import ControlPlaneRepository
 
@@ -214,6 +221,109 @@ class ControlPlaneService:
             "inbound_address": self._inbound_address_for(user),
             "items": [item.model_dump(mode="json") for item in items],
         }
+
+    def probe_substack_publication(self, raw_url: str) -> dict[str, Any]:
+        """Resolve a user-typed Substack URL/handle to display metadata.
+
+        Wraps newsletter_pod.substack.probe_publication. Raises
+        ControlPlaneError on inputs we can't parse or fetch so the route
+        layer can return 400.
+        """
+        try:
+            _, host = canonicalize_pub_url(raw_url)
+        except ValueError as exc:
+            raise ControlPlaneError(str(exc)) from exc
+        try:
+            result = probe_publication(f"https://{host}")
+        except requests.RequestException as exc:
+            logger.info("Substack probe failed for %s: %s", host, exc)
+            raise ControlPlaneError(f"Could not reach {host}") from exc
+        return self._serialize_probe(result)
+
+    def create_substack_intent(self, user_id: str, raw_url: str) -> dict[str, Any]:
+        """Create or return an existing intent for (user, pub_host).
+
+        Idempotent against the deterministic intent_id, so a user tapping
+        Subscribe twice for the same pub doesn't duplicate the row.
+        """
+        user = self._require_user(user_id)
+        ensure_user_inbound_alias(self.repository, user)
+        try:
+            _, host = canonicalize_pub_url(raw_url)
+        except ValueError as exc:
+            raise ControlPlaneError(str(exc)) from exc
+
+        intent_id = build_intent_id(user_id, host)
+        existing = self.repository.get_substack_intent(intent_id)
+        if existing is not None:
+            return {"intent": self._serialize_intent(existing)}
+
+        try:
+            probe = probe_publication(f"https://{host}")
+        except requests.RequestException as exc:
+            logger.info("Substack probe failed during intent creation for %s: %s", host, exc)
+            raise ControlPlaneError(f"Could not reach {host}") from exc
+
+        intent = UserSubstackIntent(
+            id=intent_id,
+            user_id=user_id,
+            pub_url=probe.pub_url,
+            pub_host=probe.pub_host,
+            pub_title=probe.title,
+            pub_author=probe.author,
+            pub_icon_url=probe.icon_url,
+            has_paid_tier=probe.has_paid_tier,
+            alias_email=self._inbound_address_for(user),
+            created_at=utc_now(),
+        )
+        self.repository.save_substack_intent(intent)
+        logger.info(
+            "Substack intent created: user=%s pub_host=%s intent_id=%s",
+            user_id,
+            host,
+            intent_id,
+        )
+        return {"intent": self._serialize_intent(intent)}
+
+    def list_substack_intents(self, user_id: str) -> dict[str, Any]:
+        user = self._require_user(user_id)
+        ensure_user_inbound_alias(self.repository, user)
+        intents = self.repository.list_user_substack_intents(user_id)
+        return {
+            "inbound_address": self._inbound_address_for(user),
+            "intents": [self._serialize_intent(intent) for intent in intents],
+        }
+
+    def delete_substack_intent(self, user_id: str, intent_id: str) -> dict[str, Any]:
+        self._require_user(user_id)
+        existing = self.repository.get_substack_intent(intent_id)
+        if existing is None or existing.user_id != user_id:
+            raise ControlPlaneError("Substack subscription not found")
+        self.repository.delete_substack_intent(intent_id)
+        return {"deleted": True, "intent_id": intent_id}
+
+    @staticmethod
+    def _serialize_probe(result: SubstackProbeResult) -> dict[str, Any]:
+        return {
+            "pub_url": result.pub_url,
+            "pub_host": result.pub_host,
+            "title": result.title,
+            "author": result.author,
+            "icon_url": result.icon_url,
+            "has_paid_tier": result.has_paid_tier,
+            "feed_url": result.feed_url,
+        }
+
+    @staticmethod
+    def _serialize_intent(intent: UserSubstackIntent) -> dict[str, Any]:
+        payload = intent.model_dump(mode="json")
+        if intent.confirmed_at is not None:
+            payload["status"] = "confirmed"
+        elif intent.auto_confirmed_at is not None:
+            payload["status"] = "auto_confirmed"
+        else:
+            payload["status"] = "pending"
+        return payload
 
     def submit_feedback(
         self,

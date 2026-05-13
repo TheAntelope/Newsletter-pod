@@ -35,6 +35,7 @@ from .user_models import (
     UserRecord,
     UserRunRecord,
     UserSourceRecord,
+    UserSubstackIntent,
 )
 
 
@@ -237,6 +238,22 @@ class ControlPlaneRepository(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def save_substack_intent(self, intent: UserSubstackIntent) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_substack_intent(self, intent_id: str) -> Optional[UserSubstackIntent]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_user_substack_intents(self, user_id: str) -> list[UserSubstackIntent]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_substack_intent(self, intent_id: str) -> None:
+        raise NotImplementedError
+
 
 class InMemoryControlPlaneRepository(ControlPlaneRepository):
     def __init__(self) -> None:
@@ -258,6 +275,7 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         self._source_items: dict[str, SourceItemRecord] = {}
         self._swipes: dict[str, SwipeRecord] = {}
         self._swipe_decks: dict[str, SwipeDeckRecord] = {}
+        self._substack_intents: dict[str, UserSubstackIntent] = {}
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         return self._users.get(user_id)
@@ -477,6 +495,24 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         existing.append(source.model_copy())
         return True
 
+    def save_substack_intent(self, intent: UserSubstackIntent) -> None:
+        self._substack_intents[intent.id] = intent.model_copy()
+
+    def get_substack_intent(self, intent_id: str) -> Optional[UserSubstackIntent]:
+        return self._substack_intents.get(intent_id)
+
+    def list_user_substack_intents(self, user_id: str) -> list[UserSubstackIntent]:
+        intents = [
+            intent
+            for intent in self._substack_intents.values()
+            if intent.user_id == user_id
+        ]
+        intents.sort(key=lambda intent: intent.created_at, reverse=True)
+        return intents
+
+    def delete_substack_intent(self, intent_id: str) -> None:
+        self._substack_intents.pop(intent_id, None)
+
 
 class FirestoreControlPlaneRepository(ControlPlaneRepository):
     def __init__(self, collection_prefix: str) -> None:
@@ -497,6 +533,7 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         self._source_items = self._db.collection(f"{collection_prefix}_source_items")
         self._swipes = self._db.collection(f"{collection_prefix}_swipes")
         self._swipe_decks = self._db.collection(f"{collection_prefix}_swipe_decks")
+        self._substack_intents = self._db.collection(f"{collection_prefix}_user_substack_intents")
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         doc = self._users.document(user_id).get()
@@ -856,3 +893,25 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
                 return False
         self._sources.document(source.id).set(source.model_dump(mode="python"))
         return True
+
+    def save_substack_intent(self, intent: UserSubstackIntent) -> None:
+        self._substack_intents.document(intent.id).set(intent.model_dump(mode="python"))
+
+    def get_substack_intent(self, intent_id: str) -> Optional[UserSubstackIntent]:
+        doc = self._substack_intents.document(intent_id).get()
+        if not doc.exists:
+            return None
+        return UserSubstackIntent.model_validate(doc.to_dict())
+
+    def list_user_substack_intents(self, user_id: str) -> list[UserSubstackIntent]:
+        # Single equality where + app-side sort avoids needing a composite
+        # index for (user_id, created_at). Per-user intent counts are
+        # bounded (a user has maybe tens of Substacks at most) so this is
+        # fine.
+        docs = list(self._substack_intents.where("user_id", "==", user_id).stream())
+        records = [UserSubstackIntent.model_validate(doc.to_dict()) for doc in docs]
+        records.sort(key=lambda intent: intent.created_at, reverse=True)
+        return records
+
+    def delete_substack_intent(self, intent_id: str) -> None:
+        self._substack_intents.document(intent_id).delete()

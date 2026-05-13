@@ -18,11 +18,17 @@ import hmac
 import logging
 import re
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
-from .user_models import InboundEmailItem, UserRecord
+from .substack import (
+    extract_confirm_url,
+    fetch_confirm_url,
+    is_substack_sender,
+    match_intent_host,
+)
+from .user_models import InboundEmailItem, UserRecord, UserSubstackIntent
 from .user_repository import ControlPlaneRepository
 from .utils import utc_now
 
@@ -180,6 +186,9 @@ class InboundEmailHandler:
     repository: ControlPlaneRepository
     inbound_email_domain: str
     mailgun_signing_key: Optional[str]
+    # Injection point for the Substack confirm-link fetch. Tests pass a
+    # stub so handler unit tests don't make real HTTP calls.
+    substack_confirm_fetcher: Callable[[str], bool] = field(default=fetch_confirm_url)
 
     def handle(self, payload: dict[str, str]) -> dict[str, str]:
         """Process one Mailgun multipart-form payload.
@@ -213,11 +222,32 @@ class InboundEmailHandler:
         body_text = (
             payload.get("stripped-text")
             or payload.get("body-plain")
-            or payload.get("body-html")
             or ""
         ).strip()
+        body_html = (payload.get("body-html") or "").strip()
+        # Preserve old behavior: when only HTML is available, fall back to
+        # using it as the body_text for storage / extraction. The HTML is
+        # still passed separately to extract_confirm_url for the most
+        # reliable link surface.
+        if not body_text and body_html:
+            body_text = body_html
+
+        sender_raw = payload.get("from") or payload.get("From") or payload.get("sender") or ""
+        from_email, from_name = parse_email_address(sender_raw)
+        sender_domain = (
+            from_email.rsplit("@", 1)[-1].lower()
+            if from_email and "@" in from_email
+            else (from_email or "").lower()
+        )
 
         if looks_like_confirmation(subject, body_text):
+            self._maybe_auto_confirm_substack(
+                user=user,
+                from_email=from_email,
+                sender_domain=sender_domain,
+                body_text=body_text,
+                body_html=body_html,
+            )
             logger.info(
                 "Inbound email skipped (confirmation): user=%s subject=%r",
                 user.id,
@@ -225,18 +255,24 @@ class InboundEmailHandler:
             )
             return {"status": "skipped", "reason": "confirmation"}
 
-        sender_raw = payload.get("from") or payload.get("From") or payload.get("sender") or ""
-        from_email, from_name = parse_email_address(sender_raw)
         if not from_email:
             logger.warning("Inbound email rejected: no parseable sender for user %s", user.id)
             return {"status": "ignored", "reason": "missing_sender"}
 
-        sender_domain = from_email.rsplit("@", 1)[-1].lower() if "@" in from_email else from_email
         message_id = (payload.get("Message-Id") or payload.get("message-id") or "").strip() or None
 
         item_id = build_inbound_item_id(message_id, user.id, fallback=f"{from_email}:{subject}:{payload.get('timestamp','')}")
         if self.repository.get_inbound_item(item_id) is not None:
             return {"status": "duplicate", "item_id": item_id}
+
+        received_at = parse_received_at(payload.get("Date"))
+        self._maybe_mark_intent_confirmed(
+            user=user,
+            sender_domain=sender_domain,
+            body_text=body_text,
+            body_html=body_html,
+            received_at=received_at,
+        )
 
         item = InboundEmailItem(
             id=item_id,
@@ -248,7 +284,7 @@ class InboundEmailHandler:
             subject=subject or "(no subject)",
             body_text=body_text[:8000],  # bound the per-item size
             article_url=extract_article_url(body_text),
-            received_at=parse_received_at(payload.get("Date")),
+            received_at=received_at,
         )
         self.repository.save_inbound_item(item)
         logger.info(
@@ -259,6 +295,106 @@ class InboundEmailHandler:
             item_id,
         )
         return {"status": "stored", "item_id": item_id}
+
+    def _maybe_auto_confirm_substack(
+        self,
+        *,
+        user: UserRecord,
+        from_email: str,
+        sender_domain: str,
+        body_text: str,
+        body_html: str,
+    ) -> None:
+        """If this confirmation email matches a pending Substack intent for
+        the user, fetch the confirm link server-side and stamp
+        auto_confirmed_at.
+
+        Always returns None — failures (no match, no link, fetch failure)
+        are logged but never propagated. The user can still receive the
+        publication's first post if Substack honored the signup despite
+        the unclicked confirmation.
+        """
+        if not is_substack_sender(from_email):
+            return
+        intents = self.repository.list_user_substack_intents(user.id)
+        pending = [intent for intent in intents if intent.auto_confirmed_at is None]
+        if not pending:
+            return
+        match_host = match_intent_host(
+            [intent.pub_host for intent in pending],
+            sender_domain,
+            body_text,
+            body_html,
+        )
+        if not match_host:
+            return
+        intent = next(intent for intent in pending if intent.pub_host == match_host)
+        confirm_url = extract_confirm_url(body_text, body_html)
+        if not confirm_url:
+            logger.info(
+                "Substack confirmation matched intent but no confirm URL found: user=%s pub_host=%s",
+                user.id,
+                intent.pub_host,
+            )
+            return
+        fetched = self.substack_confirm_fetcher(confirm_url)
+        if not fetched:
+            logger.warning(
+                "Substack confirm-link fetch failed: user=%s pub_host=%s url=%s",
+                user.id,
+                intent.pub_host,
+                confirm_url,
+            )
+            return
+        updated = intent.model_copy(update={"auto_confirmed_at": utc_now()})
+        self.repository.save_substack_intent(updated)
+        logger.info(
+            "Substack intent auto-confirmed: user=%s pub_host=%s intent_id=%s",
+            user.id,
+            intent.pub_host,
+            intent.id,
+        )
+
+    def _maybe_mark_intent_confirmed(
+        self,
+        *,
+        user: UserRecord,
+        sender_domain: str,
+        body_text: str,
+        body_html: str,
+        received_at: datetime,
+    ) -> None:
+        """Flip confirmed_at on the first real post that matches an intent.
+
+        The point: low-volume Substacks may sit in `auto_confirmed` for
+        days until they actually publish. The UI keeps the row in
+        Pending state until this hook flips it, which sets the user's
+        expectation that "Pending" means "we're waiting on the publisher",
+        not "we forgot about you".
+        """
+        if "substack.com" not in sender_domain and "substack.com" not in (body_text + body_html).lower():
+            return
+        intents = self.repository.list_user_substack_intents(user.id)
+        unconfirmed = [intent for intent in intents if intent.confirmed_at is None]
+        if not unconfirmed:
+            return
+        match_host = match_intent_host(
+            [intent.pub_host for intent in unconfirmed],
+            sender_domain,
+            body_text,
+            body_html,
+        )
+        if not match_host:
+            return
+        intent = next(intent for intent in unconfirmed if intent.pub_host == match_host)
+        updated = intent.model_copy(update={"confirmed_at": received_at})
+        self.repository.save_substack_intent(updated)
+        logger.info(
+            "Substack intent confirmed by first post: user=%s pub_host=%s intent_id=%s",
+            user.id,
+            intent.pub_host,
+            intent.id,
+        )
 
 
 class InboundError(Exception):

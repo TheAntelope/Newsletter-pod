@@ -138,6 +138,34 @@ class InboundEmailItem(BaseModel):
     consumed_at: Optional[datetime] = None  # set when included in an episode
 
 
+class UserSubstackIntent(BaseModel):
+    """A user's intent to subscribe to a Substack publication via their alias.
+
+    Lifecycle:
+      1. Created when user taps "Subscribe" on a publication in our app.
+      2. `auto_confirmed_at` set when the inbound handler matches a Substack
+         double-opt-in email to this intent and clicks the confirm link
+         server-side.
+      3. `confirmed_at` set when the first non-confirmation Substack email
+         from this publication arrives at the alias. UI flips Pending ->
+         Confirmed at this point (see decision: low-volume pubs may stay
+         Pending for days, with copy that sets that expectation).
+    """
+
+    id: str  # sha256(user_id + ":" + pub_host)[:32] -- idempotent per (user, pub)
+    user_id: str
+    pub_url: str  # canonical: scheme + host, no path or trailing slash
+    pub_host: str  # lowercased host, used to match incoming emails to intents
+    pub_title: Optional[str] = None
+    pub_author: Optional[str] = None
+    pub_icon_url: Optional[str] = None
+    has_paid_tier: bool = False
+    alias_email: str  # snapshot of the alias at intent-creation time
+    created_at: datetime
+    auto_confirmed_at: Optional[datetime] = None
+    confirmed_at: Optional[datetime] = None
+
+
 class CostRecord(BaseModel):
     run_id: str
     user_id: str
