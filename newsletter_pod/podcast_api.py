@@ -126,7 +126,7 @@ class PodcastApiClient:
                             "text": (
                                 "You write spoken-word daily digests on the user's selected sources. "
                                 "Return valid JSON only. "
-                                f"Split the narration into 1-6 audio_segments, each at most {OPENAI_SPEECH_MAX_CHARS} "
+                                f"Split the narration into 1-12 audio_segments, each at most {OPENAI_SPEECH_MAX_CHARS} "
                                 "characters because they will be sent separately to a text-to-speech endpoint. "
                                 "Preserve natural transitions across segments. "
                                 "The anchor must always round off and close out the podcast with a clear sign-off so the listener knows the episode is over. "
@@ -159,7 +159,7 @@ class PodcastApiClient:
                             "audio_segments": {
                                 "type": "array",
                                 "minItems": 1,
-                                "maxItems": 6,
+                                "maxItems": 12,
                                 "items": {
                                     "type": "object",
                                     "additionalProperties": False,
