@@ -16,6 +16,11 @@ from .auth import AppleIdentityVerifier, SessionManager
 from .config import Settings, load_sources, load_voices
 from .costing import estimate_generation_cost
 from .embeddings import EmbeddingProvider
+from .feedback_digest import (
+    JOB_STATE_NAME as FEEDBACK_DIGEST_JOB_STATE_NAME,
+    format_digest_email,
+    summarize_feedback_with_llm,
+)
 from .inbound import ensure_user_inbound_alias
 from .substack import (
     SubstackProbeResult,
@@ -362,6 +367,81 @@ class ControlPlaneService:
         )
         self.repository.save_feedback(record)
         return record.model_dump(mode="json")
+
+    def send_feedback_weekly_digest(self) -> dict[str, Any]:
+        """Send the weekly feedback summary email. First run pulls everything to
+        date; later runs only include feedback created since the previous run.
+        Sends even when empty (with a 'no feedback this week' body) so the
+        operator always gets a heartbeat from the job."""
+        if not self.settings.feedback_digest_email_enabled:
+            return {"status": "disabled"}
+
+        last_run_at = self.repository.get_job_state(FEEDBACK_DIGEST_JOB_STATE_NAME)
+        now = utc_now()
+        records = self.repository.list_feedback_since(last_run_at)
+
+        users_by_id: dict[str, UserRecord] = {}
+        for record in records:
+            if record.user_id in users_by_id:
+                continue
+            user = self.repository.get_user(record.user_id)
+            if user is not None:
+                users_by_id[record.user_id] = user
+
+        summary: Optional[str] = None
+        if records:
+            try:
+                summary = summarize_feedback_with_llm(
+                    records,
+                    api_key=self.podcast_client.api_key,
+                    text_model=self.podcast_client.text_model,
+                    base_url=self.podcast_client.base_url,
+                )
+            except (TranslationError, requests.RequestException) as exc:
+                logger.warning("Feedback digest summarization failed: %s", exc)
+                summary = None
+
+        subject, body = format_digest_email(
+            records,
+            summary=summary,
+            since=last_run_at,
+            now=now,
+            users_by_id=users_by_id,
+        )
+
+        recipients = self._feedback_digest_recipients()
+        if not recipients:
+            raise ControlPlaneError(
+                "Feedback digest has no recipients configured"
+            )
+
+        self.mailer.send(subject, body, recipients=recipients)
+        self.repository.set_job_state(FEEDBACK_DIGEST_JOB_STATE_NAME, now)
+
+        return {
+            "status": "sent",
+            "feedback_count": len(records),
+            "since": last_run_at.isoformat() if last_run_at else None,
+            "now": now.isoformat(),
+            "recipients": recipients,
+            "summary_present": summary is not None,
+        }
+
+    def _feedback_digest_recipients(self) -> list[str]:
+        seen: set[str] = set()
+        recipients: list[str] = []
+        candidates: list[str] = []
+        if self.settings.alert_email_to:
+            candidates.append(self.settings.alert_email_to)
+        for raw in self.settings.feedback_digest_extra_recipients.split(","):
+            candidates.append(raw)
+        for raw in candidates:
+            address = raw.strip()
+            if not address or address in seen:
+                continue
+            seen.add(address)
+            recipients.append(address)
+        return recipients
 
     def get_cold_start_swipe_deck(self, user_id: str) -> dict[str, Any]:
         self._require_user(user_id)

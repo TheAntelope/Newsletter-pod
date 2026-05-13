@@ -169,6 +169,20 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             force=request_payload.force,
         )
 
+    @app.post("/jobs/send-feedback-digest")
+    def send_feedback_digest(
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.send_feedback_weekly_digest()
+        except ControlPlaneError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
+
     @app.post("/v1/auth/apple")
     def auth_with_apple(request_payload: AppleAuthRequest) -> dict:
         assert container.control_plane is not None
@@ -560,22 +574,32 @@ def _build_container(settings: Settings) -> ServiceContainer:
         elevenlabs_model=settings.elevenlabs_model,
     )
 
-    mailer_required = settings.alert_email_enabled or settings.publish_summary_email_enabled
+    mailer_required = (
+        settings.alert_email_enabled
+        or settings.publish_summary_email_enabled
+        or settings.feedback_digest_email_enabled
+    )
     if mailer_required:
-        required = [
-            settings.smtp_host,
-            settings.alert_email_from,
-            settings.alert_email_to,
-        ]
-        if not all(required):
-            raise RuntimeError("Email delivery is enabled but SMTP or email addresses are missing")
+        if not settings.smtp_host or not settings.alert_email_from:
+            raise RuntimeError("Email delivery is enabled but SMTP host or sender is missing")
+        legacy_features = settings.alert_email_enabled or settings.publish_summary_email_enabled
+        if legacy_features and not settings.alert_email_to:
+            raise RuntimeError("ALERT_EMAIL_TO is required when alert/summary emails are enabled")
+        if (
+            settings.feedback_digest_email_enabled
+            and not settings.alert_email_to
+            and not settings.feedback_digest_extra_recipients.strip()
+        ):
+            raise RuntimeError(
+                "Feedback digest is enabled but no recipients are configured"
+            )
         mailer = SMTPMailer(
             host=settings.smtp_host or "",
             port=settings.smtp_port,
             username=settings.smtp_username,
             password=settings.smtp_password,
             sender=settings.alert_email_from or "",
-            recipient=settings.alert_email_to or "",
+            default_recipients=[settings.alert_email_to] if settings.alert_email_to else [],
             use_tls=settings.smtp_use_tls,
         )
     else:

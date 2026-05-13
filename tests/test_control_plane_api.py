@@ -156,6 +156,151 @@ def test_feedback_translation_failure_still_persists_raw(monkeypatch):
     assert len(stored) == 1
 
 
+class _RecordingMailer:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str, list[str] | None]] = []
+
+    def send(self, subject, body, *, recipients=None):
+        self.sent.append((subject, body, recipients))
+
+
+def _enable_feedback_digest(container, *, extras="extra@example.com,vincemartin1991@gmail.com"):
+    container.settings.feedback_digest_email_enabled = True
+    container.settings.alert_email_to = "alerts@example.com"
+    container.settings.feedback_digest_extra_recipients = extras
+    mailer = _RecordingMailer()
+    container.control_plane.mailer = mailer
+    return mailer
+
+
+def test_feedback_digest_no_feedback_still_sends(monkeypatch):
+    container, client = _build_app()
+    mailer = _enable_feedback_digest(container)
+
+    resp = client.post("/jobs/send-feedback-digest")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "sent"
+    assert body["feedback_count"] == 0
+    assert body["since"] is None
+    assert body["summary_present"] is False
+    assert body["recipients"] == [
+        "alerts@example.com",
+        "extra@example.com",
+        "vincemartin1991@gmail.com",
+    ]
+
+    assert len(mailer.sent) == 1
+    subject, email_body, recipients = mailer.sent[0]
+    assert "no feedback" in subject.lower()
+    assert "No feedback" in email_body
+    assert recipients == [
+        "alerts@example.com",
+        "extra@example.com",
+        "vincemartin1991@gmail.com",
+    ]
+
+    # Cursor should have advanced even though there was nothing to summarize.
+    assert container.control_repository.get_job_state("feedback_weekly_digest") is not None
+
+
+def test_feedback_digest_first_run_includes_all_to_date(monkeypatch):
+    from newsletter_pod import control_plane as cp_module
+    from newsletter_pod import feedback_digest as fd_module
+
+    container, client = _build_app()
+    mailer = _enable_feedback_digest(container)
+
+    _, headers_a = _auth_headers(client, FakeAppleVerifier("user-a", "a@example.com"))
+    resp_a = client.post(
+        "/v1/me/feedback",
+        json={"text": "Love the welcome pod"},
+        headers=headers_a,
+    )
+    assert resp_a.status_code == 201
+    _, headers_b = _auth_headers(client, FakeAppleVerifier("user-b", "b@example.com"))
+    resp_b = client.post(
+        "/v1/me/feedback",
+        json={"text": "Audio cut off mid-sentence"},
+        headers=headers_b,
+    )
+    assert resp_b.status_code == 201
+
+    summary_calls = {"count": 0}
+
+    def fake_summary(records, **kwargs):
+        summary_calls["count"] += 1
+        summary_calls["record_count"] = len(records)
+        return "- Users like welcome pod\n- One report of audio cutoff"
+
+    monkeypatch.setattr(cp_module, "summarize_feedback_with_llm", fake_summary)
+    # Also monkeypatch the symbol in fd_module to keep imports consistent.
+    monkeypatch.setattr(fd_module, "summarize_feedback_with_llm", fake_summary, raising=False)
+
+    resp = client.post("/jobs/send-feedback-digest")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "sent"
+    assert body["feedback_count"] == 2
+    assert body["since"] is None  # first run
+    assert body["summary_present"] is True
+
+    assert summary_calls["count"] == 1
+    assert summary_calls["record_count"] == 2
+
+    assert len(mailer.sent) == 1
+    subject, email_body, _recipients = mailer.sent[0]
+    assert "2 items" in subject
+    assert "all-time" in subject
+    assert "Summary" in email_body
+    assert "audio cutoff" in email_body
+    assert "Love the welcome pod" in email_body
+    assert "Audio cut off mid-sentence" in email_body
+
+
+def test_feedback_digest_disabled_short_circuits():
+    container, client = _build_app()
+    # Do NOT enable the digest flag. Should be a no-op.
+    container.settings.feedback_digest_email_enabled = False
+    mailer = _RecordingMailer()
+    container.control_plane.mailer = mailer
+
+    resp = client.post("/jobs/send-feedback-digest")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "disabled"}
+    assert mailer.sent == []
+
+
+def test_feedback_digest_second_run_uses_cursor(monkeypatch):
+    from newsletter_pod import control_plane as cp_module
+
+    container, client = _build_app()
+    mailer = _enable_feedback_digest(container)
+
+    _, headers = _auth_headers(client, FakeAppleVerifier("user-c", "c@example.com"))
+    client.post("/v1/me/feedback", json={"text": "first item"}, headers=headers)
+
+    monkeypatch.setattr(cp_module, "summarize_feedback_with_llm", lambda records, **_: "ok")
+
+    first = client.post("/jobs/send-feedback-digest")
+    assert first.status_code == 200
+    assert first.json()["feedback_count"] == 1
+    assert first.json()["since"] is None
+
+    # New feedback arrives AFTER the first digest fired.
+    client.post("/v1/me/feedback", json={"text": "second item"}, headers=headers)
+
+    second = client.post("/jobs/send-feedback-digest")
+    assert second.status_code == 200
+    second_body = second.json()
+    assert second_body["feedback_count"] == 1
+    assert second_body["since"] is not None
+    # The second mailer call should only mention the new feedback.
+    _, email_body, _r = mailer.sent[-1]
+    assert "second item" in email_body
+    assert "first item" not in email_body
+
+
 def _seed_source_item(container, dedupe_key: str, *, embedding: list[float] | None = None) -> None:
     from newsletter_pod.models import SourceItemRecord
 

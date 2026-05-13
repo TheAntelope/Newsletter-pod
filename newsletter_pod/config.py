@@ -129,6 +129,13 @@ class Settings(BaseSettings):
     alert_email_from: Optional[str] = Field(default=None, alias="ALERT_EMAIL_FROM")
     alert_email_to: Optional[str] = Field(default=None, alias="ALERT_EMAIL_TO")
     publish_summary_email_enabled: bool = Field(default=False, alias="PUBLISH_SUMMARY_EMAIL_ENABLED")
+    feedback_digest_email_enabled: bool = Field(
+        default=False, alias="FEEDBACK_DIGEST_EMAIL_ENABLED"
+    )
+    feedback_digest_extra_recipients: str = Field(
+        default="vincemartin1991@gmail.com",
+        alias="FEEDBACK_DIGEST_EXTRA_RECIPIENTS",
+    )
     smtp_host: Optional[str] = Field(default=None, alias="SMTP_HOST")
     smtp_port: int = Field(default=587, alias="SMTP_PORT")
     smtp_username: Optional[str] = Field(default=None, alias="SMTP_USERNAME")

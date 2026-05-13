@@ -215,6 +215,21 @@ class ControlPlaneRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_feedback_since(self, since: Optional[datetime]) -> list[FeedbackRecord]:
+        """Return all feedback records created at-or-after `since`, across every
+        user, newest-first. When `since` is None, return everything ever
+        recorded — used for the first run of the weekly digest job."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_job_state(self, name: str) -> Optional[datetime]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_job_state(self, name: str, last_run_at: datetime) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
     def save_swipe(self, swipe: SwipeRecord) -> None:
         raise NotImplementedError
 
@@ -272,6 +287,7 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         self._billing_events: dict[str, BillingEventRecord] = {}
         self._inbound_items: dict[str, InboundEmailItem] = {}
         self._feedback: dict[str, FeedbackRecord] = {}
+        self._job_state: dict[str, datetime] = {}
         self._source_items: dict[str, SourceItemRecord] = {}
         self._swipes: dict[str, SwipeRecord] = {}
         self._swipe_decks: dict[str, SwipeDeckRecord] = {}
@@ -467,6 +483,19 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         items.sort(key=lambda item: item.created_at, reverse=True)
         return items[:limit]
 
+    def list_feedback_since(self, since: Optional[datetime]) -> list[FeedbackRecord]:
+        items = list(self._feedback.values())
+        if since is not None:
+            items = [item for item in items if item.created_at >= since]
+        items.sort(key=lambda item: item.created_at, reverse=True)
+        return items
+
+    def get_job_state(self, name: str) -> Optional[datetime]:
+        return self._job_state.get(name)
+
+    def set_job_state(self, name: str, last_run_at: datetime) -> None:
+        self._job_state[name] = last_run_at
+
     def save_swipe(self, swipe: SwipeRecord) -> None:
         self._swipes[swipe.id] = swipe
 
@@ -534,6 +563,7 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         self._swipes = self._db.collection(f"{collection_prefix}_swipes")
         self._swipe_decks = self._db.collection(f"{collection_prefix}_swipe_decks")
         self._substack_intents = self._db.collection(f"{collection_prefix}_user_substack_intents")
+        self._job_state_col = self._db.collection(f"{collection_prefix}_job_state")
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         doc = self._users.document(user_id).get()
@@ -851,6 +881,30 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
                 .stream()
         )
         return [FeedbackRecord.model_validate(doc.to_dict()) for doc in docs]
+
+    def list_feedback_since(self, since: Optional[datetime]) -> list[FeedbackRecord]:
+        query = self._feedback.order_by(
+            "created_at", direction=firestore.Query.DESCENDING
+        )
+        if since is not None:
+            query = query.where("created_at", ">=", since)
+        docs = list(query.stream())
+        return [FeedbackRecord.model_validate(doc.to_dict()) for doc in docs]
+
+    def get_job_state(self, name: str) -> Optional[datetime]:
+        doc = self._job_state_col.document(name).get()
+        if not doc.exists:
+            return None
+        data = doc.to_dict() or {}
+        value = data.get("last_run_at")
+        if isinstance(value, datetime):
+            return value
+        return None
+
+    def set_job_state(self, name: str, last_run_at: datetime) -> None:
+        self._job_state_col.document(name).set(
+            {"name": name, "last_run_at": last_run_at}
+        )
 
     def save_swipe(self, swipe: SwipeRecord) -> None:
         self._swipes.document(swipe.id).set(swipe.model_dump(mode="python"))
