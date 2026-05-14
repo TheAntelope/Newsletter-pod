@@ -1209,10 +1209,24 @@ struct AddSubstackSheet: View {
     @State private var probeError: String?
     @State private var hasContinued = false
     @State private var probeTask: Task<Void, Never>?
+    @State private var copiedNotice: String?
+    @State private var copiedNoticeTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                        instructionStep(number: 1, text: "Paste a Substack URL or @handle below.")
+                        instructionStep(number: 2, text: "Tap Continue on Substack — we'll copy your ClawCast email to your clipboard and open the publication in Safari.")
+                        instructionStep(number: 3, text: "On Substack, paste your ClawCast email (not your personal one) and subscribe. We auto-confirm the double opt-in for you.")
+                        instructionStep(number: 4, text: "New free posts arrive in ClawCast as part of your podcast — your personal inbox stays clean.")
+                    }
+                    .padding(.vertical, Theme.Spacing.xs)
+                } header: {
+                    Text("How it works")
+                }
+
                 Section {
                     TextField("e.g. heathercoxrichardson.substack.com", text: $input)
                         .textInputAutocapitalization(.never)
@@ -1299,8 +1313,40 @@ struct AddSubstackSheet: View {
                     .padding(.bottom, Theme.Spacing.m)
                     .background(.thinMaterial)
             }
+            .overlay(alignment: .top) {
+                if let copiedNotice {
+                    Label(copiedNotice, systemImage: "doc.on.doc.fill")
+                        .font(Theme.Typography.calloutStrong)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Theme.Palette.amber, in: Capsule())
+                        .shadow(color: Theme.Palette.cardShadow, radius: 6, y: 2)
+                        .padding(.top, Theme.Spacing.s)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(duration: 0.3), value: copiedNotice)
         }
-        .onDisappear { probeTask?.cancel() }
+        .onDisappear {
+            probeTask?.cancel()
+            copiedNoticeTask?.cancel()
+        }
+    }
+
+    @ViewBuilder
+    private func instructionStep(number: Int, text: String) -> some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.s) {
+            Text("\(number)")
+                .font(Theme.Typography.calloutStrong)
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(Theme.Palette.amber, in: Circle())
+            Text(text)
+                .font(Theme.Typography.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     @ViewBuilder
@@ -1364,10 +1410,24 @@ struct AddSubstackSheet: View {
         // Stash the alias in the clipboard so the user can paste it into
         // Substack's subscribe form in Safari.
         UIPasteboard.general.string = intent.aliasEmail
+        showCopiedNotice("ClawCast email copied")
+        // Brief pause so the toast animates in before Safari takes over the
+        // screen — otherwise the user only sees it on their way back.
+        try? await Task.sleep(nanoseconds: 350_000_000)
         if let url = intent.subscribeURL {
             openURL(url)
         }
         hasContinued = true
+    }
+
+    private func showCopiedNotice(_ message: String) {
+        copiedNoticeTask?.cancel()
+        copiedNotice = message
+        copiedNoticeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if Task.isCancelled { return }
+            copiedNotice = nil
+        }
     }
 }
 
