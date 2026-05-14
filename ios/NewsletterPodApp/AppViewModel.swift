@@ -345,6 +345,22 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    /// Typeahead search for Substack publications. Returns (results, degraded)
+    /// — when `degraded` is true, Substack's search endpoint is misbehaving
+    /// and the caller should prompt the user to paste a URL instead.
+    func searchSubstack(query: String) async -> (results: [SubstackSearchResultDTO], degraded: Bool) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return ([], false) }
+        do {
+            let envelope = try await apiClient.searchSubstack(query: trimmed)
+            return (envelope.results, envelope.degraded)
+        } catch {
+            // Network/server failure on our side — treat as degraded so the
+            // sheet falls back to the paste-URL path.
+            return ([], true)
+        }
+    }
+
     /// Probe a user-typed Substack URL. Returns the preview metadata for the
     /// AddSubstackSheet's preview card, or nil if the probe failed (caller
     /// can read `errorMessage` for the reason).

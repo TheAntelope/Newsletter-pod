@@ -1211,13 +1211,17 @@ struct AddSubstackSheet: View {
     @State private var probeTask: Task<Void, Never>?
     @State private var copiedNotice: String?
     @State private var copiedNoticeTask: Task<Void, Never>?
+    @State private var searchTask: Task<Void, Never>?
+    @State private var searchResults: [SubstackSearchResultDTO] = []
+    @State private var isSearching = false
+    @State private var searchDegraded = false
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
                     VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                        instructionStep(number: 1, text: "Paste a Substack URL or @handle below.")
+                        instructionStep(number: 1, text: "Search for a Substack by name, or paste its URL or @handle.")
                         instructionStep(number: 2, text: "Tap Continue on Substack — we'll copy your ClawCast email to your clipboard and open the publication in Safari.")
                         instructionStep(number: 3, text: "On Substack, paste your ClawCast email (not your personal one) and subscribe. We auto-confirm the double opt-in for you.")
                         instructionStep(number: 4, text: "New free posts arrive in ClawCast as part of your podcast — your personal inbox stays clean.")
@@ -1228,21 +1232,72 @@ struct AddSubstackSheet: View {
                 }
 
                 Section {
-                    TextField("e.g. heathercoxrichardson.substack.com", text: $input)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                        .submitLabel(.done)
-                        .onSubmit { triggerProbe() }
-                        .onChange(of: input) { _, _ in scheduleProbe() }
+                    HStack(spacing: Theme.Spacing.s) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                        TextField("Search Substacks or paste a URL", text: $input)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.webSearch)
+                            .submitLabel(.search)
+                            .onSubmit { triggerLookup() }
+                            .onChange(of: input) { _, _ in scheduleLookup() }
+                        if !input.isEmpty {
+                            Button {
+                                input = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Clear search")
+                        }
+                    }
                 } header: {
-                    Text("Substack URL or handle")
+                    Text("Find a Substack")
                 } footer: {
                     if let probeError {
                         Text(probeError)
                             .foregroundStyle(.red)
+                    } else if searchDegraded {
+                        Text("Substack's search is temporarily unavailable. Paste a URL like `lenny.substack.com` or a handle like `@lenny` instead.")
                     } else {
-                        Text("Paste a URL like `lenny.substack.com` or `@lenny`.")
+                        Text("Type a publication name, or paste a URL like `lenny.substack.com` or `@lenny`.")
+                    }
+                }
+
+                if preview == nil && !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !looksLikeURLOrHandle(input) {
+                    if isSearching {
+                        Section {
+                            HStack(spacing: Theme.Spacing.s) {
+                                ProgressView()
+                                Text("Searching Substack…")
+                                    .font(Theme.Typography.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } else if !searchResults.isEmpty {
+                        Section("Results") {
+                            ForEach(searchResults) { result in
+                                Button {
+                                    Task { await selectSearchResult(result) }
+                                } label: {
+                                    SubstackSearchRow(result: result)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    } else if searchDegraded {
+                        Section {
+                            Label {
+                                Text("Substack's search is temporarily unavailable. Paste the publication's URL (e.g. `lenny.substack.com`) or handle (`@lenny`) to add it manually.")
+                                    .font(Theme.Typography.callout)
+                                    .foregroundStyle(.secondary)
+                            } icon: {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(Theme.Palette.amberDeep)
+                            }
+                        }
                     }
                 }
 
@@ -1330,6 +1385,7 @@ struct AddSubstackSheet: View {
         }
         .onDisappear {
             probeTask?.cancel()
+            searchTask?.cancel()
             copiedNoticeTask?.cancel()
         }
     }
@@ -1369,24 +1425,54 @@ struct AddSubstackSheet: View {
         .disabled(preview == nil)
     }
 
-    private func scheduleProbe() {
+    /// Treat the input as a URL/handle when it has the hallmarks of one — a
+    /// scheme, a leading "@", or a dotted hostname with no spaces. Everything
+    /// else is a free-text search query.
+    private func looksLikeURLOrHandle(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return false }
+        if trimmed.hasPrefix("@") { return true }
+        if trimmed.contains("://") { return true }
+        if trimmed.contains(" ") { return false }
+        return trimmed.contains(".")
+    }
+
+    private func scheduleLookup() {
         probeTask?.cancel()
+        searchTask?.cancel()
         preview = nil
         probeError = nil
         hasContinued = false
+        searchResults = []
+        searchDegraded = false
+
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > 3 else { return }
-        probeTask = Task {
-            // Debounce so we don't fire a probe on every keystroke.
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            if Task.isCancelled { return }
-            await runProbe()
+        guard trimmed.count > 1 else { return }
+
+        if looksLikeURLOrHandle(trimmed) {
+            probeTask = Task {
+                // Debounce so we don't fire a probe on every keystroke.
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                if Task.isCancelled { return }
+                await runProbe()
+            }
+        } else {
+            searchTask = Task {
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                if Task.isCancelled { return }
+                await runSearch()
+            }
         }
     }
 
-    private func triggerProbe() {
+    private func triggerLookup() {
         probeTask?.cancel()
-        Task { await runProbe() }
+        searchTask?.cancel()
+        if looksLikeURLOrHandle(input) {
+            Task { await runProbe() }
+        } else {
+            Task { await runSearch() }
+        }
     }
 
     @MainActor
@@ -1400,6 +1486,37 @@ struct AddSubstackSheet: View {
         } else {
             preview = nil
             probeError = viewModel.errorMessage ?? "Could not reach that Substack."
+        }
+    }
+
+    @MainActor
+    private func runSearch() async {
+        isSearching = true
+        defer { isSearching = false }
+        let (results, degraded) = await viewModel.searchSubstack(query: input)
+        searchResults = results
+        searchDegraded = degraded
+    }
+
+    @MainActor
+    private func selectSearchResult(_ result: SubstackSearchResultDTO) async {
+        // Render the preview card immediately from the search payload so the
+        // tap feels instant; probe in the background to fill in the paid-tier
+        // signal (and any metadata the search response didn't include).
+        preview = SubstackProbeDTO(
+            pubURL: result.pubURL,
+            pubHost: result.pubHost,
+            title: result.title,
+            author: result.author,
+            iconURL: result.iconURL,
+            hasPaidTier: false,
+            feedURL: "\(result.pubURL)/feed"
+        )
+        searchResults = []
+        searchDegraded = false
+        probeError = nil
+        if let refined = await viewModel.probeSubstack(url: result.pubURL) {
+            preview = refined
         }
     }
 
@@ -1428,6 +1545,37 @@ struct AddSubstackSheet: View {
             if Task.isCancelled { return }
             copiedNotice = nil
         }
+    }
+}
+
+private struct SubstackSearchRow: View {
+    let result: SubstackSearchResultDTO
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.s) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(result.displayTitle)
+                    .font(Theme.Typography.bodyStrong)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                if let author = result.author, !author.isEmpty {
+                    Text(author)
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Text(result.pubHost)
+                    .font(Theme.Typography.meta)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: Theme.Spacing.s)
+            Image(systemName: "plus.circle.fill")
+                .foregroundStyle(Theme.Palette.amberDeep)
+                .imageScale(.large)
+                .accessibilityHidden(true)
+        }
+        .contentShape(Rectangle())
     }
 }
 

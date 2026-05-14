@@ -142,6 +142,20 @@ class Settings(BaseSettings):
     smtp_password: Optional[str] = Field(default=None, alias="SMTP_PASSWORD")
     smtp_use_tls: bool = Field(default=True, alias="SMTP_USE_TLS")
 
+    # Substack publication search uses an unofficial endpoint that could
+    # change shape without notice. When the helper raises
+    # SubstackSearchUnavailable and this flag is on, we email the operator
+    # so the parser can be updated. Off by default — enable in production by
+    # setting SUBSTACK_SEARCH_ALERT_ENABLED=true alongside the existing
+    # ALERT_EMAIL_TO/SMTP_* settings. Throttle prevents a single outage
+    # from spamming the inbox.
+    substack_search_alert_enabled: bool = Field(
+        default=False, alias="SUBSTACK_SEARCH_ALERT_ENABLED"
+    )
+    substack_search_alert_min_interval_hours: int = Field(
+        default=24, alias="SUBSTACK_SEARCH_ALERT_MIN_INTERVAL_HOURS"
+    )
+
     schedule_start_local: str = Field(default="06:30", alias="SCHEDULE_START_LOCAL")
     schedule_target_local: str = Field(default="07:00", alias="SCHEDULE_TARGET_LOCAL")
     schedule_cutoff_local: str = Field(default="23:00", alias="SCHEDULE_CUTOFF_LOCAL")

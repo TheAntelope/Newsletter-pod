@@ -10,12 +10,14 @@ from fastapi.testclient import TestClient
 from newsletter_pod import substack as substack_module
 from newsletter_pod.main import _build_container, create_app
 from newsletter_pod.substack import (
+    SubstackSearchUnavailable,
     build_intent_id,
     canonicalize_pub_url,
     extract_confirm_url,
     is_substack_sender,
     match_intent_host,
     probe_publication,
+    search_publications,
 )
 from newsletter_pod.user_models import UserRecord
 
@@ -385,3 +387,246 @@ def test_delete_intent_404s_for_unknown_id(monkeypatch):
         headers=headers,
     )
     assert response.status_code == 404
+
+
+# ---------- search_publications ----------
+
+
+class _FakeJSONResponse:
+    def __init__(self, payload: Any, *, status_code: int = 200, raw_text: str | None = None):
+        self.payload = payload
+        self.status_code = status_code
+        self.ok = 200 <= status_code < 400
+        self._raw_text = raw_text
+
+    @property
+    def text(self) -> str:
+        if self._raw_text is not None:
+            return self._raw_text
+        import json as _json
+
+        return _json.dumps(self.payload)
+
+    def json(self) -> Any:
+        if self._raw_text is not None:
+            import json as _json
+
+            return _json.loads(self._raw_text)
+        return self.payload
+
+    def raise_for_status(self) -> None:
+        if not self.ok:
+            import requests
+
+            raise requests.HTTPError(f"HTTP {self.status_code}")
+
+
+class _FakeJSONSession:
+    def __init__(self, payload: Any, *, status_code: int = 200, raw_text: str | None = None):
+        self._response = _FakeJSONResponse(payload, status_code=status_code, raw_text=raw_text)
+        self.calls: list[tuple[str, dict]] = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self._response
+
+
+def test_search_publications_parses_results_envelope():
+    body = {
+        "results": [
+            {
+                "name": "Lenny's Newsletter",
+                "subdomain": "lenny",
+                "custom_domain": None,
+                "author_name": "Lenny Rachitsky",
+                "logo_url": "https://example.com/lenny.png",
+            }
+        ]
+    }
+    fake = _FakeJSONSession(body)
+    out = search_publications("lenny", session=fake)
+    assert len(out) == 1
+    assert out[0].pub_host == "lenny.substack.com"
+    assert out[0].pub_url == "https://lenny.substack.com"
+    assert out[0].title == "Lenny's Newsletter"
+    assert out[0].author == "Lenny Rachitsky"
+    assert out[0].icon_url == "https://example.com/lenny.png"
+
+
+def test_search_publications_prefers_custom_domain_over_subdomain():
+    body = {
+        "results": [
+            {
+                "name": "Stratechery",
+                "subdomain": "stratechery",
+                "custom_domain": "stratechery.com",
+                "author_name": "Ben Thompson",
+            }
+        ]
+    }
+    out = search_publications("strat", session=_FakeJSONSession(body))
+    assert out[0].pub_host == "stratechery.com"
+    assert out[0].pub_url == "https://stratechery.com"
+
+
+def test_search_publications_accepts_bare_list_response():
+    # Some shape variants drop the envelope and return a raw list.
+    body = [{"name": "Pub", "subdomain": "pub"}]
+    out = search_publications("pub", session=_FakeJSONSession(body))
+    assert len(out) == 1
+    assert out[0].pub_host == "pub.substack.com"
+
+
+def test_search_publications_skips_items_with_no_host():
+    body = {"results": [{"name": "Orphan"}, {"name": "OK", "subdomain": "ok"}]}
+    out = search_publications("anything", session=_FakeJSONSession(body))
+    assert len(out) == 1
+    assert out[0].pub_host == "ok.substack.com"
+
+
+def test_search_publications_returns_empty_for_blank_query():
+    # No HTTP call should fire for an empty/whitespace query.
+    fake = _FakeJSONSession({"results": []})
+    assert search_publications("   ", session=fake) == []
+    assert fake.calls == []
+
+
+def test_search_publications_raises_on_http_error():
+    fake = _FakeJSONSession({}, status_code=503)
+    with pytest.raises(SubstackSearchUnavailable) as info:
+        search_publications("lenny", session=fake)
+    assert "503" in info.value.reason
+
+
+def test_search_publications_raises_on_invalid_json():
+    fake = _FakeJSONSession({}, raw_text="this is not json")
+    with pytest.raises(SubstackSearchUnavailable) as info:
+        search_publications("lenny", session=fake)
+    assert info.value.reason == "json_decode"
+
+
+def test_search_publications_raises_when_shape_is_unrecognized():
+    fake = _FakeJSONSession({"totally_new_envelope": []})
+    with pytest.raises(SubstackSearchUnavailable) as info:
+        search_publications("lenny", session=fake)
+    assert info.value.reason == "shape_changed"
+
+
+def test_search_publications_raises_on_network_error():
+    import requests as _requests
+
+    class _Boom:
+        @staticmethod
+        def get(*a, **kw):
+            raise _requests.ConnectionError("nope")
+
+    with pytest.raises(SubstackSearchUnavailable) as info:
+        search_publications("lenny", session=_Boom)
+    assert "network" in info.value.reason
+
+
+# ---------- /v1/substack/search route + alerting ----------
+
+
+def _install_fake_search(monkeypatch, payload: Any, *, status_code: int = 200, raw_text: str | None = None) -> list[str]:
+    calls: list[str] = []
+
+    class _M:
+        @staticmethod
+        def get(url, **kwargs):
+            calls.append(url)
+            return _FakeJSONResponse(payload, status_code=status_code, raw_text=raw_text)
+
+    monkeypatch.setattr(substack_module, "requests", _M)
+    return calls
+
+
+def test_search_endpoint_returns_normalized_results(monkeypatch):
+    _, _, client, _ = _build_app_with_authenticated_user(monkeypatch)
+    _install_fake_search(
+        monkeypatch,
+        {
+            "results": [
+                {
+                    "name": "Lenny",
+                    "subdomain": "lenny",
+                    "author_name": "Lenny R",
+                }
+            ]
+        },
+    )
+    response = client.get("/v1/substack/search", params={"q": "lenny"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["degraded"] is False
+    assert len(body["results"]) == 1
+    assert body["results"][0]["pub_host"] == "lenny.substack.com"
+
+
+def test_search_endpoint_returns_degraded_on_outage_without_alerting_when_disabled(monkeypatch):
+    container, _, client, _ = _build_app_with_authenticated_user(monkeypatch)
+    assert container.settings.substack_search_alert_enabled is False
+
+    sent: list[tuple[str, str, list[str]]] = []
+
+    class _FakeMailer:
+        def send(self, subject, body, *, recipients=None):
+            sent.append((subject, body, recipients or []))
+
+    container.control_plane.mailer = _FakeMailer()
+    _install_fake_search(monkeypatch, {}, status_code=503)
+
+    response = client.get("/v1/substack/search", params={"q": "lenny"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["degraded"] is True
+    assert body["results"] == []
+    # Alerts are off in the default test config, so nothing is sent.
+    assert sent == []
+
+
+def test_search_endpoint_alerts_operator_when_search_breaks(monkeypatch):
+    container, _, client, _ = _build_app_with_authenticated_user(monkeypatch)
+    container.settings.substack_search_alert_enabled = True
+    container.settings.alert_email_to = "ops@example.com"
+
+    sent: list[tuple[str, str, list[str]]] = []
+
+    class _FakeMailer:
+        def send(self, subject, body, *, recipients=None):
+            sent.append((subject, body, recipients or []))
+
+    container.control_plane.mailer = _FakeMailer()
+    _install_fake_search(monkeypatch, {}, status_code=503)
+
+    response = client.get("/v1/substack/search", params={"q": "lenny"})
+    assert response.status_code == 200
+    assert response.json()["degraded"] is True
+    assert len(sent) == 1
+    subject, body, recipients = sent[0]
+    assert "Substack search" in subject
+    assert recipients == ["ops@example.com"]
+    assert "http_503" in body
+
+
+def test_search_endpoint_throttles_repeat_alerts_within_window(monkeypatch):
+    container, _, client, _ = _build_app_with_authenticated_user(monkeypatch)
+    container.settings.substack_search_alert_enabled = True
+    container.settings.alert_email_to = "ops@example.com"
+    container.settings.substack_search_alert_min_interval_hours = 24
+
+    sent: list[tuple[str, str, list[str]]] = []
+
+    class _FakeMailer:
+        def send(self, subject, body, *, recipients=None):
+            sent.append((subject, body, recipients or []))
+
+    container.control_plane.mailer = _FakeMailer()
+    _install_fake_search(monkeypatch, {}, status_code=503)
+
+    client.get("/v1/substack/search", params={"q": "lenny"})
+    client.get("/v1/substack/search", params={"q": "another"})
+    client.get("/v1/substack/search", params={"q": "third"})
+
+    # Three failures, one alert — throttle did its job.
+    assert len(sent) == 1

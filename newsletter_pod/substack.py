@@ -15,10 +15,11 @@ without touching the webhook.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -36,6 +37,16 @@ _PROBE_UA = (
 
 _PROBE_TIMEOUT_SECONDS = 8.0
 _CONFIRM_FETCH_TIMEOUT_SECONDS = 10.0
+_SEARCH_TIMEOUT_SECONDS = 6.0
+
+# Substack's publication search endpoint. Unofficial — it's what their own
+# /search page hits. If they rename/move it we want a single place to update,
+# and the response parser tolerates shape drift across the candidate keys
+# below ("results", "publications", "pubs"). Failures from this endpoint
+# trigger an operator alert via control_plane.search_substack_publications.
+SUBSTACK_SEARCH_ENDPOINT = "https://substack.com/api/v1/publication/search"
+_SEARCH_RESULT_KEYS = ("results", "publications", "pubs")
+_SEARCH_MAX_RESULTS = 10
 
 # Substack confirmation emails arrive from a no-reply address on substack.com.
 # Their subject usually contains "Confirm" and the body has a button linking
@@ -83,6 +94,26 @@ class SubstackProbeResult:
     icon_url: Optional[str]
     has_paid_tier: bool
     feed_url: str
+
+
+@dataclass(frozen=True)
+class SubstackSearchResult:
+    pub_url: str
+    pub_host: str
+    title: Optional[str]
+    author: Optional[str]
+    icon_url: Optional[str]
+
+
+class SubstackSearchUnavailable(Exception):
+    """Raised when Substack's search endpoint is unreachable or its response
+    shape no longer matches what we know how to parse. The control plane
+    catches this to trigger an operator alert and serve the iOS client a
+    degraded response so it can fall back to URL-paste."""
+
+    def __init__(self, message: str, *, reason: str):
+        super().__init__(message)
+        self.reason = reason
 
 
 def canonicalize_pub_url(raw: str) -> tuple[str, str]:
@@ -237,6 +268,116 @@ def match_intent_host(
         if _SUBSTACK_SENDER_PATTERN.search(sender_domain) and host in haystack:
             return pub_host
     return None
+
+
+def search_publications(
+    query: str,
+    *,
+    session: Optional[requests.Session] = None,
+    limit: int = _SEARCH_MAX_RESULTS,
+) -> list[SubstackSearchResult]:
+    """Search Substack's publication directory for `query` and return up to
+    `limit` candidates.
+
+    Talks to SUBSTACK_SEARCH_ENDPOINT. Raises SubstackSearchUnavailable for
+    any condition that the operator probably needs to know about: network
+    failure, non-2xx status, malformed JSON, or a response whose shape we
+    don't recognize (i.e., Substack quietly renamed fields). An empty result
+    list for a valid response is *not* an error — many queries legitimately
+    return nothing.
+    """
+    cleaned = (query or "").strip()
+    if not cleaned:
+        return []
+
+    http = session or requests
+    try:
+        response = http.get(
+            SUBSTACK_SEARCH_ENDPOINT,
+            params={"query": cleaned, "page": 0},
+            headers={
+                "User-Agent": _PROBE_UA,
+                "Accept": "application/json,text/javascript,*/*;q=0.9",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            timeout=_SEARCH_TIMEOUT_SECONDS,
+            allow_redirects=True,
+        )
+    except requests.RequestException as exc:
+        raise SubstackSearchUnavailable(
+            f"Substack search request failed: {exc}",
+            reason=f"network: {exc.__class__.__name__}",
+        ) from exc
+
+    if not response.ok:
+        raise SubstackSearchUnavailable(
+            f"Substack search returned HTTP {response.status_code}",
+            reason=f"http_{response.status_code}",
+        )
+
+    try:
+        payload = response.json()
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise SubstackSearchUnavailable(
+            "Substack search response was not valid JSON",
+            reason="json_decode",
+        ) from exc
+
+    raw_results = _extract_search_results(payload)
+    if raw_results is None:
+        raise SubstackSearchUnavailable(
+            "Substack search response shape changed — no recognized results key",
+            reason="shape_changed",
+        )
+
+    parsed: list[SubstackSearchResult] = []
+    for item in raw_results[:limit]:
+        result = _coerce_search_result(item)
+        if result is not None:
+            parsed.append(result)
+    return parsed
+
+
+def _extract_search_results(payload: Any) -> Optional[list[Any]]:
+    """Pull the list of candidate publications out of a search response.
+
+    Returns None when the payload shape doesn't match anything we know — so
+    the caller can flip the degraded flag rather than silently serving zero
+    results. An *empty* list is a valid response and is returned as-is.
+    """
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in _SEARCH_RESULT_KEYS:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+    return None
+
+
+def _coerce_search_result(item: Any) -> Optional[SubstackSearchResult]:
+    if not isinstance(item, dict):
+        return None
+    custom_domain = (item.get("custom_domain") or "").strip().lower() or None
+    subdomain = (item.get("subdomain") or "").strip().lower() or None
+    host = custom_domain or (f"{subdomain}.substack.com" if subdomain else None)
+    if not host:
+        return None
+    pub_url = f"https://{host}"
+    title = _strip_tags(str(item.get("name") or "")) or None
+    author = _strip_tags(str(item.get("author_name") or item.get("author") or "")) or None
+    icon_url = item.get("logo_url") or item.get("cover_photo_url") or None
+    if isinstance(icon_url, str):
+        icon_url = icon_url.strip() or None
+    else:
+        icon_url = None
+    return SubstackSearchResult(
+        pub_url=pub_url,
+        pub_host=host,
+        title=title,
+        author=author,
+        icon_url=icon_url,
+    )
 
 
 def fetch_confirm_url(url: str, *, session: Optional[requests.Session] = None) -> bool:

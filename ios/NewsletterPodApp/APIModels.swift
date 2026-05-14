@@ -332,6 +332,34 @@ struct SubstackProbeDTO: Codable, Hashable {
     }
 }
 
+struct SubstackSearchResultDTO: Codable, Hashable, Identifiable {
+    let pubURL: String
+    let pubHost: String
+    let title: String?
+    let author: String?
+    let iconURL: String?
+
+    var id: String { pubHost }
+
+    var displayTitle: String {
+        if let title, !title.isEmpty { return title }
+        return pubHost
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pubURL = "pub_url"
+        case pubHost = "pub_host"
+        case title
+        case author
+        case iconURL = "icon_url"
+    }
+}
+
+struct SubstackSearchEnvelope: Codable {
+    let results: [SubstackSearchResultDTO]
+    let degraded: Bool
+}
+
 enum SubstackIntentStatus: String, Codable {
     case pending
     case autoConfirmed = "auto_confirmed"

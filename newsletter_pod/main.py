@@ -339,6 +339,11 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    @app.get("/v1/substack/search")
+    def search_substack(q: str) -> dict:
+        assert container.control_plane is not None
+        return container.control_plane.search_substack_publications(q)
+
     @app.get("/v1/me/substack/intents")
     def list_substack_intents(authorization: str | None = Header(default=None)) -> dict:
         user = _require_session_user(container, authorization)
@@ -578,11 +583,16 @@ def _build_container(settings: Settings) -> ServiceContainer:
         settings.alert_email_enabled
         or settings.publish_summary_email_enabled
         or settings.feedback_digest_email_enabled
+        or settings.substack_search_alert_enabled
     )
     if mailer_required:
         if not settings.smtp_host or not settings.alert_email_from:
             raise RuntimeError("Email delivery is enabled but SMTP host or sender is missing")
-        legacy_features = settings.alert_email_enabled or settings.publish_summary_email_enabled
+        legacy_features = (
+            settings.alert_email_enabled
+            or settings.publish_summary_email_enabled
+            or settings.substack_search_alert_enabled
+        )
         if legacy_features and not settings.alert_email_to:
             raise RuntimeError("ALERT_EMAIL_TO is required when alert/summary emails are enabled")
         if (

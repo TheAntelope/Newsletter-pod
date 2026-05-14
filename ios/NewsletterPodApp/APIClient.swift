@@ -229,6 +229,15 @@ final class APIClient {
         return try await request(path: path, method: "GET", body: Optional<Int>.none, token: nil)
     }
 
+    func searchSubstack(query: String) async throws -> SubstackSearchEnvelope {
+        guard var components = URLComponents(string: "/v1/substack/search") else {
+            throw APIError.invalidResponse
+        }
+        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        let path = components.string ?? "/v1/substack/search"
+        return try await request(path: path, method: "GET", body: Optional<Int>.none, token: nil)
+    }
+
     func fetchSubstackIntents(token: String) async throws -> SubstackIntentsEnvelope {
         try await request(path: "/v1/me/substack/intents", method: "GET", body: Optional<Int>.none, token: token)
     }

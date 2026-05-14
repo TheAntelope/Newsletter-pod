@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
@@ -24,9 +24,12 @@ from .feedback_digest import (
 from .inbound import ensure_user_inbound_alias
 from .substack import (
     SubstackProbeResult,
+    SubstackSearchResult,
+    SubstackSearchUnavailable,
     build_intent_id,
     canonicalize_pub_url,
     probe_publication,
+    search_publications,
 )
 from .ingestion import RSSIngestionService
 from .interest_vector import compute_user_vector
@@ -71,6 +74,8 @@ WELCOME_EPISODE_DESCRIPTION = (
     "of your custom podcast. Once you've finished setting up your show, your first real "
     "episode will arrive in this feed shortly."
 )
+
+SUBSTACK_SEARCH_ALERT_JOB_STATE_NAME = "substack_search_alert"
 
 COMPLETED_RUN_STATUSES = {PublishStatus.PUBLISHED.value, PublishStatus.NO_CONTENT.value}
 WEEKDAY_NAMES = [
@@ -245,6 +250,80 @@ class ControlPlaneService:
             raise ControlPlaneError(f"Could not reach {host}") from exc
         return self._serialize_probe(result)
 
+    def search_substack_publications(self, query: str) -> dict[str, Any]:
+        """Typeahead search against Substack's publication directory.
+
+        Returns {"results": [...], "degraded": bool}. When `degraded` is True
+        the iOS client knows to hide the results list and prompt the user to
+        paste a URL instead — and the operator is emailed (throttled) so the
+        unofficial endpoint can be updated.
+        """
+        cleaned = (query or "").strip()
+        if not cleaned:
+            return {"results": [], "degraded": False}
+        try:
+            results = search_publications(cleaned)
+        except SubstackSearchUnavailable as exc:
+            logger.warning(
+                "Substack search unavailable: reason=%s message=%s query=%r",
+                exc.reason,
+                exc,
+                cleaned[:80],
+            )
+            self._maybe_send_substack_search_alert(reason=exc.reason, query=cleaned)
+            return {"results": [], "degraded": True}
+        return {
+            "results": [self._serialize_search_result(item) for item in results],
+            "degraded": False,
+        }
+
+    def _maybe_send_substack_search_alert(self, *, reason: str, query: str) -> None:
+        if not self.settings.substack_search_alert_enabled:
+            return
+        recipient = (self.settings.alert_email_to or "").strip()
+        if not recipient:
+            logger.warning(
+                "Substack search alert suppressed: ALERT_EMAIL_TO is not configured"
+            )
+            return
+
+        now = utc_now()
+        last_sent = self.repository.get_job_state(SUBSTACK_SEARCH_ALERT_JOB_STATE_NAME)
+        interval = timedelta(hours=max(1, self.settings.substack_search_alert_min_interval_hours))
+        if last_sent is not None and now - last_sent < interval:
+            logger.info(
+                "Substack search alert throttled (last sent %s, interval %s)",
+                last_sent.isoformat(),
+                interval,
+            )
+            return
+
+        subject = "ClawCast: Substack search API needs attention"
+        body = (
+            "Substack's publication search endpoint failed and the in-app "
+            "search box is currently degraded.\n\n"
+            f"Reason: {reason}\n"
+            f"First failing query (truncated): {query[:200]!r}\n"
+            f"Endpoint: https://substack.com/api/v1/publication/search\n"
+            f"Timestamp (UTC): {now.isoformat()}\n\n"
+            "Next steps:\n"
+            "  1. Try the endpoint manually:\n"
+            "     curl 'https://substack.com/api/v1/publication/search?query=lenny'\n"
+            "  2. If the shape changed, update newsletter_pod/substack.py:\n"
+            "     - _SEARCH_RESULT_KEYS for the envelope key\n"
+            "     - _coerce_search_result for per-item field names\n"
+            "  3. If the endpoint moved, update SUBSTACK_SEARCH_ENDPOINT.\n"
+            "  4. Deploy. The iOS client picks the search box back up automatically.\n\n"
+            "Until then, users see a 'paste a URL instead' message in the Add a "
+            "Substack sheet.\n"
+        )
+        try:
+            self.mailer.send(subject, body, recipients=[recipient])
+        except Exception:  # pragma: no cover — best-effort alerting
+            logger.exception("Failed to send Substack search alert email")
+            return
+        self.repository.set_job_state(SUBSTACK_SEARCH_ALERT_JOB_STATE_NAME, now)
+
     def create_substack_intent(self, user_id: str, raw_url: str) -> dict[str, Any]:
         """Create or return an existing intent for (user, pub_host).
 
@@ -317,6 +396,16 @@ class ControlPlaneService:
             "icon_url": result.icon_url,
             "has_paid_tier": result.has_paid_tier,
             "feed_url": result.feed_url,
+        }
+
+    @staticmethod
+    def _serialize_search_result(result: SubstackSearchResult) -> dict[str, Any]:
+        return {
+            "pub_url": result.pub_url,
+            "pub_host": result.pub_host,
+            "title": result.title,
+            "author": result.author,
+            "icon_url": result.icon_url,
         }
 
     @staticmethod
