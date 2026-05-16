@@ -93,8 +93,17 @@ class Settings(BaseSettings):
     # (mean of right-swipe embeddings minus mean of left-swipe embeddings)
     # before tier caps are applied. Falls back to chronological ordering when
     # the user has fewer than swipe_ranker_min_swipes recorded.
-    swipe_ranker_enabled: bool = Field(default=False, alias="SWIPE_RANKER_ENABLED")
-    swipe_ranker_min_swipes: int = Field(default=5, alias="SWIPE_RANKER_MIN_SWIPES")
+    #
+    # ON by default as of the 2026-05 onboarding rework: voice-intake +
+    # Substack-paste + swipe-deck steps all produce synthetic seeds, so a
+    # user typically clears the min-swipe threshold during onboarding before
+    # the first generation run.
+    swipe_ranker_enabled: bool = Field(default=True, alias="SWIPE_RANKER_ENABLED")
+    swipe_ranker_min_swipes: int = Field(default=3, alias="SWIPE_RANKER_MIN_SWIPES")
+
+    # Voice-intake LLM model. Light extraction task; default to a fast/cheap
+    # model since the prompt is small and the output is structured JSON.
+    voice_intake_model: str = Field(default="gpt-4o-mini", alias="VOICE_INTAKE_MODEL")
 
     # Cold-start swipe deck (Phase 3). The deck is global, recomputed lazily
     # on the first request after the TTL expires. Recent-items deck is per-user,

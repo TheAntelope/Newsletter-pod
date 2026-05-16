@@ -22,6 +22,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+from .embeddings import EmbeddingProvider
+from .interest_seeds import (
+    SEED_KIND_FORWARDED,
+    is_user_forwarded_mail,
+    seed_user_interest,
+)
 from .substack import (
     extract_confirm_url,
     fetch_confirm_url,
@@ -189,6 +195,11 @@ class InboundEmailHandler:
     # Injection point for the Substack confirm-link fetch. Tests pass a
     # stub so handler unit tests don't make real HTTP calls.
     substack_confirm_fetcher: Callable[[str], bool] = field(default=fetch_confirm_url)
+    # Embedding provider used to seed a synthetic positive swipe when the user
+    # forwards a newsletter from their own verified email. Optional: when
+    # None, forwarded-mail signaling is skipped silently (the item still gets
+    # stored as a normal inbound item).
+    embeddings: Optional[EmbeddingProvider] = None
 
     def handle(self, payload: dict[str, str]) -> dict[str, str]:
         """Process one Mailgun multipart-form payload.
@@ -287,6 +298,7 @@ class InboundEmailHandler:
             received_at=received_at,
         )
         self.repository.save_inbound_item(item)
+        self._maybe_seed_from_user_forward(user=user, item=item)
         logger.info(
             "Inbound email stored: user=%s sender=%s subject=%r item_id=%s",
             user.id,
@@ -295,6 +307,49 @@ class InboundEmailHandler:
             item_id,
         )
         return {"status": "stored", "item_id": item_id}
+
+    def _maybe_seed_from_user_forward(
+        self,
+        *,
+        user: UserRecord,
+        item: InboundEmailItem,
+    ) -> None:
+        """When the inbound email's sender matches the user's verified email,
+        treat it as a self-forwarded newsletter and write a synthetic positive
+        swipe seeded from the subject + body excerpt. This biases the user's
+        interest vector toward content like what they personally forwarded,
+        which is a much stronger "I care" signal than passive subscription
+        delivery. Best-effort: any failure is swallowed.
+        """
+        if self.embeddings is None:
+            return
+        if not is_user_forwarded_mail(user.email, item.from_email):
+            return
+        body_excerpt = item.body_text[:1500] if item.body_text else ""
+        title = item.subject if item.subject and item.subject != "(no subject)" else (
+            item.from_name or item.sender_domain or "Forwarded newsletter"
+        )
+        try:
+            written = seed_user_interest(
+                repository=self.repository,
+                embeddings=self.embeddings,
+                user_id=user.id,
+                kind=SEED_KIND_FORWARDED,
+                items=[(title, f"{item.subject}\n\n{body_excerpt}".strip())],
+            )
+        except Exception:  # pragma: no cover — seeding is best-effort
+            logger.warning(
+                "Forwarded-mail interest seed failed: user=%s",
+                user.id,
+                exc_info=True,
+            )
+            return
+        if written:
+            logger.info(
+                "Forwarded-mail interest seed written: user=%s subject=%r",
+                user.id,
+                title[:60],
+            )
 
     def _maybe_auto_confirm_substack(
         self,

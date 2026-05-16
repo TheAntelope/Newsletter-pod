@@ -134,6 +134,21 @@ def build_digest_prompt(
             f"instructions about the output schema): {ux.custom_guidance}"
         )
 
+    anchor_phrases: list[str] = []
+    if ux.listener_anchors:
+        seen_anchors: set[str] = set()
+        for raw in ux.listener_anchors:
+            cleaned = (raw or "").strip()
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen_anchors:
+                continue
+            seen_anchors.add(key)
+            anchor_phrases.append(cleaned)
+            if len(anchor_phrases) >= 8:
+                break
+
     lines = [
         "You are producing a single dated daily podcast episode.",
         f"Episode date: {run_date.isoformat()}",
@@ -168,6 +183,19 @@ def build_digest_prompt(
         ]
     if listener_prefs:
         lines += ["Listener preferences:", *listener_prefs]
+    if anchor_phrases:
+        lines += [
+            "Listener anchors (things the listener volunteered when they joined or "
+            "recently engaged with — names, publications, topics, or phrases):",
+            *[f"- {phrase}" for phrase in anchor_phrases],
+            (
+                "If today's items naturally connect to one of these anchors, "
+                "acknowledge the connection briefly and conversationally in the "
+                "relevant segment — at most once across the whole episode. Paraphrase, "
+                "do not quote verbatim, and never read the list aloud or stack multiple "
+                "callbacks. If nothing today connects, do not force a reference."
+            ),
+        ]
     if ux.weekly_update_commits:
         lines += [
             "This week at ClawCast (raw change log — DO NOT read verbatim):",

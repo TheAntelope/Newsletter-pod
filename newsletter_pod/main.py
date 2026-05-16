@@ -107,6 +107,10 @@ class CreateSubstackIntentRequest(BaseModel):
     pub_url: str
 
 
+class SubmitVoiceIntakeRequest(BaseModel):
+    transcript: str
+
+
 @dataclass
 class ServiceContainer:
     settings: Settings
@@ -386,6 +390,21 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    @app.post("/v1/me/voice-intake", status_code=status.HTTP_201_CREATED)
+    def submit_voice_intake(
+        request_payload: SubmitVoiceIntakeRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.submit_voice_intake(
+                user_id=user.id,
+                transcript=request_payload.transcript,
+            )
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
     @app.post("/v1/me/swipes", status_code=status.HTTP_201_CREATED)
     def submit_swipe(
         request_payload: SubmitSwipeRequest,
@@ -481,6 +500,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             repository=container.control_repository,
             inbound_email_domain=container.settings.inbound_email_domain,
             mailgun_signing_key=container.settings.mailgun_webhook_signing_key,
+            embeddings=_build_embedding_provider(container.settings),
         )
         try:
             return handler.handle(payload)
@@ -666,6 +686,7 @@ def _build_control_plane(
     apple_verifier = AppleIdentityVerifier(settings.apple_client_id)
     task_enqueuer = build_task_enqueuer(settings)
     embedding_provider = _build_embedding_provider(settings)
+    intake_extractor = _build_intake_extractor(settings)
     control_plane = ControlPlaneService(
         settings=settings,
         repository=control_repository,
@@ -676,6 +697,7 @@ def _build_control_plane(
         apple_identity_verifier=apple_verifier,
         task_enqueuer=task_enqueuer,
         embedding_provider=embedding_provider,
+        intake_extractor=intake_extractor,
     )
     return control_repository, control_plane
 
@@ -694,6 +716,22 @@ def _build_embedding_provider(settings: Settings) -> EmbeddingProvider | None:
         api_key=api_key,
         model=settings.openai_embedding_model,
         endpoint=settings.openai_embedding_endpoint,
+    )
+
+
+def _build_intake_extractor(settings: Settings):
+    """Voice-intake LLM extractor. Returns None when the OpenAI key isn't
+    configured — in that case `submit_voice_intake` will reject calls with a
+    clear error rather than silently dropping the transcript.
+    """
+    from .voice_intake import OpenAIIntakeExtractor
+
+    api_key = settings.openai_embedding_api_key or settings.podcast_api_key
+    if not api_key:
+        return None
+    return OpenAIIntakeExtractor(
+        api_key=api_key,
+        model=settings.voice_intake_model,
     )
 
 

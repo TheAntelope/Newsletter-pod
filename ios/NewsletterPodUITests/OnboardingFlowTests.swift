@@ -32,7 +32,7 @@ final class OnboardingFlowTests: XCTestCase {
     }
 
     func testOnboardingHappyPath() throws {
-        // Step 1 of 6 — Welcome
+        // Step 1 of 8 — Welcome
         let welcome = app.staticTexts["Welcome to ClawCast."]
         XCTAssertTrue(
             welcome.waitForExistence(timeout: 8),
@@ -42,35 +42,49 @@ final class OnboardingFlowTests: XCTestCase {
 
         tapPrimary(label: "Set up my podcast")
 
-        // Step 2 of 6 — Sources
+        // Step 2 of 8 — Voice intake (skippable; simulator can't dictate)
         XCTAssertTrue(
-            app.staticTexts["What should the show cover?"].waitForExistence(timeout: 5),
-            "Sources step did not appear"
+            app.staticTexts["Tell me what's on your mind."].waitForExistence(timeout: 5),
+            "Voice intake step did not appear"
         )
-        attach("02-sources")
+        attach("02-voice-intake")
+        tapSkipInStep(matching: "Skip — let the system learn from swipes")
+
+        // Step 3 of 8 — Swipe deck (no real backend, so deck loads empty and
+        // primary Continue is enabled immediately)
+        XCTAssertTrue(
+            app.staticTexts["What grabs you?"].waitForExistence(timeout: 5),
+            "Swipe deck step did not appear"
+        )
+        attach("03-swipe-deck")
         tapPrimary(label: "Continue")
 
-        // Step 3 of 6 — Show shape
-        // The label varies across copy iterations; just wait for any Continue.
+        // Step 4 of 8 — Newsletters (optional paste)
+        XCTAssertTrue(
+            app.staticTexts["Any Substacks you already read?"].waitForExistence(timeout: 5),
+            "Newsletters step did not appear"
+        )
+        attach("04-newsletters")
+        tapPrimary(label: "Continue")
+
+        // Step 5 of 8 — Show shape
         waitForAnyContinue()
-        attach("03-show-shape")
+        attach("05-show-shape")
         tapPrimary(label: "Continue")
 
-        // Step 4 of 6 — Voices (skipped if user picked the solo-host preset; the
-        // default preset is two_hosts so this step shows up in the happy path).
+        // Step 6 of 8 — Voices (two_hosts preset is the default → shown)
         waitForAnyContinue()
-        attach("04-voices")
+        attach("06-voices")
         tapPrimary(label: "Continue")
 
-        // Step 5 of 6 — Schedule
+        // Step 7 of 8 — Schedule
         waitForAnyContinue()
-        attach("05-schedule")
+        attach("07-schedule")
         tapPrimary(label: "Continue")
 
-        // Step 6 of 6 — Done
-        // Allow up to 10s for the optional auto-generate kickoff to settle.
+        // Step 8 of 8 — Alias card + first-episode generation kickoff
         Thread.sleep(forTimeInterval: 1.5)
-        attach("06-done")
+        attach("08-alias")
     }
 
     func testWelcomeGreetingDropsEmailPrefixUser() throws {
@@ -97,6 +111,18 @@ final class OnboardingFlowTests: XCTestCase {
             button.tap()
         } else {
             XCTFail("Button '\(label)' never appeared")
+        }
+    }
+
+    private func tapSkipInStep(matching label: String) {
+        // The optional skip buttons inside voice intake / newsletters use long,
+        // copy-driven labels. Match by prefix in case the copy shifts.
+        let predicate = NSPredicate(format: "label BEGINSWITH %@", String(label.prefix(20)))
+        let button = app.buttons.matching(predicate).firstMatch
+        if button.waitForExistence(timeout: 5) {
+            button.tap()
+        } else {
+            XCTFail("Skip button matching '\(label)' never appeared")
         }
     }
 

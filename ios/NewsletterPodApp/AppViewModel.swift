@@ -136,7 +136,11 @@ final class AppViewModel: ObservableObject {
             showOnboarding = true
             return
         }
-        if UserDefaults.standard.bool(forKey: Self.onboardingCompleteKey) { return }
+        // Backend truth wins. If the server says the user has sources, mark
+        // local onboarding done and stay out. If the server says no sources,
+        // re-show the wizard regardless of the local flag — that covers both
+        // a fresh install and a server-side profile reset (which used to
+        // require deleting and reinstalling the app to clear UserDefaults).
         if !selectedSources.isEmpty {
             UserDefaults.standard.set(true, forKey: Self.onboardingCompleteKey)
             return
@@ -448,6 +452,44 @@ final class AppViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
             return []
+        }
+    }
+
+    func fetchColdStartSwipeDeck() async -> [SwipeDeckCardDTO] {
+        guard let sessionToken else { return [] }
+        do {
+            let envelope = try await apiClient.fetchColdStartSwipeDeck(token: sessionToken)
+            return envelope.items
+        } catch {
+            errorMessage = error.localizedDescription
+            return []
+        }
+    }
+
+    func submitVoiceIntake(transcript: String) async -> VoiceIntakeAck? {
+        guard let sessionToken else { return nil }
+        do {
+            return try await apiClient.submitVoiceIntake(
+                token: sessionToken,
+                transcript: transcript
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func createSubstackIntent(pubURL: String) async -> SubstackIntentDTO? {
+        guard let sessionToken else { return nil }
+        do {
+            let envelope = try await apiClient.createSubstackIntent(
+                token: sessionToken,
+                pubURL: pubURL
+            )
+            return envelope.intent
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
         }
     }
 

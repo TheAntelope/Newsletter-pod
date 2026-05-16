@@ -194,6 +194,12 @@ class SwipeRecord(BaseModel):
     interest-vector learning. Embedding is snapshotted from the source item at
     swipe time so the vector survives even if the source item is later
     re-embedded with a different model or rolls off the corpus.
+
+    `seed_kind` is set on synthetic swipes (voice intake, forwarded-mail
+    bootstrap, Substack paste). These swipes use a `seed:<kind>:<digest>`
+    dedupe key so they never collide with real source items, but they share
+    the same shape so `compute_user_vector` can blend them with real swipes
+    without special-casing.
     """
 
     id: str
@@ -207,6 +213,7 @@ class SwipeRecord(BaseModel):
     embedding: list[float]
     embedding_model: str
     swiped_at: datetime
+    seed_kind: Optional[str] = None  # None = real swipe; else "voice_intake" | "forwarded_mail" | "substack_paste"
 
 
 class BillingEventRecord(BaseModel):

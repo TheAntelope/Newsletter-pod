@@ -29,6 +29,11 @@ from .substack import (
     probe_publication,
 )
 from .ingestion import RSSIngestionService
+from .interest_seeds import (
+    SEED_KIND_SUBSTACK,
+    SEED_KIND_VOICE,
+    seed_user_interest,
+)
 from .interest_vector import compute_user_vector
 from .mailer import Mailer
 from .models import PodcastUxConfig, PublishStatus, SourceDefinition, SourceItem, SourceItemRecord, SourceItemRef
@@ -36,6 +41,7 @@ from .podcast_api import PodcastApiClient
 from .prompting import build_digest_prompt
 from .ranker import rank_items
 from .source_persistence import SourceItemPersistenceService
+from .voice_intake import ExtractedIntake, IntakeExtractor, OpenAIIntakeExtractor
 from .storage import AudioStorage
 from .swipe_deck import SwipeDeckService
 from .weather import fetch_weather_summary
@@ -161,6 +167,7 @@ class ControlPlaneService:
     apple_identity_verifier: AppleIdentityVerifier
     task_enqueuer: TaskEnqueuer
     embedding_provider: Optional[EmbeddingProvider] = None
+    intake_extractor: Optional[IntakeExtractor] = None
 
     def __post_init__(self) -> None:
         self._catalog = {source.id: source for source in load_sources(self.settings.sources_file)}
@@ -282,6 +289,7 @@ class ControlPlaneService:
             created_at=utc_now(),
         )
         self.repository.save_substack_intent(intent)
+        self._seed_interest_from_substack_intent(intent)
         logger.info(
             "Substack intent created: user=%s pub_host=%s intent_id=%s",
             user_id,
@@ -289,6 +297,114 @@ class ControlPlaneService:
             intent_id,
         )
         return {"intent": self._serialize_intent(intent)}
+
+    def _seed_interest_from_substack_intent(self, intent: UserSubstackIntent) -> None:
+        """Seed the user's interest vector with the publication metadata so
+        the ranker pulls toward this publication's content even before any
+        post arrives via the inbound alias. Best-effort: any failure (no
+        embedding provider, embed call failed) is swallowed.
+        """
+        if self.embedding_provider is None:
+            return
+        title = (intent.pub_title or intent.pub_host).strip()
+        if not title:
+            return
+        body_parts: list[str] = [title]
+        if intent.pub_author:
+            body_parts.append(f"by {intent.pub_author}")
+        body_parts.append(intent.pub_host)
+        body_text = " — ".join(body_parts)
+        try:
+            seed_user_interest(
+                repository=self.repository,
+                embeddings=self.embedding_provider,
+                user_id=intent.user_id,
+                kind=SEED_KIND_SUBSTACK,
+                items=[(title, body_text)],
+            )
+        except Exception:  # pragma: no cover — seeding is best-effort
+            logger.warning(
+                "Substack intent interest-seed failed: user=%s pub_host=%s",
+                intent.user_id,
+                intent.pub_host,
+                exc_info=True,
+            )
+
+    def submit_voice_intake(self, user_id: str, transcript: str) -> dict[str, Any]:
+        """Turn the user's onboarding voice transcript into seeded interest
+        signal + listener-anchor phrases + a tone hint on the podcast profile.
+
+        Returns a small payload the iOS app uses to render confirmation
+        ("we heard you talk about X, Y, Z"). Idempotent within reason:
+        re-submitting the same transcript writes new synthetic swipes with
+        a different hash key only if the text differs; identical text
+        deduplicates on the seed dedupe-key.
+        """
+        user = self._require_user(user_id)
+        if self.embedding_provider is None:
+            raise ControlPlaneError("Voice intake is unavailable (embeddings not configured)")
+        if self.intake_extractor is None:
+            raise ControlPlaneError("Voice intake is unavailable (extractor not configured)")
+        cleaned = (transcript or "").strip()
+        if not cleaned:
+            raise ControlPlaneError("Transcript is empty")
+
+        extracted: ExtractedIntake = self.intake_extractor.extract(cleaned)
+        items: list[tuple[str, str]] = []
+        # Topics and named entities each get their own embedding so the
+        # interest vector picks up multiple regions at once. Anchor phrases
+        # are short and personal — they ride along as seeds AND surface in
+        # listener_anchors via _compute_listener_anchors.
+        for topic in extracted.topics:
+            items.append((topic, topic))
+        for entity in extracted.named_entities:
+            items.append((entity, entity))
+        for phrase in extracted.anchor_phrases:
+            items.append((phrase, phrase))
+
+        seeded = 0
+        if items:
+            try:
+                seeded = seed_user_interest(
+                    repository=self.repository,
+                    embeddings=self.embedding_provider,
+                    user_id=user.id,
+                    kind=SEED_KIND_VOICE,
+                    items=items,
+                )
+            except Exception:  # pragma: no cover — seeding is best-effort
+                logger.warning(
+                    "Voice intake seeding failed: user=%s", user.id, exc_info=True
+                )
+                seeded = 0
+
+        # vibe_notes describes how the user wants the show to feel. Append to
+        # the existing custom_guidance instead of overwriting so an
+        # already-configured user keeps their prior preference.
+        if extracted.vibe_notes:
+            self._append_to_custom_guidance(user.id, extracted.vibe_notes)
+
+        return {
+            "seeded_count": seeded,
+            "topics": extracted.topics,
+            "named_entities": extracted.named_entities,
+            "anchor_phrases": extracted.anchor_phrases,
+            "vibe_notes": extracted.vibe_notes,
+        }
+
+    def _append_to_custom_guidance(self, user_id: str, addition: str) -> None:
+        profile = self._get_profile(user_id)
+        existing = (profile.custom_guidance or "").strip()
+        addition_clean = addition.strip()
+        if not addition_clean:
+            return
+        # Avoid duplicate appends across replays.
+        if addition_clean.lower() in existing.lower():
+            return
+        merged = f"{existing}\n{addition_clean}".strip() if existing else addition_clean
+        profile.custom_guidance = _sanitize_custom_guidance(merged) or addition_clean
+        profile.updated_at = utc_now()
+        self.repository.save_profile(profile)
 
     def list_substack_intents(self, user_id: str) -> dict[str, Any]:
         user = self._require_user(user_id)
@@ -1034,6 +1150,7 @@ class ControlPlaneService:
             listener_name=user.display_name,
             weather_summary=weather_summary,
         )
+        ux.listener_anchors = self._compute_listener_anchors(user_id)
         current_iso_week = iso_week_key(local_date)
         weekly_update_due = user.last_weekly_update_iso_week != current_iso_week
         if weekly_update_due:
@@ -1437,6 +1554,58 @@ class ControlPlaneService:
                 else self.settings.elevenlabs_voice_primary_id
             )
         return primary_id, secondary_id, self._voice_name(secondary_id, "Co-host")
+
+    def _compute_listener_anchors(self, user_id: str) -> list[str]:
+        """Best-effort list of names/topics the user volunteered.
+
+        Drawn from (a) titles of synthetic onboarding swipes (voice intake,
+        Substack paste), (b) confirmed Substack intent publication titles,
+        and (c) recent forwarded-mail sender names. Capped at 8 entries with
+        the most-personal sources first (voice > paste > Substack > forwarded).
+        Best-effort: any sub-fetch failure is swallowed.
+        """
+        anchors: list[str] = []
+        seen: set[str] = set()
+
+        def _push(value: Optional[str]) -> None:
+            if not value:
+                return
+            cleaned = value.strip()
+            if not cleaned:
+                return
+            key = cleaned.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            anchors.append(cleaned)
+
+        try:
+            swipes = self.repository.list_user_swipes(user_id, limit=200)
+        except Exception:  # pragma: no cover — anchors are best-effort
+            swipes = []
+        # Voice intake anchors are richest — surface them first.
+        for swipe in swipes:
+            if swipe.seed_kind == "voice_intake" and swipe.direction > 0:
+                _push(swipe.title)
+        for swipe in swipes:
+            if swipe.seed_kind == "substack_paste" and swipe.direction > 0:
+                _push(swipe.title)
+        try:
+            intents = self.repository.list_user_substack_intents(user_id)
+        except Exception:  # pragma: no cover
+            intents = []
+        for intent in intents:
+            _push(intent.pub_title or intent.pub_host)
+        try:
+            inbound_items = self.repository.list_recent_inbound_items(
+                user_id, limit=10
+            )
+        except Exception:  # pragma: no cover
+            inbound_items = []
+        for item in inbound_items:
+            _push(item.from_name or item.sender_domain)
+
+        return anchors[:8]
 
     def _apply_swipe_ranker(
         self,

@@ -211,6 +211,15 @@ final class APIClient {
         )
     }
 
+    func submitVoiceIntake(token: String, transcript: String) async throws -> VoiceIntakeAck {
+        try await request(
+            path: "/v1/me/voice-intake",
+            method: "POST",
+            body: VoiceIntakeBody(transcript: transcript),
+            token: token
+        )
+    }
+
     func refreshCorpus(token: String) async throws -> CorpusRefreshAck {
         try await request(
             path: "/v1/me/corpus/refresh",
@@ -422,4 +431,24 @@ private struct CreateSubstackIntentBody: Encodable {
 
 private struct SubstackDeleteAck: Decodable {
     let deleted: Bool
+}
+
+private struct VoiceIntakeBody: Encodable {
+    let transcript: String
+}
+
+struct VoiceIntakeAck: Decodable {
+    let seededCount: Int
+    let topics: [String]
+    let namedEntities: [String]
+    let anchorPhrases: [String]
+    let vibeNotes: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case seededCount = "seeded_count"
+        case topics
+        case namedEntities = "named_entities"
+        case anchorPhrases = "anchor_phrases"
+        case vibeNotes = "vibe_notes"
+    }
 }

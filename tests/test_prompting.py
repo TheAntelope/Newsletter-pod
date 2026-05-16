@@ -10,6 +10,59 @@ from newsletter_pod.prompting import (
 )
 
 
+def _sample_items() -> list[SourceItem]:
+    return [
+        SourceItem(
+            source_id="a",
+            source_name="Source A",
+            guid="1",
+            link="https://example.com/a",
+            title="Title A",
+            summary="Summary A",
+            published_at=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc),
+            dedupe_key="1",
+        ),
+    ]
+
+
+def test_listener_anchors_block_renders_when_set():
+    prompt = build_digest_prompt(
+        _sample_items(),
+        run_date=datetime(2026, 3, 9, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(
+            listener_anchors=["Anthropic", "Stratechery", "chasing the compute story"]
+        ),
+    )
+    assert "Listener anchors" in prompt
+    assert "- Anthropic" in prompt
+    assert "- Stratechery" in prompt
+    assert "- chasing the compute story" in prompt
+    assert "at most once across the whole episode" in prompt
+
+
+def test_listener_anchors_block_absent_when_empty():
+    prompt = build_digest_prompt(
+        _sample_items(),
+        run_date=datetime(2026, 3, 9, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(listener_anchors=[]),
+    )
+    assert "Listener anchors" not in prompt
+
+
+def test_listener_anchors_dedupe_and_cap():
+    raw = ["AI compute", "AI Compute", "ai compute"] + [f"topic_{i}" for i in range(12)]
+    prompt = build_digest_prompt(
+        _sample_items(),
+        run_date=datetime(2026, 3, 9, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(listener_anchors=raw),
+    )
+    # First occurrence preserved, near-duplicates dropped, cap at 8 entries.
+    anchor_lines = [line for line in prompt.splitlines() if line.startswith("- topic_") or line == "- AI compute"]
+    assert "- AI compute" in anchor_lines
+    assert anchor_lines.count("- AI compute") == 1
+    assert len(anchor_lines) == 8
+
+
 def test_prompt_enforces_calm_daily_briefing_with_named_hosts():
     items = [
         SourceItem(

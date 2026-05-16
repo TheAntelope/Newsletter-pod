@@ -109,6 +109,11 @@ class PodcastUxConfig(BaseModel):
     custom_guidance: Optional[str] = None
     weather_summary: Optional[str] = None
     weekly_update_commits: Optional[list[str]] = None
+    # Names, topics, publications, or phrases the listener volunteered at
+    # onboarding (voice intake), subscribed to (Substack paste), or recently
+    # forwarded. The script may acknowledge one once per episode when it
+    # naturally connects to an item — never list them at the top of the show.
+    listener_anchors: Optional[list[str]] = None
 
 
 class GeneratedEpisode(BaseModel):

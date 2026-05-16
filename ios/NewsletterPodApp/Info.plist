@@ -23,9 +23,9 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>ClawCast uses the microphone to dictate your feedback when you tap the Dictate button.</string>
+	<string>ClawCast uses the microphone to record a short voice brief during onboarding and to dictate feedback when you tap Dictate.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>ClawCast transcribes your dictated feedback so you can submit it as text.</string>
+	<string>ClawCast transcribes your spoken onboarding brief and your dictated feedback on-device so it can personalize your podcast.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>ClawCast uses your location to add the local forecast to your podcast when "Include weather" is on.</string>
 	<key>LSRequiresIPhoneOS</key>

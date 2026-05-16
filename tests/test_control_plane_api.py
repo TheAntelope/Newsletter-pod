@@ -1286,3 +1286,259 @@ def test_weekly_update_segment_skipped_when_no_commits(monkeypatch):
     assert "This week at ClawCast" not in captured_prompts[0]
     user_after = container.control_repository.get_user(user_id)
     assert user_after.last_weekly_update_iso_week is None
+
+
+class _FakeIntakeExtractor:
+    def __init__(self, payload) -> None:
+        self._payload = payload
+        self.calls: list[str] = []
+
+    def extract(self, transcript: str):
+        self.calls.append(transcript)
+        return self._payload
+
+
+def _wire_voice_intake(container, payload) -> _FakeIntakeExtractor:
+    from newsletter_pod.embeddings import DeterministicFakeEmbeddingProvider
+    from newsletter_pod.source_persistence import SourceItemPersistenceService
+
+    extractor = _FakeIntakeExtractor(payload)
+    container.control_plane.intake_extractor = extractor
+    container.control_plane.embedding_provider = DeterministicFakeEmbeddingProvider()
+    container.control_plane._source_item_persistence = SourceItemPersistenceService(
+        repository=container.control_repository,
+        embeddings=container.control_plane.embedding_provider,
+    )
+    return extractor
+
+
+def test_voice_intake_seeds_synthetic_swipes_and_appends_guidance():
+    from newsletter_pod.voice_intake import ExtractedIntake
+
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("voice-user-1", "vu1@example.com"))
+    _wire_voice_intake(
+        container,
+        ExtractedIntake(
+            topics=["AI compute", "Premier League"],
+            named_entities=["Anthropic"],
+            anchor_phrases=["chasing the compute story"],
+            vibe_notes="Casual and quick.",
+        ),
+    )
+    response = client.post(
+        "/v1/me/voice-intake",
+        json={"transcript": "I've been chasing the Anthropic compute story and Premier League."},
+        headers=headers,
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["seeded_count"] == 4  # 2 topics + 1 entity + 1 anchor
+    assert body["vibe_notes"] == "Casual and quick."
+
+    swipes = list(container.control_repository._swipes.values())
+    assert len(swipes) == 4
+    assert {swipe.seed_kind for swipe in swipes} == {"voice_intake"}
+    assert all(swipe.direction == 1 for swipe in swipes)
+
+    profile_response = client.get("/v1/me/podcast-config", headers=headers)
+    assert profile_response.status_code == 200
+    custom_guidance = profile_response.json()["profile"]["custom_guidance"]
+    assert custom_guidance and "Casual and quick." in custom_guidance
+
+
+def test_voice_intake_rejects_empty_transcript():
+    from newsletter_pod.voice_intake import ExtractedIntake
+
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("voice-user-2", "vu2@example.com"))
+    _wire_voice_intake(container, ExtractedIntake())
+
+    response = client.post(
+        "/v1/me/voice-intake", json={"transcript": "   "}, headers=headers
+    )
+    assert response.status_code == 400
+
+
+def test_voice_intake_returns_400_when_embeddings_not_configured():
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("voice-user-3", "vu3@example.com"))
+    container.control_plane.embedding_provider = None
+    container.control_plane.intake_extractor = _FakeIntakeExtractor(None)
+
+    response = client.post(
+        "/v1/me/voice-intake",
+        json={"transcript": "Some thoughts I have"},
+        headers=headers,
+    )
+    assert response.status_code == 400
+    assert "embeddings" in response.json()["detail"].lower()
+
+
+def test_voice_intake_anchors_surface_in_listener_anchors():
+    from newsletter_pod.voice_intake import ExtractedIntake
+
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("anchor-user", "anchor@example.com"))
+    _wire_voice_intake(
+        container,
+        ExtractedIntake(
+            topics=["AI compute"],
+            anchor_phrases=["chasing the compute story"],
+        ),
+    )
+    client.post(
+        "/v1/me/voice-intake",
+        json={"transcript": "AI stuff"},
+        headers=headers,
+    )
+    user_id = list(container.control_repository._users.values())[0].id
+    anchors = container.control_plane._compute_listener_anchors(user_id)
+    # Both topics and anchor phrases are written as voice-intake seeds; both
+    # should surface as listener anchors.
+    assert "AI compute" in anchors
+    assert "chasing the compute story" in anchors
+
+
+def test_substack_intent_creation_seeds_interest_vector(monkeypatch):
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("substack-seed-user", "ss@example.com")
+    )
+
+    from newsletter_pod.embeddings import DeterministicFakeEmbeddingProvider
+    container.control_plane.embedding_provider = DeterministicFakeEmbeddingProvider()
+
+    from newsletter_pod import control_plane as cp_module
+    from newsletter_pod.substack import SubstackProbeResult
+
+    def _fake_probe(pub_url, session=None):
+        return SubstackProbeResult(
+            pub_url="https://stratechery.substack.com",
+            pub_host="stratechery.substack.com",
+            title="Stratechery",
+            author="Ben Thompson",
+            icon_url=None,
+            has_paid_tier=True,
+            feed_url="https://stratechery.substack.com/feed",
+        )
+
+    monkeypatch.setattr(cp_module, "probe_publication", _fake_probe)
+
+    response = client.post(
+        "/v1/me/substack/intents",
+        json={"pub_url": "https://stratechery.substack.com"},
+        headers=headers,
+    )
+    assert response.status_code == 201
+
+    swipes = list(container.control_repository._swipes.values())
+    paste_seeds = [swipe for swipe in swipes if swipe.seed_kind == "substack_paste"]
+    assert len(paste_seeds) == 1
+    assert paste_seeds[0].title == "Stratechery"
+    assert paste_seeds[0].direction == 1
+
+
+def test_forwarded_mail_creates_synthetic_swipe_when_sender_matches_user_email():
+    from newsletter_pod.embeddings import DeterministicFakeEmbeddingProvider
+    from newsletter_pod.inbound import InboundEmailHandler
+    import hashlib
+    import hmac
+
+    container, _ = _build_app()
+    repo = container.control_repository
+    # Manually create a user + alias.
+    from newsletter_pod.user_models import UserRecord
+    user = UserRecord(
+        id="fwd-user-1",
+        apple_subject="fwd-subject-1",
+        email="vince@example.com",
+        display_name="Vince",
+        timezone="UTC",
+        inbound_alias="abcd1234",
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    repo.save_user(user)
+
+    handler = InboundEmailHandler(
+        repository=repo,
+        inbound_email_domain="theclawcast.com",
+        mailgun_signing_key="testkey",
+        embeddings=DeterministicFakeEmbeddingProvider(),
+    )
+
+    timestamp = "1700000000"
+    token = "fwd-token"
+    signature = hmac.new(
+        key=b"testkey", msg=f"{timestamp}{token}".encode(), digestmod=hashlib.sha256
+    ).hexdigest()
+    payload = {
+        "recipient": "abcd1234@theclawcast.com",
+        "from": "Vince <vince@example.com>",
+        "subject": "Fwd: Anthropic and the future of compute",
+        "stripped-text": "Worth reading. Original article by Ben Thompson...",
+        "Date": "Wed, 30 Apr 2026 12:00:00 +0000",
+        "Message-Id": "<fwd-msg-1@example.com>",
+        "timestamp": timestamp,
+        "token": token,
+        "signature": signature,
+    }
+
+    result = handler.handle(payload)
+    assert result["status"] == "stored"
+
+    swipes = list(repo._swipes.values())
+    forwarded_seeds = [swipe for swipe in swipes if swipe.seed_kind == "forwarded_mail"]
+    assert len(forwarded_seeds) == 1
+    assert "Anthropic" in forwarded_seeds[0].title
+
+
+def test_forwarded_mail_does_not_seed_when_sender_does_not_match_user_email():
+    from newsletter_pod.embeddings import DeterministicFakeEmbeddingProvider
+    from newsletter_pod.inbound import InboundEmailHandler
+    import hashlib
+    import hmac
+
+    container, _ = _build_app()
+    repo = container.control_repository
+    from newsletter_pod.user_models import UserRecord
+    user = UserRecord(
+        id="fwd-user-2",
+        apple_subject="fwd-subject-2",
+        email="vince@example.com",
+        display_name="Vince",
+        timezone="UTC",
+        inbound_alias="efgh5678",
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    repo.save_user(user)
+
+    handler = InboundEmailHandler(
+        repository=repo,
+        inbound_email_domain="theclawcast.com",
+        mailgun_signing_key="testkey",
+        embeddings=DeterministicFakeEmbeddingProvider(),
+    )
+    timestamp = "1700000000"
+    token = "fwd-token-2"
+    signature = hmac.new(
+        key=b"testkey", msg=f"{timestamp}{token}".encode(), digestmod=hashlib.sha256
+    ).hexdigest()
+    payload = {
+        "recipient": "efgh5678@theclawcast.com",
+        "from": "Ben Thompson <ben@stratechery.com>",
+        "subject": "The compute story",
+        "stripped-text": "This week...",
+        "Date": "Wed, 30 Apr 2026 12:00:00 +0000",
+        "Message-Id": "<reg-msg-1@example.com>",
+        "timestamp": timestamp,
+        "token": token,
+        "signature": signature,
+    }
+    handler.handle(payload)
+
+    swipes = list(repo._swipes.values())
+    forwarded_seeds = [swipe for swipe in swipes if swipe.seed_kind == "forwarded_mail"]
+    assert forwarded_seeds == []

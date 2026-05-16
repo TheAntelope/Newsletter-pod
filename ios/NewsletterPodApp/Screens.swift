@@ -2504,7 +2504,6 @@ enum OnboardingScheduleChoice: String, CaseIterable, Identifiable {
 struct OnboardingFlowView: View {
     @EnvironmentObject private var viewModel: AppViewModel
     @State private var step: Int = 0
-    @State private var selectedPackIDs: Set<String> = ["tech-daily"]
     @State private var selectedShowPresetID: String = "twohost"
     @State private var selectedAnchorVoiceID: String? = nil
     @State private var selectedCommentatorVoiceID: String? = nil
@@ -2522,8 +2521,8 @@ struct OnboardingFlowView: View {
     }
 
     private var totalSteps: Int {
-        // Welcome, Sources, Show, [Voices], Schedule, Done
-        isSoloHostPreset ? 5 : 6
+        // Welcome, Voice intake, Swipe deck, Newsletters, Show, [Voices], Schedule, Alias card
+        isSoloHostPreset ? 7 : 8
     }
 
     var body: some View {
@@ -2558,57 +2557,61 @@ struct OnboardingFlowView: View {
                 onContinue: { step = 1 }
             )
         case 1:
-            OnboardingSourcesStep(
-                selected: $selectedPackIDs,
+            OnboardingVoiceIntakeStep(
                 onBack: { step = 0 },
-                onContinue: {
-                    Task {
-                        await saveSourcesFromPacks()
-                        step = 2
-                    }
-                }
+                onContinue: { step = 2 }
             )
         case 2:
+            OnboardingSwipeStep(
+                onBack: { step = 1 },
+                onContinue: { step = 3 }
+            )
+        case 3:
+            OnboardingNewslettersStep(
+                onBack: { step = 2 },
+                onContinue: { step = 4 }
+            )
+        case 4:
             OnboardingShowStep(
                 selected: $selectedShowPresetID,
                 isPaid: viewModel.isPaid,
-                onBack: { step = 1 },
+                onBack: { step = 3 },
                 onContinue: {
                     Task {
                         await saveShowPreset()
                         // Solo-host has no commentator role, so skip the Voices step.
-                        step = isSoloHostPreset ? 4 : 3
+                        step = isSoloHostPreset ? 6 : 5
                     }
                 }
             )
-        case 3:
+        case 5:
             OnboardingVoicesStep(
                 anchorVoiceID: $selectedAnchorVoiceID,
                 commentatorVoiceID: $selectedCommentatorVoiceID,
                 requiresCommentator: requiresCommentator,
-                onBack: { step = 2 },
+                onBack: { step = 4 },
                 onContinue: {
                     Task {
                         await saveVoicesSelection()
-                        step = 4
+                        step = 6
                     }
                 }
             )
-        case 4:
+        case 6:
             OnboardingScheduleStep(
                 selectedWeekdays: $selectedWeekdays,
                 deliveryTime: $selectedDeliveryTime,
                 maxDeliveryDays: viewModel.entitlements?.maxDeliveryDays ?? 5,
-                onBack: { step = isSoloHostPreset ? 2 : 3 },
+                onBack: { step = isSoloHostPreset ? 4 : 5 },
                 onContinue: {
                     Task {
                         await saveSchedule()
-                        step = 5
+                        step = 7
                     }
                 }
             )
         default:
-            OnboardingDoneStep(
+            OnboardingAliasStep(
                 onFinish: { viewModel.completeOnboarding() }
             )
         }
@@ -2616,17 +2619,6 @@ struct OnboardingFlowView: View {
 
     private var firstName: String {
         viewModel.user?.firstName ?? ""
-    }
-
-    private func saveSourcesFromPacks() async {
-        let packs = OnboardingStarterPack.packs(from: viewModel.catalogSources)
-        let ids = Set(
-            packs
-                .filter { selectedPackIDs.contains($0.id) }
-                .flatMap { $0.sourceIDs }
-        )
-        guard !ids.isEmpty else { return }
-        await viewModel.saveSources(catalogIDs: Array(ids), customURLs: [])
     }
 
     private func saveShowPreset() async {
@@ -2793,136 +2785,379 @@ private struct OnboardingWelcomeStep: View {
     }
 }
 
-private struct OnboardingSourcesStep: View {
+// MARK: - New onboarding steps (voice intake, swipe deck, newsletters, alias)
+
+private struct OnboardingVoiceIntakeStep: View {
     @EnvironmentObject private var viewModel: AppViewModel
-    @Binding var selected: Set<String>
+    @StateObject private var dictation = FeedbackDictation()
+    @State private var isSubmitting: Bool = false
+    @State private var lastAck: VoiceIntakeAck?
     let onBack: () -> Void
     let onContinue: () -> Void
 
     var body: some View {
-        let packs = OnboardingStarterPack.packs(from: viewModel.catalogSources)
         OnboardingStepShell(
-            title: "What should the show cover?",
-            subtitle: "These are bundles of trusted publications. Pick the ones you want covered; you can fine-tune the exact sources after setup.",
-            primaryLabel: viewModel.isLoading ? "Saving…" : "Continue",
-            primaryDisabled: selected.isEmpty || viewModel.isLoading,
+            title: "Tell me what's on your mind.",
+            subtitle: "Tap the mic and talk for up to a minute — what you've been reading, who you follow, what you'd like to hear more about. Skip this if you'd rather let swipes do the work.",
+            primaryLabel: primaryLabel,
+            primaryDisabled: primaryDisabled,
+            onPrimary: primaryAction,
+            onBack: onBack
+        ) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                examplePrompts
+                micCard
+                if let error = dictation.errorMessage {
+                    Text(error)
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(.red)
+                }
+                if let ack = lastAck {
+                    extractedSummary(ack: ack)
+                }
+                Button(action: onContinue) {
+                    Text("Skip — let the system learn from swipes")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.muted)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var trimmedTranscript: String {
+        dictation.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var primaryLabel: String {
+        if isSubmitting { return "Saving…" }
+        if lastAck != nil { return "Continue" }
+        return "Save"
+    }
+
+    private var primaryDisabled: Bool {
+        if isSubmitting { return true }
+        if lastAck != nil { return false }
+        return trimmedTranscript.isEmpty
+    }
+
+    private func primaryAction() {
+        if lastAck != nil {
+            onContinue()
+        } else {
+            submit()
+        }
+    }
+
+    private var examplePrompts: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            MetaLabel(text: "Try saying")
+            ForEach(
+                [
+                    "I've been chasing the AI compute story.",
+                    "I read Stratechery and Platformer every week.",
+                    "I'm into Premier League, my partner is into longevity.",
+                ],
+                id: \.self
+            ) { example in
+                Text("“\(example)”")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Palette.inkSoft)
+            }
+        }
+    }
+
+    private var micCard: some View {
+        EditorialCard {
+            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                HStack(spacing: Theme.Spacing.m) {
+                    Button(action: toggle) {
+                        ZStack {
+                            Circle()
+                                .fill(dictation.isRecording ? Color.red : Theme.Palette.amberDeep)
+                                .frame(width: 64, height: 64)
+                            Image(systemName: dictation.isRecording ? "stop.fill" : "mic.fill")
+                                .font(.system(size: 26, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(dictation.isRecording ? "Stop recording" : "Start recording")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(dictation.isRecording ? "Listening…" : trimmedTranscript.isEmpty ? "Tap to start" : "Tap to record again")
+                            .font(Theme.Typography.subtitle)
+                            .foregroundStyle(Theme.Palette.ink)
+                        Text("On-device transcription. We never send raw audio.")
+                            .font(Theme.Typography.meta)
+                            .foregroundStyle(Theme.Palette.muted)
+                    }
+                    Spacer(minLength: 0)
+                }
+                if !trimmedTranscript.isEmpty {
+                    Text(dictation.transcript)
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(Theme.Palette.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func extractedSummary(ack: VoiceIntakeAck) -> some View {
+        EditorialCard {
+            VStack(alignment: .leading, spacing: 6) {
+                MetaLabel(text: "Got it")
+                if !ack.topics.isEmpty {
+                    Text("Topics: " + ack.topics.joined(separator: ", "))
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.ink)
+                }
+                if !ack.namedEntities.isEmpty {
+                    Text("Names: " + ack.namedEntities.joined(separator: ", "))
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.ink)
+                }
+                if let vibe = ack.vibeNotes, !vibe.isEmpty {
+                    Text("Style: " + vibe)
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.ink)
+                }
+                if ack.topics.isEmpty && ack.namedEntities.isEmpty && (ack.vibeNotes ?? "").isEmpty {
+                    Text("We'll mostly lean on your swipes from here.")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.muted)
+                }
+            }
+        }
+    }
+
+    private func toggle() {
+        if dictation.isRecording {
+            dictation.stop()
+        } else {
+            lastAck = nil
+            Task { await dictation.start() }
+        }
+    }
+
+    private func submit() {
+        let transcript = trimmedTranscript
+        guard !transcript.isEmpty, !isSubmitting else { return }
+        isSubmitting = true
+        Task {
+            let result = await viewModel.submitVoiceIntake(transcript: transcript)
+            await MainActor.run {
+                isSubmitting = false
+                lastAck = result
+            }
+        }
+    }
+}
+
+private struct OnboardingSwipeStep: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @State private var cards: [SwipeDeckCardDTO] = []
+    @State private var swipeCount: Int = 0
+    @State private var isLoading: Bool = true
+    @State private var didApplyDefaults: Bool = false
+    let onBack: () -> Void
+    let onContinue: () -> Void
+
+    private let targetSwipeCount = 8
+
+    var body: some View {
+        OnboardingStepShell(
+            title: "What grabs you?",
+            subtitle: "Right for more like this, left to skip. \(targetSwipeCount) cards is enough to start — we're seeding a balanced default mix in the background so you have coverage either way.",
+            primaryLabel: primaryLabel,
+            primaryDisabled: primaryDisabled,
             onPrimary: onContinue,
             onBack: onBack
         ) {
             VStack(spacing: Theme.Spacing.m) {
-                InspireMeButton(onTap: { applyInspireMe(packs: packs) })
-                ForEach(packs) { pack in
-                    PackCard(
-                        pack: pack,
-                        isSelected: selected.contains(pack.id),
-                        onToggle: { toggle(pack.id) }
-                    )
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.large)
+                        .padding(.top, Theme.Spacing.xl)
+                } else if cards.isEmpty {
+                    VStack(spacing: Theme.Spacing.s) {
+                        Text("No cards available yet.")
+                            .font(Theme.Typography.body)
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                        Text("That's fine — we'll learn from your first episode and the Tune Your Pod deck.")
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.muted)
+                    }
+                    .padding(.vertical, Theme.Spacing.xl)
+                } else {
+                    SwipeDeckCardStack(cards: $cards) { card, direction in
+                        swipeCount += 1
+                        Task { await viewModel.submitSwipe(card: card, direction: direction) }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 440)
+                    Text(progressLabel)
+                        .font(Theme.Typography.meta)
+                        .foregroundStyle(Theme.Palette.muted)
                 }
+                Button(action: onContinue) {
+                    Text("Skip — let the first episode pick for me")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.muted)
+                }
+                .buttonStyle(.plain)
             }
         }
+        .task { await loadDeck() }
     }
 
-    private func toggle(_ id: String) {
-        if selected.contains(id) {
-            selected.remove(id)
-        } else {
-            selected.insert(id)
+    private var primaryLabel: String {
+        if swipeCount >= targetSwipeCount || cards.isEmpty { return "Continue" }
+        return "Continue (\(targetSwipeCount - swipeCount) more)"
+    }
+
+    private var primaryDisabled: Bool {
+        cards.isEmpty ? false : swipeCount < targetSwipeCount
+    }
+
+    private var progressLabel: String {
+        "\(min(swipeCount, targetSwipeCount)) / \(targetSwipeCount) swiped"
+    }
+
+    private func loadDeck() async {
+        if !didApplyDefaults {
+            await applyCuratedDefaults()
+            didApplyDefaults = true
         }
+        cards = await viewModel.fetchColdStartSwipeDeck()
+        isLoading = false
     }
 
-    private func applyInspireMe(packs: [OnboardingStarterPack]) {
+    private func applyCuratedDefaults() async {
+        // No catalog sources attached yet? Apply the curated "Inspire me" mix so
+        // the user has something to ingest from on day one even if they skip
+        // every swipe.
+        guard viewModel.selectedSources.isEmpty else { return }
+        let packs = OnboardingStarterPack.packs(from: viewModel.catalogSources)
         let availableIDs = Set(packs.map(\.id))
         let curated = OnboardingStarterPack.inspireMeTopics.filter { availableIDs.contains($0) }
-        guard !curated.isEmpty else { return }
-        selected = Set(curated)
+        let sourceIDs = Set(
+            packs.filter { curated.contains($0.id) }.flatMap { $0.sourceIDs }
+        )
+        guard !sourceIDs.isEmpty else { return }
+        await viewModel.saveSources(catalogIDs: Array(sourceIDs), customURLs: [])
     }
+}
 
-    private struct InspireMeButton: View {
-        let onTap: () -> Void
+private struct OnboardingNewslettersStep: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @State private var input: String = ""
+    @State private var registered: [SubstackIntentDTO] = []
+    @State private var isSubmitting: Bool = false
+    @State private var lastError: String?
+    let onBack: () -> Void
+    let onContinue: () -> Void
 
-        var body: some View {
-            Button(action: onTap) {
-                EditorialCard {
-                    HStack(alignment: .center, spacing: Theme.Spacing.m) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(Theme.Palette.amberDeep)
-                            .frame(width: 32)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Inspire me")
-                                .font(Theme.Typography.subtitle)
-                                .foregroundStyle(Theme.Palette.ink)
-                            Text("Our recommended mix — News, Tech, Culture, and Personal Finance.")
-                                .font(Theme.Typography.callout)
-                                .foregroundStyle(Theme.Palette.inkSoft)
-                                .multilineTextAlignment(.leading)
+    private let maxEntries = 5
+
+    var body: some View {
+        OnboardingStepShell(
+            title: "Any Substacks you already read?",
+            subtitle: "Drop a handle or URL — we'll subscribe you using your private inbound address so the first episode pulls from what you actually read. Up to three is plenty.",
+            primaryLabel: "Continue",
+            primaryDisabled: false,
+            onPrimary: onContinue,
+            onBack: onBack
+        ) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                HStack(spacing: Theme.Spacing.s) {
+                    TextField("@stratechery or platformer.news", text: $input)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .padding(Theme.Spacing.s)
+                        .background(Color.white, in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Theme.Palette.rule, lineWidth: 1)
+                        )
+                    Button(action: addEntry) {
+                        if isSubmitting {
+                            ProgressView()
+                        } else {
+                            Text("Add")
                         }
-                        Spacer(minLength: 0)
-                        Image(systemName: "wand.and.stars")
-                            .font(.system(size: 22))
-                            .foregroundStyle(Theme.Palette.amber)
+                    }
+                    .buttonStyle(.amberFilled)
+                    .disabled(addDisabled)
+                }
+                if let lastError {
+                    Text(lastError)
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(.red)
+                }
+                if registered.isEmpty {
+                    Text("Common ones: stratechery.com, platformer.news, lennysnewsletter.com, oneusefulthing.org.")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.muted)
+                } else {
+                    ForEach(registered) { intent in
+                        registeredRow(intent)
                     }
                 }
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                        .stroke(Theme.Palette.amber, lineWidth: 2)
-                )
+                Button(action: onContinue) {
+                    Text("Skip — I don't have any in mind")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.muted)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
     }
 
-    private struct PackCard: View {
-        let pack: OnboardingStarterPack
-        let isSelected: Bool
-        let onToggle: () -> Void
+    private var addDisabled: Bool {
+        isSubmitting
+            || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || registered.count >= maxEntries
+    }
 
-        @State private var isExpanded = false
-
-        var body: some View {
-            EditorialCard {
-                HStack(alignment: .top, spacing: Theme.Spacing.m) {
-                    Image(systemName: pack.icon)
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(isSelected ? Theme.Palette.amberDeep : Theme.Palette.muted)
-                        .frame(width: 32)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(pack.name)
-                            .font(Theme.Typography.subtitle)
-                            .foregroundStyle(Theme.Palette.ink)
-                        Text(isExpanded ? pack.fullList : pack.summary)
-                            .font(Theme.Typography.callout)
-                            .foregroundStyle(Theme.Palette.inkSoft)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if pack.hasMore {
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(isExpanded ? "Show less" : "Show all \(pack.sourceNames.count)")
-                                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                                        .font(.system(size: 11, weight: .semibold))
-                                }
-                                .font(Theme.Typography.calloutStrong)
-                                .foregroundStyle(Theme.Palette.amberDeep)
-                                .padding(.top, 2)
-                            }
-                            .buttonStyle(.plain)
-                        }
+    private func registeredRow(_ intent: SubstackIntentDTO) -> some View {
+        EditorialCard {
+            HStack(spacing: Theme.Spacing.m) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Theme.Palette.amberDeep)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(intent.pubTitle ?? intent.pubHost)
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.Palette.ink)
+                    if let author = intent.pubAuthor, !author.isEmpty {
+                        Text(author)
+                            .font(Theme.Typography.meta)
+                            .foregroundStyle(Theme.Palette.muted)
                     }
-                    Spacer(minLength: 0)
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 22))
-                        .foregroundStyle(isSelected ? Theme.Palette.amber : Theme.Palette.rule)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private func addEntry() {
+        let raw = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty, !isSubmitting else { return }
+        isSubmitting = true
+        lastError = nil
+        Task {
+            let result = await viewModel.createSubstackIntent(pubURL: raw)
+            await MainActor.run {
+                isSubmitting = false
+                if let result {
+                    if !registered.contains(where: { $0.id == result.id }) {
+                        registered.append(result)
+                    }
+                    input = ""
+                } else {
+                    lastError = viewModel.errorMessage ?? "Couldn't add that publication."
                 }
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                    .stroke(isSelected ? Theme.Palette.amber : Color.clear, lineWidth: 2)
-            )
-            .contentShape(Rectangle())
-            .onTapGesture { onToggle() }
         }
     }
 }
@@ -3701,41 +3936,23 @@ private struct GenerationProgressBar: View {
     }
 }
 
-private struct OnboardingDoneStep: View {
+private struct OnboardingAliasStep: View {
     @EnvironmentObject private var viewModel: AppViewModel
     let onFinish: () -> Void
     @State private var didTriggerGeneration = false
 
     var body: some View {
         OnboardingStepShell(
-            title: "You're set.",
-            subtitle: "Your first episode is being made now — about 3-5 minutes. Subscribe in Apple Podcasts so it lands automatically when ready.",
+            title: "One more thing.",
+            subtitle: "We made you your own private inbound address. Forward any newsletter to it and the next episode picks it up automatically.",
             primaryLabel: "Go to dashboard",
             primaryDisabled: false,
             onPrimary: onFinish,
             onBack: nil
         ) {
             VStack(spacing: Theme.Spacing.m) {
-                EditorialCard {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                        HStack(spacing: Theme.Spacing.m) {
-                            Image(systemName: viewModel.isGenerating ? "wand.and.stars" : "checkmark.seal.fill")
-                                .foregroundStyle(Theme.Palette.amberDeep)
-                                .font(.system(size: 22, weight: .semibold))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(viewModel.isGenerating ? "Generating your first episode…" : "Episode ready")
-                                    .font(Theme.Typography.subtitle)
-                                    .foregroundStyle(Theme.Palette.ink)
-                                Text("You can close this and come back later.")
-                                    .font(Theme.Typography.callout)
-                                    .foregroundStyle(Theme.Palette.inkSoft)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        GenerationProgressBar(isGenerating: viewModel.isGenerating)
-                    }
-                }
-
+                aliasCard
+                generationCard
                 Button(action: openInApplePodcasts) {
                     Label("Open Apple Podcasts", systemImage: "headphones")
                 }
@@ -3747,6 +3964,68 @@ private struct OnboardingDoneStep: View {
             guard !didTriggerGeneration else { return }
             didTriggerGeneration = true
             await viewModel.generateNow()
+        }
+    }
+
+    @ViewBuilder
+    private var aliasCard: some View {
+        if let alias = viewModel.user?.inboundAddress, !alias.isEmpty {
+            EditorialCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    MetaLabel(text: "Your private inbound address")
+                    Text(alias)
+                        .font(Theme.Typography.title)
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                        .textSelection(.enabled)
+                        .accessibilityLabel("Inbound email address")
+                    Text("Tap and hold to copy. Forward newsletters here, or use this address when you sign up for new ones.")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.inkSoft)
+                    HStack(spacing: Theme.Spacing.m) {
+                        ShareLink(item: alias) {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                                .font(Theme.Typography.calloutStrong)
+                                .foregroundStyle(Theme.Palette.amberDeep)
+                        }
+                        Button {
+                            UIPasteboard.general.string = alias
+                        } label: {
+                            Label("Copy", systemImage: "doc.on.doc")
+                                .font(Theme.Typography.calloutStrong)
+                                .foregroundStyle(Theme.Palette.amberDeep)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+            }
+        } else {
+            EditorialCard {
+                Text("Your private inbound address will appear under Sources once setup finishes.")
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(Theme.Palette.inkSoft)
+            }
+        }
+    }
+
+    private var generationCard: some View {
+        EditorialCard {
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                HStack(spacing: Theme.Spacing.m) {
+                    Image(systemName: viewModel.isGenerating ? "wand.and.stars" : "checkmark.seal.fill")
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                        .font(.system(size: 22, weight: .semibold))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(viewModel.isGenerating ? "Generating your first episode…" : "Episode ready")
+                            .font(Theme.Typography.subtitle)
+                            .foregroundStyle(Theme.Palette.ink)
+                        Text("You can close this and come back later — usually 3–5 minutes.")
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                    }
+                    Spacer(minLength: 0)
+                }
+                GenerationProgressBar(isGenerating: viewModel.isGenerating)
+            }
         }
     }
 
