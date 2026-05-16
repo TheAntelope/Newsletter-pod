@@ -75,6 +75,12 @@ class UpdateScheduleRequest(BaseModel):
 
 
 class BillingNotificationRequest(BaseModel):
+    # Apple's V2 server-notification body is `{"signedPayload": "<JWS>"}`.
+    # Allow snake_case as an internal alias since other internal posters
+    # historically used it; legacy unsigned fields below are retained for
+    # the in-test path until APP_STORE_NOTIFICATIONS_REQUIRE_SIGNED flips on.
+    signedPayload: Optional[str] = None
+    signed_payload: Optional[str] = None
     notification_type: Optional[str] = None
     notificationType: Optional[str] = None
     subtype: Optional[str] = None
@@ -84,7 +90,6 @@ class BillingNotificationRequest(BaseModel):
     productId: Optional[str] = None
     status: Optional[str] = None
     expires_at: Optional[str] = None
-    signed_payload: Optional[str] = None
 
 
 class ProcessUserRequest(BaseModel):
@@ -503,7 +508,17 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
     @app.post("/v1/billing/app-store/notifications")
     def receive_billing_notification(request_payload: BillingNotificationRequest) -> dict:
         assert container.control_plane is not None
-        return container.control_plane.apply_app_store_notification(request_payload.model_dump(exclude_none=True))
+        try:
+            return container.control_plane.apply_app_store_notification(
+                request_payload.model_dump(exclude_none=True, by_alias=False)
+            )
+        except ControlPlaneError as exc:
+            # Verification failure / unsigned-payload rejection / config
+            # missing. Apple retries on non-2xx, so a legitimate retry still
+            # lands once the cause is fixed.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
 
     @app.post("/webhooks/mailgun/inbound")
     async def receive_mailgun_inbound(request: Request) -> dict:
@@ -705,6 +720,7 @@ def _build_control_plane(
     intake_extractor = _build_intake_extractor(settings)
     card_summarizer = _build_card_summarizer(settings)
     substack_discovery = _build_substack_discovery(settings)
+    app_store_verifier = _build_app_store_verifier(settings)
     control_plane = ControlPlaneService(
         settings=settings,
         repository=control_repository,
@@ -718,8 +734,38 @@ def _build_control_plane(
         intake_extractor=intake_extractor,
         card_summarizer=card_summarizer,
         substack_discovery=substack_discovery,
+        app_store_verifier=app_store_verifier,
     )
     return control_repository, control_plane
+
+
+def _build_app_store_verifier(settings: Settings):
+    """Construct the App Store Server Notification signed-payload verifier.
+
+    Returns `None` when verification is disabled (e.g. `app_store_environment`
+    is empty) so the legacy unsigned path stays open during dev. A
+    production environment without an `app_store_app_apple_id` fails loudly
+    rather than silently degrading to the legacy path.
+    """
+    from .app_store_verifier import AppStoreNotificationVerifier
+
+    env = (settings.app_store_environment or "").strip().lower()
+    if not env:
+        return None
+    try:
+        return AppStoreNotificationVerifier(
+            bundle_id=settings.app_store_bundle_id,
+            environment=env,
+            app_apple_id=settings.app_store_app_apple_id,
+        )
+    except Exception as exc:
+        # Production must not silently fall through to the legacy unsigned
+        # path; re-raise so the deploy aborts with a clear error. In any
+        # non-production env we log and keep going so dev work isn't blocked.
+        if env in {"production", "prod"} or settings.app_store_notifications_require_signed:
+            raise
+        logger.warning("App Store verifier disabled: %s", exc)
+        return None
 
 
 def _build_embedding_provider(settings: Settings) -> EmbeddingProvider | None:

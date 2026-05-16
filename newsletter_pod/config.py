@@ -235,6 +235,28 @@ class Settings(BaseSettings):
         default="com.newsletterpod.max.annual", alias="APP_STORE_MAX_ANNUAL_PRODUCT_ID"
     )
 
+    # App Store Server Notifications V2 signed-payload verification.
+    # - bundle_id: must match what's registered in App Store Connect.
+    # - environment: "sandbox" or "production" (Apple uses different cert
+    #   chains and notification semantics in each).
+    # - app_apple_id: the numeric App Store Connect id. Apple's library
+    #   requires this for environment="production"; sandbox tolerates None.
+    # - notifications_require_signed: when True, any POST to the
+    #   /v1/billing/app-store/notifications endpoint that doesn't include
+    #   `signedPayload` is rejected. Leave False during development so
+    #   tests can keep posting flat JSON; flip to True before public
+    #   launch so anonymous POSTs can't tamper with tier state.
+    app_store_bundle_id: str = Field(
+        default="com.newsletterpod.app", alias="APP_STORE_BUNDLE_ID"
+    )
+    app_store_environment: str = Field(default="sandbox", alias="APP_STORE_ENVIRONMENT")
+    app_store_app_apple_id: Optional[int] = Field(
+        default=None, alias="APP_STORE_APP_APPLE_ID"
+    )
+    app_store_notifications_require_signed: bool = Field(
+        default=False, alias="APP_STORE_NOTIFICATIONS_REQUIRE_SIGNED"
+    )
+
     inbound_email_domain: str = Field(default="theclawcast.com", alias="INBOUND_EMAIL_DOMAIN")
     mailgun_webhook_signing_key: Optional[str] = Field(default=None, alias="MAILGUN_WEBHOOK_SIGNING_KEY")
     mailgun_api_key: Optional[str] = Field(default=None, alias="MAILGUN_API_KEY")

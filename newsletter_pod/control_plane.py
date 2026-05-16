@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
@@ -13,6 +13,11 @@ import feedparser
 import requests
 
 from .auth import AppleIdentityVerifier, SessionManager
+from .app_store_verifier import (
+    AppStoreNotificationVerifier,
+    AppStoreVerificationError,
+    DecodedNotification,
+)
 from .config import Settings, load_sources, load_voices
 from .costing import estimate_generation_cost
 from .embeddings import EmbeddingProvider
@@ -176,6 +181,7 @@ class ControlPlaneService:
     intake_extractor: Optional[IntakeExtractor] = None
     card_summarizer: Optional[CardSummarizer] = None
     substack_discovery: Optional[SubstackDiscoveryService] = None
+    app_store_verifier: Optional[AppStoreNotificationVerifier] = None
 
     def __post_init__(self) -> None:
         self._catalog = {source.id: source for source in load_sources(self.settings.sources_file)}
@@ -1009,7 +1015,95 @@ class ControlPlaneService:
             "episodes": [episode.model_dump(mode="json") for episode in episodes],
         }
 
+    # ----- App Store Server Notifications -----------------------------
+
+    # Notification types that flip the subscription INTO an active state.
+    # "DID_CHANGE_RENEWAL_PREF" lands when a user upgrades/downgrades
+    # between Pro and Max — the new product id is in the transaction.
+    _APP_STORE_ACTIVATE_TYPES = frozenset(
+        {"SUBSCRIBED", "DID_RENEW", "OFFER_REDEEMED", "DID_CHANGE_RENEWAL_PREF"}
+    )
+    # Notification types that revoke entitlement.
+    _APP_STORE_REVOKE_TYPES = frozenset(
+        {"EXPIRED", "REVOKE", "REFUND", "GRACE_PERIOD_EXPIRED"}
+    )
+
     def apply_app_store_notification(self, payload: dict[str, Any]) -> dict[str, Any]:
+        signed_payload = payload.get("signedPayload") or payload.get("signed_payload")
+        if signed_payload:
+            if self.app_store_verifier is None:
+                # Defensive — only happens if the deployment skipped the
+                # verifier wiring. Refuse rather than silently trusting the
+                # encoded payload without checking the signature.
+                raise ControlPlaneError(
+                    "App Store signedPayload verification is not configured"
+                )
+            try:
+                decoded = self.app_store_verifier.verify(signed_payload)
+            except AppStoreVerificationError as exc:
+                logger.warning("App Store notification rejected: %s", exc)
+                raise ControlPlaneError(str(exc)) from exc
+            return self._apply_verified_app_store_notification(decoded, raw=payload)
+
+        if self.settings.app_store_notifications_require_signed:
+            raise ControlPlaneError(
+                "App Store notifications must include signedPayload"
+            )
+        return self._apply_legacy_app_store_notification(payload)
+
+    def _apply_verified_app_store_notification(
+        self,
+        decoded: DecodedNotification,
+        *,
+        raw: dict[str, Any],
+    ) -> dict[str, Any]:
+        event = BillingEventRecord(
+            id=uuid4().hex,
+            user_id=_normalize_app_account_token(decoded.app_account_token),
+            notification_type=decoded.notification_type or "unknown",
+            subtype=decoded.subtype,
+            product_id=decoded.product_id,
+            raw_payload=raw,
+            created_at=utc_now(),
+        )
+        self.repository.save_billing_event(event)
+
+        if not event.user_id:
+            # Apple delivered a verified notification but the transaction
+            # had no appAccountToken — should not happen if the iOS app
+            # always passes one through StoreKit2 .appAccountToken option.
+            logger.warning(
+                "Verified App Store notification missing app_account_token: %s",
+                event.notification_type,
+            )
+            return {"accepted": True, "event_id": event.id, "warning": "no app_account_token"}
+
+        user = self.repository.get_user(event.user_id)
+        if user is None:
+            logger.warning(
+                "Verified App Store notification for unknown user: %s",
+                event.user_id,
+            )
+            return {"accepted": True, "event_id": event.id, "warning": "user not found"}
+
+        subscription = self._get_subscription(event.user_id)
+        self._mutate_subscription_from_notification(
+            subscription,
+            notification_type=decoded.notification_type,
+            product_id=decoded.product_id,
+            expires_date_ms=decoded.expires_date_ms,
+            revocation_date_ms=decoded.revocation_date_ms,
+        )
+        subscription.updated_at = utc_now()
+        self.repository.save_subscription(subscription)
+        return {"accepted": True, "event_id": event.id}
+
+    def _apply_legacy_app_store_notification(
+        self, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Legacy unsigned-payload path. Retained so internal smoke tests
+        and the existing test suite keep working until
+        APP_STORE_NOTIFICATIONS_REQUIRE_SIGNED is flipped on for prod."""
         event = BillingEventRecord(
             id=uuid4().hex,
             user_id=(payload.get("user_id") or payload.get("app_account_token")),
@@ -1053,6 +1147,57 @@ class ControlPlaneService:
             "accepted": True,
             "event_id": event.id,
         }
+
+    def _mutate_subscription_from_notification(
+        self,
+        subscription: SubscriptionRecord,
+        *,
+        notification_type: str,
+        product_id: Optional[str],
+        expires_date_ms: Optional[int],
+        revocation_date_ms: Optional[int],
+    ) -> None:
+        pro_ids = {
+            self.settings.app_store_pro_monthly_product_id,
+            self.settings.app_store_pro_annual_product_id,
+        }
+        max_ids = {
+            self.settings.app_store_max_monthly_product_id,
+            self.settings.app_store_max_annual_product_id,
+        }
+
+        if notification_type in self._APP_STORE_ACTIVATE_TYPES:
+            if product_id in pro_ids:
+                subscription.tier = "pro"
+                subscription.status = "active"
+                subscription.product_id = product_id
+            elif product_id in max_ids:
+                subscription.tier = "max"
+                subscription.status = "active"
+                subscription.product_id = product_id
+            else:
+                logger.warning(
+                    "App Store notification %s referenced unknown product_id=%r — "
+                    "skipping tier mutation",
+                    notification_type,
+                    product_id,
+                )
+        elif notification_type in self._APP_STORE_REVOKE_TYPES:
+            subscription.tier = "free"
+            if notification_type == "EXPIRED":
+                subscription.status = "expired"
+            elif notification_type == "REVOKE":
+                subscription.status = "revoked"
+            elif notification_type == "REFUND":
+                subscription.status = "refunded"
+            else:
+                subscription.status = "expired"
+            subscription.product_id = None
+
+        if expires_date_ms is not None:
+            subscription.expires_at = datetime.fromtimestamp(
+                expires_date_ms / 1000, tz=timezone.utc
+            )
 
     def dispatch_due_users(self, now_utc: Optional[datetime] = None) -> dict[str, Any]:
         now_utc = now_utc or utc_now()
@@ -2078,3 +2223,16 @@ def _parse_client_datetime(value: Any) -> Optional[datetime]:
     if isinstance(value, datetime):
         return value
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def _normalize_app_account_token(token: Optional[str]) -> Optional[str]:
+    """Map Apple's `appAccountToken` (formatted UUID with hyphens) back
+    to the 32-char hex form we store on `UserRecord.id`. The iOS
+    `PurchaseManager.uuidFromHex` formats user ids into the hyphenated
+    UUID Apple expects; this is the inverse."""
+    if not token:
+        return None
+    raw = token.replace("-", "").strip().lower()
+    if len(raw) != 32 or any(c not in "0123456789abcdef" for c in raw):
+        return token.strip()
+    return raw

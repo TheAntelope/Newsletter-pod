@@ -23,6 +23,26 @@ class FakeAppleVerifier:
         )()
 
 
+class FakeAppStoreVerifier:
+    """Stand-in for `AppStoreNotificationVerifier` during tests. Lets a test
+    seed the decoded notification it wants `verify` to return for any given
+    signed_payload string; an unknown string raises
+    `AppStoreVerificationError` so the bad-signature path is also coverable."""
+
+    def __init__(self) -> None:
+        self.results: dict[str, object] = {}
+
+    def stub(self, signed_payload: str, decoded) -> None:
+        self.results[signed_payload] = decoded
+
+    def verify(self, signed_payload: str):
+        from newsletter_pod.app_store_verifier import AppStoreVerificationError
+
+        if signed_payload not in self.results:
+            raise AppStoreVerificationError("signature mismatch")
+        return self.results[signed_payload]
+
+
 class FakePodcastClient:
     def generate(
         self,
@@ -957,6 +977,112 @@ def test_control_plane_auth_profile_sources_and_schedule_limits():
     )
     assert good_schedule.status_code == 200
     assert good_schedule.json()["schedule"]["weekdays"] == ["wednesday"]
+
+
+def test_signed_app_store_notification_flips_tier_to_max():
+    from newsletter_pod.app_store_verifier import DecodedNotification
+
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("signed-flip-user", "flip@example.com")
+    )
+    me = client.get("/v1/me", headers=headers).json()
+    user_id = me["user"]["id"]
+
+    fake_verifier = FakeAppStoreVerifier()
+    fake_verifier.stub(
+        "fake-jws-token",
+        DecodedNotification(
+            notification_type="SUBSCRIBED",
+            subtype=None,
+            notification_uuid="11111111-2222-3333-4444-555555555555",
+            bundle_id="com.newsletterpod.app",
+            environment="Sandbox",
+            transaction_id="200000000000001",
+            product_id=container.settings.app_store_max_annual_product_id,
+            # Apple delivers appAccountToken in hyphenated UUID form; the
+            # handler normalizes back to our 32-char hex user_id.
+            app_account_token=f"{user_id[:8]}-{user_id[8:12]}-{user_id[12:16]}-{user_id[16:20]}-{user_id[20:]}",
+            expires_date_ms=2000000000000,
+            revocation_date_ms=None,
+        ),
+    )
+    container.control_plane.app_store_verifier = fake_verifier
+
+    resp = client.post(
+        "/v1/billing/app-store/notifications",
+        json={"signedPayload": "fake-jws-token"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    subscription = container.control_repository.get_subscription(user_id)
+    assert subscription is not None
+    assert subscription.tier == "max"
+    assert subscription.status == "active"
+    assert subscription.product_id == container.settings.app_store_max_annual_product_id
+    assert subscription.expires_at is not None
+
+
+def test_signed_app_store_notification_rejects_bad_signature():
+    container, client = _build_app()
+    container.control_plane.app_store_verifier = FakeAppStoreVerifier()
+
+    resp = client.post(
+        "/v1/billing/app-store/notifications",
+        json={"signedPayload": "this-was-not-signed-by-apple"},
+    )
+    assert resp.status_code == 400
+    assert "signature" in resp.text.lower() or "verification" in resp.text.lower()
+
+
+def test_unsigned_notification_rejected_when_require_signed_is_on():
+    container, client = _build_app()
+    container.settings.app_store_notifications_require_signed = True
+
+    resp = client.post(
+        "/v1/billing/app-store/notifications",
+        json={
+            "user_id": "deadbeefdeadbeefdeadbeefdeadbeef",
+            "notification_type": "DID_RENEW",
+            "product_id": container.settings.app_store_pro_monthly_product_id,
+        },
+    )
+    assert resp.status_code == 400
+    assert "signedPayload" in resp.text or "signed" in resp.text.lower()
+
+
+def test_signed_notification_handler_records_billing_event_for_unknown_user():
+    """Verified payload for a user_id we've never seen should still record
+    the BillingEvent (so we can audit drift) but not crash or 500."""
+    from newsletter_pod.app_store_verifier import DecodedNotification
+
+    container, client = _build_app()
+    fake_verifier = FakeAppStoreVerifier()
+    fake_verifier.stub(
+        "verified-but-orphan",
+        DecodedNotification(
+            notification_type="SUBSCRIBED",
+            subtype=None,
+            notification_uuid=None,
+            bundle_id="com.newsletterpod.app",
+            environment="Sandbox",
+            transaction_id="200000000000099",
+            product_id=container.settings.app_store_pro_monthly_product_id,
+            app_account_token="00000000-0000-0000-0000-000000000000",
+            expires_date_ms=None,
+            revocation_date_ms=None,
+        ),
+    )
+    container.control_plane.app_store_verifier = fake_verifier
+
+    resp = client.post(
+        "/v1/billing/app-store/notifications",
+        json={"signedPayload": "verified-but-orphan"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body.get("accepted") is True
+    assert "warning" in body
 
 
 def test_paid_feed_isolation_and_billing_unlock():

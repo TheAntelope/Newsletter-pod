@@ -23,6 +23,7 @@ dependencies = [
   "google-cloud-storage>=2.17.0",
   "google-cloud-secret-manager>=2.20.0",
   "google-cloud-tasks>=2.16.0",
+  "app-store-server-library>=1.7.0",
 ]
 
 [project.optional-dependencies]
@@ -38,3 +39,8 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 include = ["newsletter_pod*"]
+
+[tool.setuptools.package-data]
+# Ship Apple's root CA so the App Store Server Notification verifier
+# has a trust anchor without depending on the system trust store.
+newsletter_pod = ["data/*.cer"]
