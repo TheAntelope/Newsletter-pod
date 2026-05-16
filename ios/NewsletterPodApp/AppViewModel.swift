@@ -494,6 +494,41 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    /// Deletes the user's account and all associated data on the backend,
+    /// then clears every piece of per-user state we hold locally so the app
+    /// snaps back to the Sign-in screen. Returns true on success.
+    func deleteAccount() async -> Bool {
+        guard let sessionToken else { return false }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        do {
+            _ = try await apiClient.deleteAccount(token: sessionToken)
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+        pollTask?.cancel()
+        pollTask = nil
+        self.sessionToken = nil
+        user = nil
+        profile = nil
+        schedule = nil
+        subscription = nil
+        entitlements = nil
+        selectedSources = []
+        feed = nil
+        inboundItems = []
+        substackIntents = []
+        libraryEpisodes = []
+        activeRunID = nil
+        showOnboarding = false
+        selectedTab = .home
+        UserDefaults.standard.removeObject(forKey: Self.onboardingCompleteKey)
+        flashSaved("Account deleted")
+        return true
+    }
+
     func discoverSubstacks(query: String) async -> [SubstackCandidateDTO] {
         guard let sessionToken else { return [] }
         do {

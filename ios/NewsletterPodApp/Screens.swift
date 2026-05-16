@@ -1730,6 +1730,8 @@ struct PodcastSetupView: View {
                 }
 
                 ScheduleSection()
+
+                DeleteAccountSection()
             }
             .navigationTitle("Podcast Setup")
             .navigationBarTitleDisplayMode(.inline)
@@ -2079,6 +2081,48 @@ struct ScheduleSection: View {
                 weekdays: weekdays,
                 localTime: OnboardingScheduleStep.formattedHHmm(deliveryTime)
             )
+        }
+    }
+}
+
+/// Final section of PodcastSetupView. Renders a destructive "Delete account"
+/// row with a two-step confirmation dialog. On confirm, calls the backend's
+/// `DELETE /v1/me` endpoint and clears local state; RootView observes
+/// `isAuthenticated` and falls back to SignInView automatically.
+struct DeleteAccountSection: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @State private var showConfirm = false
+
+    var body: some View {
+        Section("Account") {
+            Button(role: .destructive) {
+                showConfirm = true
+            } label: {
+                HStack {
+                    Text("Delete account")
+                    Spacer()
+                    if viewModel.isLoading {
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(viewModel.isLoading)
+
+            Text("Permanently removes your profile, sources, schedule, episodes, swipes, and forwarded newsletters. Subscriptions managed through Apple are not cancelled by deleting your account — cancel in Settings → [your name] → Subscriptions if you want to stop billing.")
+                .font(Theme.Typography.callout)
+                .foregroundStyle(.secondary)
+        }
+        .confirmationDialog(
+            "Delete your ClawCast account?",
+            isPresented: $showConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete account", role: .destructive) {
+                Task { await viewModel.deleteAccount() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This cannot be undone. All your data will be removed.")
         }
     }
 }

@@ -14,6 +14,13 @@ class AudioStorage(ABC):
     def download_audio(self, object_name: str) -> bytes:
         raise NotImplementedError
 
+    @abstractmethod
+    def delete_audio(self, object_name: str) -> bool:
+        """Remove the object from the underlying store. Returns True if an
+        object was deleted, False if it didn't exist. Idempotent: missing
+        objects are not an error."""
+        raise NotImplementedError
+
 
 class InMemoryAudioStorage(AudioStorage):
     def __init__(self) -> None:
@@ -29,6 +36,9 @@ class InMemoryAudioStorage(AudioStorage):
         if data is None:
             raise FileNotFoundError(object_name)
         return data
+
+    def delete_audio(self, object_name: str) -> bool:
+        return self._objects.pop(object_name, None) is not None
 
 
 class GCSAudioStorage(AudioStorage):
@@ -48,3 +58,10 @@ class GCSAudioStorage(AudioStorage):
         if not blob.exists():
             raise FileNotFoundError(object_name)
         return blob.download_as_bytes()
+
+    def delete_audio(self, object_name: str) -> bool:
+        blob = self._bucket.blob(object_name)
+        if not blob.exists():
+            return False
+        blob.delete()
+        return True

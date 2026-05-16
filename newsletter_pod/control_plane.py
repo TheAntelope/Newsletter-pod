@@ -1015,6 +1015,68 @@ class ControlPlaneService:
             "episodes": [episode.model_dump(mode="json") for episode in episodes],
         }
 
+    def delete_user_account(self, user_id: str) -> dict[str, Any]:
+        """Hard-delete every per-user record we hold for `user_id`, plus all
+        of the user's audio blobs in object storage. Idempotent: if the user
+        has already been deleted, returns zero counts.
+
+        Billing event rows are kept but anonymized (user_id nulled) so the
+        bookkeeping trail required under Danish accounting rules survives
+        without remaining linked to an identifiable user.
+        """
+        user = self.repository.get_user(user_id)
+        if user is None:
+            # Already gone — nothing to do, but stay idempotent so retries
+            # from a flaky client don't 404.
+            return {
+                "user_id": user_id,
+                "already_deleted": True,
+                "audio_objects_deleted": 0,
+                "audio_objects_missing": 0,
+                "records": {},
+            }
+
+        # We have to pull the episode list BEFORE wiping the records so we
+        # know which audio blobs to remove from object storage.
+        episodes = self.repository.list_recent_user_episodes(user_id, limit=10_000)
+        audio_deleted = 0
+        audio_missing = 0
+        for episode in episodes:
+            object_name = (episode.audio_object_name or "").strip()
+            if not object_name:
+                continue
+            try:
+                if self.storage.delete_audio(object_name):
+                    audio_deleted += 1
+                else:
+                    audio_missing += 1
+            except Exception:
+                # A single blob failure shouldn't block the rest of the
+                # delete. Log and continue; an operator can sweep up
+                # orphaned objects later from logs.
+                logger.warning(
+                    "Audio blob delete failed during account wipe: user=%s object=%s",
+                    user_id,
+                    object_name,
+                    exc_info=True,
+                )
+
+        counts = self.repository.delete_user_account(user_id)
+        logger.info(
+            "Account deleted: user=%s audio_deleted=%s audio_missing=%s records=%s",
+            user_id,
+            audio_deleted,
+            audio_missing,
+            counts,
+        )
+        return {
+            "user_id": user_id,
+            "already_deleted": False,
+            "audio_objects_deleted": audio_deleted,
+            "audio_objects_missing": audio_missing,
+            "records": counts,
+        }
+
     # ----- App Store Server Notifications -----------------------------
 
     # Notification types that flip the subscription INTO an active state.

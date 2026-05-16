@@ -229,6 +229,15 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    @app.delete("/v1/me")
+    def delete_me(authorization: str | None = Header(default=None)) -> dict:
+        """Delete the authenticated user's account and all associated data.
+        Idempotent and irreversible. After this returns, the caller's
+        session token will no longer authenticate any other endpoint."""
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        return container.control_plane.delete_user_account(user.id)
+
     @app.get("/v1/sources/catalog")
     def get_source_catalog() -> dict:
         assert container.control_plane is not None

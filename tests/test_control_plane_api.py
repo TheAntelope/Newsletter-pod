@@ -1779,3 +1779,106 @@ def test_forwarded_mail_does_not_seed_when_sender_does_not_match_user_email():
     swipes = list(repo._swipes.values())
     forwarded_seeds = [swipe for swipe in swipes if swipe.seed_kind == "forwarded_mail"]
     assert forwarded_seeds == []
+
+
+def test_delete_me_wipes_account_and_audio():
+    container, client = _build_app()
+    verifier = FakeAppleVerifier("delete-user", "delete@example.com")
+    token, headers = _auth_headers(client, verifier)
+    repo = container.control_repository
+    storage = container.storage
+
+    # Stash a fake episode + audio blob so we can verify both get wiped.
+    object_name, _ = storage.upload_audio("ep-1", b"audio-bytes", "audio/mpeg")
+    user_id = container.control_plane.get_authenticated_user(token).id
+    repo.save_user_episode(
+        UserEpisodeRecord(
+            id="ep-1",
+            user_id=user_id,
+            title="Test episode",
+            description="",
+            published_at=datetime(2026, 5, 16, tzinfo=timezone.utc),
+            audio_object_name=object_name,
+            audio_size_bytes=len(b"audio-bytes"),
+        )
+    )
+
+    # Submit a piece of feedback so we have a per-user record outside the
+    # default-seeded ones to confirm wiping.
+    fb_resp = client.post("/v1/me/feedback", json={"text": "hi"}, headers=headers)
+    assert fb_resp.status_code == 201
+    assert len(repo.list_recent_feedback(user_id, limit=5)) == 1
+    assert repo.get_user(user_id) is not None
+
+    # Act: delete the account.
+    resp = client.delete("/v1/me", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["already_deleted"] is False
+    assert body["audio_objects_deleted"] == 1
+    records = body["records"]
+    assert records["users"] == 1
+    assert records["podcast_profiles"] == 1
+    assert records["feedback"] >= 1
+    assert records["user_episodes"] == 1
+
+    # User and per-user records gone.
+    assert repo.get_user(user_id) is None
+    assert repo.get_profile(user_id) is None
+    assert repo.get_schedule(user_id) is None
+    assert repo.list_recent_feedback(user_id, limit=5) == []
+    assert repo.list_recent_user_episodes(user_id, limit=5) == []
+
+    # Audio blob gone from storage.
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        storage.download_audio(object_name)
+
+    # Session token no longer authenticates anything.
+    after = client.get("/v1/me", headers=headers)
+    assert after.status_code in (401, 404)
+
+
+def test_delete_me_is_idempotent():
+    container, client = _build_app()
+    verifier = FakeAppleVerifier("delete-twice-user", "twice@example.com")
+    _, headers = _auth_headers(client, verifier)
+
+    first = client.delete("/v1/me", headers=headers)
+    assert first.status_code == 200
+    assert first.json()["already_deleted"] is False
+
+    # Second call uses the same now-invalid session and should fail auth
+    # rather than 500.
+    second = client.delete("/v1/me", headers=headers)
+    assert second.status_code in (401, 404)
+
+
+def test_delete_me_anonymizes_billing_events():
+    from newsletter_pod.user_models import BillingEventRecord
+
+    container, client = _build_app()
+    verifier = FakeAppleVerifier("billing-user", "bill@example.com")
+    token, headers = _auth_headers(client, verifier)
+    repo = container.control_repository
+    user_id = container.control_plane.get_authenticated_user(token).id
+
+    repo.save_billing_event(
+        BillingEventRecord(
+            id="evt-1",
+            user_id=user_id,
+            notification_type="SUBSCRIBED",
+            product_id="pro-monthly",
+            raw_payload={"signedPayload": "..."},
+            created_at=datetime(2026, 5, 16, tzinfo=timezone.utc),
+        )
+    )
+
+    resp = client.delete("/v1/me", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["records"]["billing_events_anonymized"] == 1
+
+    # The billing row survives but is no longer linked to the user.
+    assert repo._billing_events["evt-1"].user_id is None
+    assert repo._billing_events["evt-1"].notification_type == "SUBSCRIBED"

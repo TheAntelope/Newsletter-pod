@@ -269,6 +269,49 @@ class ControlPlaneRepository(ABC):
     def delete_substack_intent(self, intent_id: str) -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    def delete_user_account(self, user_id: str) -> dict[str, int]:
+        """Wipe every per-user document we hold for `user_id` and return a
+        per-collection count of what was removed.
+
+        Idempotent: safe to call on an already-deleted user; in that case
+        counts will be zero or near-zero.
+
+        Returns a dict like::
+
+            {
+                "users": 1,
+                "podcast_profiles": 1,
+                "user_sources": 5,
+                "feed_tokens": 1,
+                "subscriptions": 1,
+                "delivery_schedules": 1,
+                "user_episodes": 12,
+                "user_runs": 12,
+                "user_cursors": 5,
+                "cost_records": 12,
+                "inbound_items": 30,
+                "feedback": 2,
+                "swipes": 240,
+                "user_substack_intents": 3,
+                "billing_events_anonymized": 4,
+            }
+
+        Audio blobs in object storage are NOT deleted by this method; the
+        caller is responsible for enumerating episode `audio_object_name`
+        values and deleting them through `AudioStorage.delete_audio` BEFORE
+        invoking this method (after which the episode records are gone).
+
+        Globally-shared collections are NOT touched: source_items,
+        swipe_decks, and job_state are system-level data.
+
+        `billing_events` is special: per Danish bookkeeping rules, financial
+        records may need to be retained. Rather than delete those rows, we
+        null out their `user_id` field so the transaction trail remains for
+        accounting but is no longer linked to an identifiable account.
+        """
+        raise NotImplementedError
+
 
 class InMemoryControlPlaneRepository(ControlPlaneRepository):
     def __init__(self) -> None:
@@ -541,6 +584,86 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
 
     def delete_substack_intent(self, intent_id: str) -> None:
         self._substack_intents.pop(intent_id, None)
+
+    def delete_user_account(self, user_id: str) -> dict[str, int]:
+        counts: dict[str, int] = {}
+
+        user = self._users.pop(user_id, None)
+        counts["users"] = 1 if user else 0
+        if user:
+            self._users_by_subject.pop(user.apple_subject, None)
+
+        counts["podcast_profiles"] = 1 if self._profiles.pop(user_id, None) else 0
+        counts["user_sources"] = len(self._sources.pop(user_id, []) or [])
+
+        token_record = self._feed_tokens_by_user.pop(user_id, None)
+        if token_record is not None:
+            self._feed_tokens.pop(token_record.token, None)
+            counts["feed_tokens"] = 1
+        else:
+            counts["feed_tokens"] = 0
+
+        counts["subscriptions"] = 1 if self._subscriptions.pop(user_id, None) else 0
+        counts["delivery_schedules"] = 1 if self._schedules.pop(user_id, None) else 0
+
+        cursor_keys = [key for key in self._cursors if key[0] == user_id]
+        for key in cursor_keys:
+            self._cursors.pop(key, None)
+        counts["user_cursors"] = len(cursor_keys)
+
+        episode_ids = [eid for eid, ep in self._episodes.items() if ep.user_id == user_id]
+        for eid in episode_ids:
+            self._episodes.pop(eid, None)
+        counts["user_episodes"] = len(episode_ids)
+
+        run_ids = [rid for rid, run in self._runs.items() if run.user_id == user_id]
+        for rid in run_ids:
+            self._runs.pop(rid, None)
+        counts["user_runs"] = len(run_ids)
+
+        cost_keys = [
+            key for key, record in self._costs.items() if record.user_id == user_id
+        ]
+        for key in cost_keys:
+            self._costs.pop(key, None)
+        counts["cost_records"] = len(cost_keys)
+
+        inbound_keys = [
+            key for key, item in self._inbound_items.items() if item.user_id == user_id
+        ]
+        for key in inbound_keys:
+            self._inbound_items.pop(key, None)
+        counts["inbound_items"] = len(inbound_keys)
+
+        feedback_keys = [
+            key for key, item in self._feedback.items() if item.user_id == user_id
+        ]
+        for key in feedback_keys:
+            self._feedback.pop(key, None)
+        counts["feedback"] = len(feedback_keys)
+
+        swipe_keys = [
+            key for key, swipe in self._swipes.items() if swipe.user_id == user_id
+        ]
+        for key in swipe_keys:
+            self._swipes.pop(key, None)
+        counts["swipes"] = len(swipe_keys)
+
+        intent_keys = [
+            key for key, intent in self._substack_intents.items() if intent.user_id == user_id
+        ]
+        for key in intent_keys:
+            self._substack_intents.pop(key, None)
+        counts["user_substack_intents"] = len(intent_keys)
+
+        anonymized = 0
+        for key, event in list(self._billing_events.items()):
+            if event.user_id == user_id:
+                self._billing_events[key] = event.model_copy(update={"user_id": None})
+                anonymized += 1
+        counts["billing_events_anonymized"] = anonymized
+
+        return counts
 
 
 class FirestoreControlPlaneRepository(ControlPlaneRepository):
@@ -969,3 +1092,93 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
 
     def delete_substack_intent(self, intent_id: str) -> None:
         self._substack_intents.document(intent_id).delete()
+
+    def delete_user_account(self, user_id: str) -> dict[str, int]:
+        counts: dict[str, int] = {
+            "users": 0,
+            "podcast_profiles": 0,
+            "user_sources": 0,
+            "feed_tokens": 0,
+            "subscriptions": 0,
+            "delivery_schedules": 0,
+            "user_episodes": 0,
+            "user_runs": 0,
+            "user_cursors": 0,
+            "cost_records": 0,
+            "inbound_items": 0,
+            "feedback": 0,
+            "swipes": 0,
+            "user_substack_intents": 0,
+            "billing_events_anonymized": 0,
+        }
+
+        # Single-doc collections keyed by user_id.
+        for collection, key in (
+            (self._users, "users"),
+            (self._profiles, "podcast_profiles"),
+            (self._subscriptions, "subscriptions"),
+            (self._schedules, "delivery_schedules"),
+        ):
+            ref = collection.document(user_id)
+            snapshot = ref.get()
+            if snapshot.exists:
+                ref.delete()
+                counts[key] = 1
+
+        # Multi-doc per-user collections: query by user_id, batch-delete.
+        # `cost_records` is keyed by `run_id` and references `user_id`; we
+        # query it just like any other per-user collection.
+        for collection, key in (
+            (self._sources, "user_sources"),
+            (self._episodes, "user_episodes"),
+            (self._runs, "user_runs"),
+            (self._costs, "cost_records"),
+            (self._inbound_items, "inbound_items"),
+            (self._feedback, "feedback"),
+            (self._swipes, "swipes"),
+            (self._substack_intents, "user_substack_intents"),
+        ):
+            counts[key] = self._batch_delete_where_user(collection, user_id)
+
+        # Feed token: doc id is the token (random string), not user_id, so we
+        # have to query by user_id first.
+        for doc in self._feed_tokens.where("user_id", "==", user_id).stream():
+            doc.reference.delete()
+            counts["feed_tokens"] += 1
+
+        # Source cursors: doc id is `{user_id}:{source_id}`. We could prefix-
+        # scan, but querying by user_id is simpler and matches how the rest
+        # of the per-user data is wiped.
+        for doc in self._cursors.where("user_id", "==", user_id).stream():
+            doc.reference.delete()
+            counts["user_cursors"] += 1
+
+        # Billing events: anonymize rather than delete. The bookkeeping trail
+        # stays; the link to the deleted user does not.
+        for doc in self._billing_events.where("user_id", "==", user_id).stream():
+            doc.reference.update({"user_id": None})
+            counts["billing_events_anonymized"] += 1
+
+        return counts
+
+    def _batch_delete_where_user(
+        self, collection: firestore.CollectionReference, user_id: str
+    ) -> int:
+        """Delete every doc in `collection` whose `user_id` field equals
+        `user_id`. Batches in chunks of 400 (Firestore's per-batch limit is
+        500; we leave headroom). Returns the total count deleted."""
+        BATCH_LIMIT = 400
+        deleted = 0
+        batch = self._db.batch()
+        pending = 0
+        for doc in collection.where("user_id", "==", user_id).stream():
+            batch.delete(doc.reference)
+            pending += 1
+            deleted += 1
+            if pending >= BATCH_LIMIT:
+                batch.commit()
+                batch = self._db.batch()
+                pending = 0
+        if pending > 0:
+            batch.commit()
+        return deleted

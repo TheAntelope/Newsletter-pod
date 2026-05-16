@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-EFFECTIVE_DATE = "April 25, 2026"
+EFFECTIVE_DATE = "May 16, 2026"
 CONTACT_EMAIL = "vincemartin1991@gmail.com"
-COMPANY_NAME = "Antelope Labs"
-PRODUCT_NAME = "Newsletter Pod"
+COMPANY_NAME = "Vince Martin"
+PRODUCT_NAME = "ClawCast"
 
 _BASE_CSS = """
 :root {
@@ -216,17 +216,23 @@ this URL as a secret &mdash; anyone who has it can listen to your feed. You
 can request a new feed token by contacting support.</p>
 
 <h2>Data retention</h2>
-<p>We retain your account data while your account is active. Generated
-episodes are retained according to a rolling window so that recent episodes
-remain available in your podcast app. You can request deletion of your
-account and associated data at any time by emailing
-<a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>.</p>
+<p>We retain your account data &mdash; profile, preferences, sources,
+episodes, swipe history, forwarded newsletters, and feedback &mdash; for as
+long as your account is active. We do not currently run automated retention
+or cleanup jobs against this data. You can delete your account and
+associated personal data at any time from inside the app
+(<em>Settings &rarr; Delete account</em>) or by emailing
+<a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>. Billing records that
+we are legally required to retain (under Danish bookkeeping rules, typically
+five years) will remain in a limited-access archive until that retention
+period ends.</p>
 
 <h2>Your choices and rights</h2>
 <ul>
-  <li><strong>Access and deletion.</strong> Email
+  <li><strong>Access and deletion.</strong> Delete your account from inside
+  the app (<em>Settings &rarr; Delete account</em>) or email
   <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a> to request a copy of
-  your data or to delete your account.</li>
+  your data.</li>
   <li><strong>Subscription.</strong> Manage or cancel your subscription in
   <em>Settings &rarr; [your name] &rarr; Subscriptions</em> on your Apple
   device.</li>
