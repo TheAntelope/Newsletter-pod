@@ -479,20 +479,6 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func createSubstackIntent(pubURL: String) async -> SubstackIntentDTO? {
-        guard let sessionToken else { return nil }
-        do {
-            let envelope = try await apiClient.createSubstackIntent(
-                token: sessionToken,
-                pubURL: pubURL
-            )
-            return envelope.intent
-        } catch {
-            errorMessage = error.localizedDescription
-            return nil
-        }
-    }
-
     func submitSwipe(card: SwipeDeckCardDTO, direction: Int) async {
         guard let sessionToken else { return }
         do {
