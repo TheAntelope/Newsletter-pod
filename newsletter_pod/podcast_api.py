@@ -4,8 +4,9 @@ import base64
 import json
 import logging
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import requests
 
@@ -53,24 +54,44 @@ class PodcastApiClient:
         primary_speaker_name: Optional[str] = None,
         secondary_speaker_name: Optional[str] = None,
         ux: Optional[PodcastUxConfig] = None,
+        force_default_voice: bool = False,
     ) -> GeneratedEpisode:
         if not self.enabled:
             raise PodcastApiUnavailable("Podcast API is disabled")
 
         provider = self.provider.strip().lower()
         if provider == "openai":
-            return self._generate_with_openai(
-                prompt=prompt,
-                title=title,
-                voice_id=voice_id,
-                secondary_voice_id=secondary_voice_id,
-                primary_speaker_name=primary_speaker_name,
-                secondary_speaker_name=secondary_speaker_name,
-                ux=ux,
-            )
+            # `force_default_voice` is the per-episode override used by the
+            # generation gate when a user's premium quota for the week is
+            # exhausted. It pins TTS to OpenAI with the bundled voice,
+            # regardless of self.tts_provider / the requested voice_id.
+            effective_voice_id = None if force_default_voice else voice_id
+            effective_secondary_voice_id = None if force_default_voice else secondary_voice_id
+            with self._tts_provider_override("openai" if force_default_voice else None):
+                return self._generate_with_openai(
+                    prompt=prompt,
+                    title=title,
+                    voice_id=effective_voice_id,
+                    secondary_voice_id=effective_secondary_voice_id,
+                    primary_speaker_name=primary_speaker_name,
+                    secondary_speaker_name=secondary_speaker_name,
+                    ux=ux,
+                )
         if provider == "generic":
             return self._generate_with_generic(prompt=prompt, title=title)
         raise PodcastApiError(f"Unsupported podcast provider: {self.provider}")
+
+    @contextmanager
+    def _tts_provider_override(self, override: Optional[str]) -> Iterator[None]:
+        if override is None:
+            yield
+            return
+        prior = self.tts_provider
+        self.tts_provider = override
+        try:
+            yield
+        finally:
+            self.tts_provider = prior
 
     def _generate_with_openai(
         self,

@@ -151,6 +151,9 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                     GreetingHeader()
+                    if viewModel.isGenerating {
+                        HomeGenerationBanner()
+                    }
                     HeroEpisodeCard()
                     AboutPodcastCard()
                     SourcesSummaryCard()
@@ -170,6 +173,42 @@ struct HomeView: View {
                     .environmentObject(viewModel)
             }
         }
+    }
+}
+
+/// Prominent top-of-home progress card that shows whenever a generation run
+/// is active. Mirrors the alias step in the onboarding wizard so the user
+/// sees the same chrome before AND after onboarding ends.
+private struct HomeGenerationBanner: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        EditorialCard {
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                HStack(spacing: Theme.Spacing.m) {
+                    Image(systemName: "wand.and.stars")
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                        .font(.system(size: 22, weight: .semibold))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(headline)
+                            .font(Theme.Typography.subtitle)
+                            .foregroundStyle(Theme.Palette.ink)
+                        Text("About 3–5 minutes. You can close the app — the episode will land in Apple Podcasts and on this screen when ready.")
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+                GenerationProgressBar(isGenerating: viewModel.isGenerating)
+            }
+        }
+    }
+
+    private var headline: String {
+        viewModel.feed?.latestEpisode == nil
+            ? "Your first episode is being made."
+            : "We're putting together your next episode."
     }
 }
 
@@ -392,6 +431,10 @@ private struct HeroEpisodeCard: View {
                         Label(formatDuration(duration), systemImage: "clock")
                     }
                     Label("\(latest.processedItemCount) items", systemImage: "doc.text")
+                    Label(
+                        HeroEpisodeCard.relativeDate.localizedString(for: latest.publishedAt, relativeTo: Date()),
+                        systemImage: "calendar"
+                    )
                 }
                 .font(Theme.Typography.callout)
                 .foregroundStyle(Theme.Palette.muted)
@@ -414,22 +457,6 @@ private struct HeroEpisodeCard: View {
                 Text("Your sources are set. Tap Generate below to make your first episode now, or wait for your scheduled delivery.")
                     .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Palette.inkSoft)
-            }
-
-            if viewModel.isGenerating {
-                VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(viewModel.feed?.latestEpisode == nil
-                             ? "Your first episode is being made."
-                             : "We're putting together your next episode.")
-                            .font(Theme.Typography.bodyStrong)
-                            .foregroundStyle(Theme.Palette.ink)
-                        Text("About 3–5 minutes. You can close the app and come back later — it will land in Apple Podcasts when ready.")
-                            .font(Theme.Typography.callout)
-                            .foregroundStyle(Theme.Palette.inkSoft)
-                    }
-                    GenerationProgressBar(isGenerating: viewModel.isGenerating)
-                }
             }
 
             EditorialDivider()
@@ -477,6 +504,14 @@ private struct HeroEpisodeCard: View {
         let minutes = max(1, Int((Double(seconds) / 60.0).rounded()))
         return "\(minutes) min"
     }
+
+    /// "5 minutes ago", "2 days ago" — matches the casual feel of the rest
+    /// of the meta row. unitsStyle .full over .abbreviated for legibility.
+    static let relativeDate: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
 
     private func openInApplePodcasts() {
         guard let urlString = viewModel.feed?.feedURL,
@@ -2163,6 +2198,7 @@ struct PaywallView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                     headerCard
+                    trialStatusCard
                     comparisonCard
                     plansSection
                     if let message = viewModel.purchaseManager.lastPurchaseMessage {
@@ -2179,17 +2215,70 @@ struct PaywallView: View {
         }
     }
 
+    private var currentTierLabel: String {
+        if viewModel.isMax { return "You're on Max" }
+        if viewModel.isPro { return "You're on Pro" }
+        return "Go further"
+    }
+
+    private var headerHeadline: String {
+        if viewModel.isPaid { return "You're all set" }
+        return "Unlock daily briefings"
+    }
+
+    private var headerBody: String {
+        if viewModel.isPaid {
+            return "Your subscription is active. Manage or cancel in Settings → Apple ID → Subscriptions."
+        }
+        return "Pro: 3 premium-voice pods/week + 4 default-voice pods/week. Max: 7 premium-voice pods/week. Cancel anytime."
+    }
+
     private var headerCard: some View {
         EditorialCard {
-            MetaLabel(text: viewModel.isPaid ? "You're on Paid" : "Go further")
-            Text(viewModel.isPaid ? "You're all set" : "Unlock the full briefing")
+            MetaLabel(text: currentTierLabel)
+            Text(headerHeadline)
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Palette.ink)
-            Text(viewModel.isPaid
-                 ? "Your subscription is active. Manage it in Settings → Apple ID → Subscriptions."
-                 : "More sources, more delivery days, longer episodes. Cancel anytime.")
+            Text(headerBody)
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Palette.inkSoft)
+        }
+    }
+
+    @ViewBuilder
+    private var trialStatusCard: some View {
+        if let entitlements = viewModel.entitlements, !viewModel.isPaid {
+            if entitlements.isInTrial && entitlements.trialPremiumPodsRemaining > 0 {
+                EditorialCard {
+                    MetaLabel(text: "Free trial")
+                    Text("\(entitlements.trialPremiumPodsRemaining) premium-voice pods left in your trial")
+                        .font(Theme.Typography.calloutStrong)
+                        .foregroundStyle(Theme.Palette.ink)
+                    Text("After your trial, free users get 1 premium-voice pod/week for the first month, then 1 default-voice pod/week.")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.inkSoft)
+                }
+            } else if entitlements.isInFirstMonth {
+                EditorialCard {
+                    MetaLabel(text: "Free · First month")
+                    Text("\(entitlements.premiumPodsRemainingThisWeek) premium-voice pod left this week")
+                        .font(Theme.Typography.calloutStrong)
+                        .foregroundStyle(Theme.Palette.ink)
+                    Text("After your first month ends, free users get 1 default-voice pod/week. Upgrade to keep premium voices flowing daily.")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.inkSoft)
+                }
+            } else {
+                EditorialCard {
+                    MetaLabel(text: "Free")
+                    Text("1 default-voice pod/week")
+                        .font(Theme.Typography.calloutStrong)
+                        .foregroundStyle(Theme.Palette.ink)
+                    Text("Upgrade for premium voices and daily delivery.")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.inkSoft)
+                }
+            }
         }
     }
 
@@ -2197,15 +2286,21 @@ struct PaywallView: View {
         EditorialCard {
             MetaLabel(text: "What you get")
             VStack(spacing: Theme.Spacing.s) {
-                comparisonRow(label: "Delivery days / week", free: "5", paid: "7")
+                comparisonRow(label: "Premium-voice pods / wk", free: "0¹", pro: "3", max: "7")
                 EditorialDivider()
-                comparisonRow(label: "Episode length", free: "3–5 min", paid: "5–20 min")
+                comparisonRow(label: "Default-voice pods / wk", free: "1", pro: "4", max: "0")
+                EditorialDivider()
+                comparisonRow(label: "Episode length", free: "3–5 min", pro: "3–5 min", max: "3–5 min")
             }
+            Text("¹ Free trial: 5 premium pods. First month: 1 premium pod/week.")
+                .font(Theme.Typography.meta)
+                .foregroundStyle(Theme.Palette.muted)
+                .padding(.top, Theme.Spacing.xs)
         }
     }
 
-    private func comparisonRow(label: String, free: String, paid: String) -> some View {
-        HStack {
+    private func comparisonRow(label: String, free: String, pro: String, max: String) -> some View {
+        HStack(spacing: Theme.Spacing.xs) {
             Text(label)
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Palette.ink)
@@ -2214,12 +2309,17 @@ struct PaywallView: View {
                 Text("Free").font(Theme.Typography.meta).foregroundStyle(Theme.Palette.muted)
                 Text(free).font(Theme.Typography.callout).foregroundStyle(Theme.Palette.inkSoft)
             }
-            .frame(width: 80)
+            .frame(width: 60)
             VStack(spacing: 2) {
-                Text("Paid").font(Theme.Typography.meta).foregroundStyle(Theme.Palette.amberDeep)
-                Text(paid).font(Theme.Typography.calloutStrong).foregroundStyle(Theme.Palette.ink)
+                Text("Pro").font(Theme.Typography.meta).foregroundStyle(Theme.Palette.amberDeep)
+                Text(pro).font(Theme.Typography.calloutStrong).foregroundStyle(Theme.Palette.ink)
             }
-            .frame(width: 100)
+            .frame(width: 60)
+            VStack(spacing: 2) {
+                Text("Max").font(Theme.Typography.meta).foregroundStyle(Theme.Palette.amberDeep)
+                Text(max).font(Theme.Typography.calloutStrong).foregroundStyle(Theme.Palette.ink)
+            }
+            .frame(width: 60)
         }
     }
 
@@ -2240,8 +2340,9 @@ struct PaywallView: View {
                     .font(Theme.Typography.callout)
                     .foregroundStyle(Theme.Palette.muted)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("• \(AppConfiguration.monthlyProductID)")
-                    Text("• \(AppConfiguration.annualProductID)")
+                    ForEach(AppConfiguration.allProductIDs, id: \.self) { productID in
+                        Text("• \(productID)")
+                    }
                 }
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(Theme.Palette.inkSoft)

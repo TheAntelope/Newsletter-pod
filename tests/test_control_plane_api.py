@@ -33,6 +33,7 @@ class FakePodcastClient:
         primary_speaker_name: str | None = None,
         secondary_speaker_name: str | None = None,
         ux=None,
+        force_default_voice: bool = False,
     ) -> GeneratedEpisode:
         return GeneratedEpisode(
             episode_title="Weekly AI Briefing",
@@ -60,7 +61,8 @@ def _build_app():
     settings.app_base_url = "http://testserver"
     settings.publish_summary_email_enabled = False
     settings.free_max_delivery_days = 1
-    settings.paid_max_delivery_days = 3
+    settings.pro_max_delivery_days = 3
+    settings.max_max_delivery_days = 3
     container = _build_container(settings)
     return container, TestClient(create_app(container=container))
 
@@ -970,7 +972,7 @@ def test_paid_feed_isolation_and_billing_unlock():
         json={
             "user_id": user_one["id"],
             "notification_type": "DID_RENEW",
-            "product_id": container.settings.app_store_monthly_product_id,
+            "product_id": container.settings.app_store_pro_monthly_product_id,
         },
     )
     assert billing.status_code == 200
@@ -1160,7 +1162,7 @@ def test_weekly_update_segment_stamps_user_once_per_iso_week(monkeypatch):
     captured_prompts: list[str] = []
 
     class CapturingPodcastClient(FakePodcastClient):
-        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None, ux=None):
+        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None, ux=None, force_default_voice=False):
             captured_prompts.append(prompt)
             return super().generate(
                 prompt,
@@ -1170,6 +1172,7 @@ def test_weekly_update_segment_stamps_user_once_per_iso_week(monkeypatch):
                 primary_speaker_name=primary_speaker_name,
                 secondary_speaker_name=secondary_speaker_name,
                 ux=ux,
+                force_default_voice=force_default_voice,
             )
 
     container.control_plane.podcast_client = CapturingPodcastClient()
@@ -1245,7 +1248,7 @@ def test_weekly_update_segment_skipped_when_no_commits(monkeypatch):
     captured_prompts: list[str] = []
 
     class CapturingPodcastClient(FakePodcastClient):
-        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None, ux=None):
+        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None, ux=None, force_default_voice=False):
             captured_prompts.append(prompt)
             return super().generate(
                 prompt,
@@ -1255,6 +1258,7 @@ def test_weekly_update_segment_skipped_when_no_commits(monkeypatch):
                 primary_speaker_name=primary_speaker_name,
                 secondary_speaker_name=secondary_speaker_name,
                 ux=ux,
+                force_default_voice=force_default_voice,
             )
 
     container.control_plane.podcast_client = CapturingPodcastClient()

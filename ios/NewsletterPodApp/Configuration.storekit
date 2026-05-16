@@ -62,12 +62,12 @@
       "id" : "21525461",
       "localizations" : [
         {
-          "description" : "Newsletter Pod paid plans",
-          "displayName" : "Paid",
+          "description" : "ClawCast subscription plans",
+          "displayName" : "ClawCast",
           "locale" : "en_US"
         }
       ],
-      "name" : "Paid",
+      "name" : "ClawCast",
       "subscriptions" : [
         {
           "adHocOffers" : [],
@@ -75,18 +75,18 @@
           "displayPrice" : "19.99",
           "familyShareable" : false,
           "groupNumber" : 1,
-          "internalID" : "60000000",
+          "internalID" : "60000010",
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "Unlimited sources, 7 delivery days, up to 20-min episodes",
-              "displayName" : "Newsletter Pod Paid · Monthly",
+              "description" : "3 premium-voice pods/wk + 4 default-voice pods/wk.",
+              "displayName" : "ClawCast Pro · Monthly",
               "locale" : "en_US"
             }
           ],
-          "productID" : "com.newsletterpod.paid.monthly",
+          "productID" : "com.newsletterpod.pro.monthly",
           "recurringSubscriptionPeriod" : "P1M",
-          "referenceName" : "Paid Monthly",
+          "referenceName" : "Pro Monthly",
           "subscriptionGroupID" : "21525461",
           "type" : "RecurringSubscription",
           "winbackOffers" : []
@@ -94,21 +94,65 @@
         {
           "adHocOffers" : [],
           "codeOffers" : [],
-          "displayPrice" : "149.99",
+          "displayPrice" : "179.99",
           "familyShareable" : false,
           "groupNumber" : 2,
-          "internalID" : "60000001",
+          "internalID" : "60000011",
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "Unlimited sources, 7 delivery days, up to 20-min episodes. Save 37%.",
-              "displayName" : "Newsletter Pod Paid · Annual",
+              "description" : "3 premium-voice pods/wk + 4 default-voice pods/wk. ~25% off.",
+              "displayName" : "ClawCast Pro · Annual",
               "locale" : "en_US"
             }
           ],
-          "productID" : "com.newsletterpod.paid.annual",
+          "productID" : "com.newsletterpod.pro.annual",
           "recurringSubscriptionPeriod" : "P1Y",
-          "referenceName" : "Paid Annual",
+          "referenceName" : "Pro Annual",
+          "subscriptionGroupID" : "21525461",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : []
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "29.99",
+          "familyShareable" : false,
+          "groupNumber" : 3,
+          "internalID" : "60000020",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "7 premium-voice pods/wk — every day, every episode.",
+              "displayName" : "ClawCast Max · Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.newsletterpod.max.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Max Monthly",
+          "subscriptionGroupID" : "21525461",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : []
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "269.99",
+          "familyShareable" : false,
+          "groupNumber" : 4,
+          "internalID" : "60000021",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "7 premium-voice pods/wk. ~25% off vs monthly.",
+              "displayName" : "ClawCast Max · Annual",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.newsletterpod.max.annual",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Max Annual",
           "subscriptionGroupID" : "21525461",
           "type" : "RecurringSubscription",
           "winbackOffers" : []

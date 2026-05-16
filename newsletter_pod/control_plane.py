@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
@@ -1023,11 +1023,20 @@ class ControlPlaneService:
 
         if event.user_id:
             subscription = self._get_subscription(event.user_id)
-            if event.product_id in {
-                self.settings.app_store_monthly_product_id,
-                self.settings.app_store_annual_product_id,
-            }:
-                subscription.tier = "paid"
+            pro_ids = {
+                self.settings.app_store_pro_monthly_product_id,
+                self.settings.app_store_pro_annual_product_id,
+            }
+            max_ids = {
+                self.settings.app_store_max_monthly_product_id,
+                self.settings.app_store_max_annual_product_id,
+            }
+            if event.product_id in pro_ids:
+                subscription.tier = "pro"
+                subscription.status = "active"
+                subscription.product_id = event.product_id
+            elif event.product_id in max_ids:
+                subscription.tier = "max"
                 subscription.status = "active"
                 subscription.product_id = event.product_id
             if payload.get("status") in {"expired", "revoked"}:
@@ -1079,7 +1088,23 @@ class ControlPlaneService:
         user = self._require_user(user_id)
         schedule = self._get_schedule(user_id)
         subscription = self._get_subscription(user_id)
-        entitlements = self._entitlements_for(subscription)
+        # Rollover weekly counters if we're now in a new ISO week so the
+        # entitlements + downstream gate operate on the current bucket.
+        user_changed = False
+        if self._rollover_weekly_counters(user, now_utc):
+            user_changed = True
+        if self._ensure_trial_state(user):
+            user_changed = True
+        entitlements = self._compute_entitlements(subscription, user, now_utc)
+        # Decide voice tier for this episode: prefer premium when available
+        # (the better voice for the first 3 pods of the week on Pro, all 7
+        # on Max, trial pods, and first-month free pods).
+        if entitlements.premium_pods_remaining_this_week > 0:
+            voice_tier_for_episode = "premium"
+        elif entitlements.default_pods_remaining_this_week > 0:
+            voice_tier_for_episode = "default"
+        else:
+            voice_tier_for_episode = None
         profile = self._get_profile(user_id)
         sources = [source for source in self.repository.list_user_sources(user_id) if source.enabled]
         local_date = now_utc.astimezone(ZoneInfo(schedule.timezone)).date()
@@ -1095,6 +1120,25 @@ class ControlPlaneService:
                 completed_at=now_utc,
                 status=PublishStatus.SKIPPED.value,
                 message="Run skipped by retry policy",
+            )
+            self.repository.save_user_run(run)
+            return run.model_dump(mode="json")
+
+        if voice_tier_for_episode is None:
+            # No quota left in either bucket for the current ISO week. Persist
+            # rollover/trial bookkeeping so the next call sees fresh state if
+            # we cross a week boundary, then skip cleanly.
+            if user_changed:
+                user.updated_at = utc_now()
+                self.repository.save_user(user)
+            run = UserRunRecord(
+                id=run_id,
+                user_id=user_id,
+                local_run_date=local_date,
+                started_at=now_utc,
+                completed_at=now_utc,
+                status=PublishStatus.SKIPPED.value,
+                message="Weekly podcast quota reached for your plan",
             )
             self.repository.save_user_run(run)
             return run.model_dump(mode="json")
@@ -1210,6 +1254,7 @@ class ControlPlaneService:
             primary_speaker_name=ux.host_primary_name,
             secondary_speaker_name=ux.host_secondary_name or None,
             ux=ux,
+            force_default_voice=(voice_tier_for_episode == "default"),
         )
 
         episode_id = f"{user_id[:8]}-{local_date.isoformat()}-{uuid4().hex[:8]}"
@@ -1250,8 +1295,29 @@ class ControlPlaneService:
         )
         self.repository.save_user_episode(episode)
         self.repository.update_user_source_cursors(user_id, ingestion.cursor_updates)
+
+        # Charge this episode against the appropriate per-week counter. If we
+        # used premium voice and the user is still in trial, also decrement
+        # the trial counter and (when trial exhausts) start the first-month
+        # grace window.
+        if voice_tier_for_episode == "premium":
+            user.premium_pods_this_week += 1
+            user_changed = True
+            if (user.trial_premium_pods_remaining or 0) > 0:
+                user.trial_premium_pods_remaining = (user.trial_premium_pods_remaining or 0) - 1
+                if user.trial_premium_pods_remaining <= 0 and user.trial_exhausted_at is None:
+                    exhaust_at = utc_now()
+                    user.trial_exhausted_at = exhaust_at
+                    user.first_month_ends_at = exhaust_at + timedelta(
+                        days=self.settings.free_first_month_grace_days
+                    )
+        elif voice_tier_for_episode == "default":
+            user.default_pods_this_week += 1
+            user_changed = True
         if weekly_update_due:
             user.last_weekly_update_iso_week = current_iso_week
+            user_changed = True
+        if user_changed:
             user.updated_at = utc_now()
             self.repository.save_user(user)
 
@@ -1375,6 +1441,7 @@ class ControlPlaneService:
             email=email,
             display_name=display_name,
             timezone="UTC",
+            trial_premium_pods_remaining=self.settings.trial_premium_pods_total,
             created_at=now,
             updated_at=now,
         )
@@ -1465,22 +1532,151 @@ class ControlPlaneService:
             updated_at=now,
         )
 
-    def _entitlements_for(self, subscription: SubscriptionRecord) -> UserEntitlements:
-        if subscription.tier == "paid" and subscription.status not in {"expired", "revoked"}:
-            return UserEntitlements(
-                tier="paid",
-                max_delivery_days=self.settings.paid_max_delivery_days,
-                min_duration_minutes=self.settings.paid_min_duration_minutes,
-                max_duration_minutes=self.settings.paid_max_duration_minutes,
-                max_items_per_episode=self.settings.paid_max_items_per_episode,
-            )
-        return UserEntitlements(
-            tier="free",
-            max_delivery_days=self.settings.free_max_delivery_days,
-            min_duration_minutes=self.settings.free_min_duration_minutes,
-            max_duration_minutes=self.settings.free_max_duration_minutes,
-            max_items_per_episode=self.settings.free_max_items_per_episode,
+    # --- Tier resolution and entitlements (launch tier model 2026-05-16) ---
+
+    _PRO_PRODUCT_IDS_ATTR = ("app_store_pro_monthly_product_id", "app_store_pro_annual_product_id")
+    _MAX_PRODUCT_IDS_ATTR = ("app_store_max_monthly_product_id", "app_store_max_annual_product_id")
+
+    def _resolve_tier(self, subscription: SubscriptionRecord) -> str:
+        """Returns one of "free" | "pro" | "max". Legacy "paid" rows map to "pro"."""
+        if subscription.status in {"expired", "revoked"}:
+            return "free"
+        tier = (subscription.tier or "").strip().lower()
+        if tier == "max":
+            return "max"
+        if tier in {"pro", "paid"}:
+            return "pro"
+        return "free"
+
+    def _ensure_trial_state(self, user: UserRecord) -> bool:
+        """Backfill trial_premium_pods_remaining for users created before the
+        launch tier model. Returns True if the user record was modified."""
+        if user.trial_premium_pods_remaining is None:
+            user.trial_premium_pods_remaining = self.settings.trial_premium_pods_total
+            return True
+        return False
+
+    def _user_week_iso(self, user: UserRecord, now_utc: datetime) -> str:
+        tz = user.timezone or self.settings.app_timezone or "UTC"
+        try:
+            local_date = now_utc.astimezone(ZoneInfo(tz)).date()
+        except Exception:
+            local_date = now_utc.date()
+        return iso_week_key(local_date)
+
+    def _rollover_weekly_counters(self, user: UserRecord, now_utc: datetime) -> bool:
+        """If `user.current_week_iso` is stale, zero the per-week counters.
+        Returns True if the user record was modified."""
+        week = self._user_week_iso(user, now_utc)
+        if user.current_week_iso == week:
+            return False
+        user.current_week_iso = week
+        user.premium_pods_this_week = 0
+        user.default_pods_this_week = 0
+        return True
+
+    def _compute_entitlements(
+        self,
+        subscription: SubscriptionRecord,
+        user: UserRecord,
+        now_utc: datetime,
+    ) -> UserEntitlements:
+        tier = self._resolve_tier(subscription)
+        self._ensure_trial_state(user)
+
+        trial_remaining = max(0, user.trial_premium_pods_remaining or 0)
+        first_month_ends_at = user.first_month_ends_at
+
+        is_in_trial = tier == "free" and trial_remaining > 0
+        is_in_first_month = (
+            tier == "free"
+            and not is_in_trial
+            and first_month_ends_at is not None
+            and first_month_ends_at > now_utc
         )
+
+        s = self.settings
+        if tier == "max":
+            premium_pw = s.max_premium_pods_per_week
+            default_pw = 0
+            min_d, max_d = s.max_min_duration_minutes, s.max_max_duration_minutes
+            items_cap = s.max_max_items_per_episode
+            days_cap = s.max_max_delivery_days
+        elif tier == "pro":
+            premium_pw = s.pro_premium_pods_per_week
+            default_pw = s.pro_default_pods_per_week
+            min_d, max_d = s.pro_min_duration_minutes, s.pro_max_duration_minutes
+            items_cap = s.pro_max_items_per_episode
+            days_cap = s.pro_max_delivery_days
+        else:  # free
+            if is_in_trial:
+                # Trial: every pod the user generates this week is premium-voice,
+                # drained against the global trial counter. The weekly budget is
+                # effectively whatever remains in the trial counter (capped at 7
+                # for sanity, since there are only 7 weekdays).
+                premium_pw = min(7, trial_remaining)
+                default_pw = 0
+            elif is_in_first_month:
+                premium_pw = s.free_first_month_premium_pods_per_week
+                default_pw = 0
+            else:
+                premium_pw = 0
+                default_pw = s.free_post_month_default_pods_per_week
+            min_d, max_d = s.free_min_duration_minutes, s.free_max_duration_minutes
+            items_cap = s.free_max_items_per_episode
+            days_cap = s.free_max_delivery_days
+
+        # Compute remaining capacity for the current ISO week. We don't
+        # mutate the user record here — counters are persisted by the
+        # generation flow when an episode is actually produced.
+        current_week = self._user_week_iso(user, now_utc)
+        if user.current_week_iso == current_week:
+            premium_used = user.premium_pods_this_week
+            default_used = user.default_pods_this_week
+        else:
+            premium_used = 0
+            default_used = 0
+
+        return UserEntitlements(
+            tier=tier,
+            max_delivery_days=days_cap,
+            min_duration_minutes=min_d,
+            max_duration_minutes=max_d,
+            max_items_per_episode=items_cap,
+            premium_pods_per_week=premium_pw,
+            default_pods_per_week=default_pw,
+            premium_pods_remaining_this_week=max(0, premium_pw - premium_used),
+            default_pods_remaining_this_week=max(0, default_pw - default_used),
+            is_in_trial=is_in_trial,
+            trial_premium_pods_remaining=trial_remaining,
+            is_in_first_month=is_in_first_month,
+            first_month_ends_at=first_month_ends_at,
+        )
+
+    def _entitlements_for_user(self, user_id: str) -> UserEntitlements:
+        user = self._require_user(user_id)
+        subscription = self._get_subscription(user_id)
+        return self._compute_entitlements(subscription, user, utc_now())
+
+    # Back-compat shim: a few legacy callers still pass just `subscription`.
+    # Used by paths where the user record isn't already on hand; they pay
+    # an extra repo read but avoid the broader refactor for now.
+    def _entitlements_for(self, subscription: SubscriptionRecord) -> UserEntitlements:
+        user = self.repository.get_user(subscription.user_id)
+        if user is None:
+            # Fall back to free-tier defaults if the user record is gone —
+            # shouldn't happen in practice since a subscription presupposes
+            # a user, but defensive.
+            return UserEntitlements(
+                tier="free",
+                max_delivery_days=self.settings.free_max_delivery_days,
+                min_duration_minutes=self.settings.free_min_duration_minutes,
+                max_duration_minutes=self.settings.free_max_duration_minutes,
+                max_items_per_episode=self.settings.free_max_items_per_episode,
+                premium_pods_per_week=0,
+                default_pods_per_week=self.settings.free_post_month_default_pods_per_week,
+            )
+        return self._compute_entitlements(subscription, user, utc_now())
 
     def _get_subscription(self, user_id: str) -> SubscriptionRecord:
         subscription = self.repository.get_subscription(user_id)

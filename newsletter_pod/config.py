@@ -178,23 +178,62 @@ class Settings(BaseSettings):
     # doesn't mention it. Sized to absorb pathological cases (OPML paste,
     # runaway add loop) without letting ingestion explode.
     max_sources_safety_cap: int = Field(default=100, alias="MAX_SOURCES_SAFETY_CAP")
-    free_max_delivery_days: int = Field(default=5, alias="FREE_MAX_DELIVERY_DAYS")
-    paid_max_delivery_days: int = Field(default=7, alias="PAID_MAX_DELIVERY_DAYS")
+
+    # Tier delivery-day caps. After the launch tier-model change (2026-05-16),
+    # delivery days no longer differ across tiers — pro/max both deliver 7 days,
+    # free is 7 days (with most days using OpenAI default voice after the
+    # first-month grace window). Kept as separate settings so we can split
+    # later without a schema change.
+    free_max_delivery_days: int = Field(default=7, alias="FREE_MAX_DELIVERY_DAYS")
+    pro_max_delivery_days: int = Field(default=7, alias="PRO_MAX_DELIVERY_DAYS")
+    max_max_delivery_days: int = Field(default=7, alias="MAX_MAX_DELIVERY_DAYS")
+    # Duration ranges. 5-min episode ceiling is firm across all tiers — see
+    # billing_model_2026_05.md.
     free_min_duration_minutes: int = Field(default=3, alias="FREE_MIN_DURATION_MINUTES")
     free_max_duration_minutes: int = Field(default=5, alias="FREE_MAX_DURATION_MINUTES")
     free_default_duration_minutes: int = Field(default=3, alias="FREE_DEFAULT_DURATION_MINUTES")
-    paid_min_duration_minutes: int = Field(default=5, alias="PAID_MIN_DURATION_MINUTES")
-    paid_max_duration_minutes: int = Field(default=20, alias="PAID_MAX_DURATION_MINUTES")
+    pro_min_duration_minutes: int = Field(default=3, alias="PRO_MIN_DURATION_MINUTES")
+    pro_max_duration_minutes: int = Field(default=5, alias="PRO_MAX_DURATION_MINUTES")
+    max_min_duration_minutes: int = Field(default=3, alias="MAX_MIN_DURATION_MINUTES")
+    max_max_duration_minutes: int = Field(default=5, alias="MAX_MAX_DURATION_MINUTES")
     free_max_items_per_episode: int = Field(default=25, alias="FREE_MAX_ITEMS_PER_EPISODE")
-    paid_max_items_per_episode: int = Field(default=75, alias="PAID_MAX_ITEMS_PER_EPISODE")
+    pro_max_items_per_episode: int = Field(default=75, alias="PRO_MAX_ITEMS_PER_EPISODE")
+    max_max_items_per_episode: int = Field(default=75, alias="MAX_MAX_ITEMS_PER_EPISODE")
+
+    # Per-week voice-tier quotas. Premium = ElevenLabs voices; default = OpenAI TTS.
+    # Counters reset weekly (ISO week). Trial premium pods (below) are consumed
+    # by every premium-voice episode until exhausted, regardless of tier.
+    trial_premium_pods_total: int = Field(default=5, alias="TRIAL_PREMIUM_PODS_TOTAL")
+    free_first_month_grace_days: int = Field(default=28, alias="FREE_FIRST_MONTH_GRACE_DAYS")
+    free_first_month_premium_pods_per_week: int = Field(
+        default=1, alias="FREE_FIRST_MONTH_PREMIUM_PODS_PER_WEEK"
+    )
+    free_post_month_default_pods_per_week: int = Field(
+        default=1, alias="FREE_POST_MONTH_DEFAULT_PODS_PER_WEEK"
+    )
+    pro_premium_pods_per_week: int = Field(default=3, alias="PRO_PREMIUM_PODS_PER_WEEK")
+    pro_default_pods_per_week: int = Field(default=4, alias="PRO_DEFAULT_PODS_PER_WEEK")
+    max_premium_pods_per_week: int = Field(default=7, alias="MAX_PREMIUM_PODS_PER_WEEK")
 
     cloud_tasks_project_id: Optional[str] = Field(default=None, alias="CLOUD_TASKS_PROJECT_ID")
     cloud_tasks_location: Optional[str] = Field(default=None, alias="CLOUD_TASKS_LOCATION")
     cloud_tasks_queue: Optional[str] = Field(default=None, alias="CLOUD_TASKS_QUEUE")
     cloud_tasks_service_account: Optional[str] = Field(default=None, alias="CLOUD_TASKS_SERVICE_ACCOUNT")
 
-    app_store_monthly_product_id: str = Field(default="com.newsletterpod.paid.monthly", alias="APP_STORE_MONTHLY_PRODUCT_ID")
-    app_store_annual_product_id: str = Field(default="com.newsletterpod.paid.annual", alias="APP_STORE_ANNUAL_PRODUCT_ID")
+    # StoreKit subscription product IDs. Four SKUs: pro/max × monthly/annual.
+    # See billing_model_2026_05.md for the launch tier model.
+    app_store_pro_monthly_product_id: str = Field(
+        default="com.newsletterpod.pro.monthly", alias="APP_STORE_PRO_MONTHLY_PRODUCT_ID"
+    )
+    app_store_pro_annual_product_id: str = Field(
+        default="com.newsletterpod.pro.annual", alias="APP_STORE_PRO_ANNUAL_PRODUCT_ID"
+    )
+    app_store_max_monthly_product_id: str = Field(
+        default="com.newsletterpod.max.monthly", alias="APP_STORE_MAX_MONTHLY_PRODUCT_ID"
+    )
+    app_store_max_annual_product_id: str = Field(
+        default="com.newsletterpod.max.annual", alias="APP_STORE_MAX_ANNUAL_PRODUCT_ID"
+    )
 
     inbound_email_domain: str = Field(default="theclawcast.com", alias="INBOUND_EMAIL_DOMAIN")
     mailgun_webhook_signing_key: Optional[str] = Field(default=None, alias="MAILGUN_WEBHOOK_SIGNING_KEY")

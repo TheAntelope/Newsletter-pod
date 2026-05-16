@@ -19,6 +19,20 @@ class UserRecord(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    # Trial + weekly quota tracking (launch tier model, 2026-05-16).
+    # Trial: every new user starts with `trial_premium_pods_total` premium-voice
+    # podcasts. Decremented each time a premium-voice episode is generated.
+    # When it hits 0, `trial_exhausted_at` is set and `first_month_ends_at`
+    # is set to trial_exhausted_at + FREE_FIRST_MONTH_GRACE_DAYS.
+    trial_premium_pods_remaining: Optional[int] = None
+    trial_exhausted_at: Optional[datetime] = None
+    first_month_ends_at: Optional[datetime] = None
+    # Weekly counters. `current_week_iso` is "YYYY-Www" (ISO 8601 week);
+    # counters are zeroed when the stored week differs from the current week.
+    current_week_iso: Optional[str] = None
+    premium_pods_this_week: int = 0
+    default_pods_this_week: int = 0
+
 
 class PodcastProfileRecord(BaseModel):
     user_id: str
@@ -227,11 +241,33 @@ class BillingEventRecord(BaseModel):
 
 
 class UserEntitlements(BaseModel):
+    """What this user is currently allowed to do, computed from tier + trial
+    state + weekly counters. Tier is one of "free" | "pro" | "max".
+
+    Premium pods use ElevenLabs voices (from the voice catalog). Default pods
+    use OpenAI TTS with a single bundled voice. The per-week counters are
+    capacity remaining for the current ISO week.
+    """
+
     tier: str
     max_delivery_days: int
     min_duration_minutes: int
     max_duration_minutes: int
     max_items_per_episode: int
+
+    # Per-week voice-tier budgets and remaining capacity for the current week.
+    premium_pods_per_week: int = 0
+    default_pods_per_week: int = 0
+    premium_pods_remaining_this_week: int = 0
+    default_pods_remaining_this_week: int = 0
+
+    # Trial / first-month state. `is_in_trial` is True while
+    # trial_premium_pods_remaining > 0. `is_in_first_month` is True for free
+    # users between trial exhaustion and first_month_ends_at.
+    is_in_trial: bool = False
+    trial_premium_pods_remaining: int = 0
+    is_in_first_month: bool = False
+    first_month_ends_at: Optional[datetime] = None
 
 
 class AuthenticatedSession(BaseModel):

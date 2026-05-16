@@ -115,12 +115,79 @@ struct EntitlementsDTO: Codable {
     let maxDurationMinutes: Int
     let maxItemsPerEpisode: Int
 
+    // Per-week voice-tier quotas (launch tier model). Defaults of 0 keep
+    // older clients deserializable if the backend ever omits these fields.
+    let premiumPodsPerWeek: Int
+    let defaultPodsPerWeek: Int
+    let premiumPodsRemainingThisWeek: Int
+    let defaultPodsRemainingThisWeek: Int
+
+    let isInTrial: Bool
+    let trialPremiumPodsRemaining: Int
+    let isInFirstMonth: Bool
+    let firstMonthEndsAt: Date?
+
     private enum CodingKeys: String, CodingKey {
         case tier
         case maxDeliveryDays = "max_delivery_days"
         case minDurationMinutes = "min_duration_minutes"
         case maxDurationMinutes = "max_duration_minutes"
         case maxItemsPerEpisode = "max_items_per_episode"
+        case premiumPodsPerWeek = "premium_pods_per_week"
+        case defaultPodsPerWeek = "default_pods_per_week"
+        case premiumPodsRemainingThisWeek = "premium_pods_remaining_this_week"
+        case defaultPodsRemainingThisWeek = "default_pods_remaining_this_week"
+        case isInTrial = "is_in_trial"
+        case trialPremiumPodsRemaining = "trial_premium_pods_remaining"
+        case isInFirstMonth = "is_in_first_month"
+        case firstMonthEndsAt = "first_month_ends_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        tier = try c.decode(String.self, forKey: .tier)
+        maxDeliveryDays = try c.decode(Int.self, forKey: .maxDeliveryDays)
+        minDurationMinutes = try c.decode(Int.self, forKey: .minDurationMinutes)
+        maxDurationMinutes = try c.decode(Int.self, forKey: .maxDurationMinutes)
+        maxItemsPerEpisode = try c.decode(Int.self, forKey: .maxItemsPerEpisode)
+        premiumPodsPerWeek = (try? c.decode(Int.self, forKey: .premiumPodsPerWeek)) ?? 0
+        defaultPodsPerWeek = (try? c.decode(Int.self, forKey: .defaultPodsPerWeek)) ?? 0
+        premiumPodsRemainingThisWeek = (try? c.decode(Int.self, forKey: .premiumPodsRemainingThisWeek)) ?? 0
+        defaultPodsRemainingThisWeek = (try? c.decode(Int.self, forKey: .defaultPodsRemainingThisWeek)) ?? 0
+        isInTrial = (try? c.decode(Bool.self, forKey: .isInTrial)) ?? false
+        trialPremiumPodsRemaining = (try? c.decode(Int.self, forKey: .trialPremiumPodsRemaining)) ?? 0
+        isInFirstMonth = (try? c.decode(Bool.self, forKey: .isInFirstMonth)) ?? false
+        firstMonthEndsAt = try? c.decodeIfPresent(Date.self, forKey: .firstMonthEndsAt)
+    }
+
+    init(
+        tier: String,
+        maxDeliveryDays: Int,
+        minDurationMinutes: Int,
+        maxDurationMinutes: Int,
+        maxItemsPerEpisode: Int,
+        premiumPodsPerWeek: Int = 0,
+        defaultPodsPerWeek: Int = 0,
+        premiumPodsRemainingThisWeek: Int = 0,
+        defaultPodsRemainingThisWeek: Int = 0,
+        isInTrial: Bool = false,
+        trialPremiumPodsRemaining: Int = 0,
+        isInFirstMonth: Bool = false,
+        firstMonthEndsAt: Date? = nil
+    ) {
+        self.tier = tier
+        self.maxDeliveryDays = maxDeliveryDays
+        self.minDurationMinutes = minDurationMinutes
+        self.maxDurationMinutes = maxDurationMinutes
+        self.maxItemsPerEpisode = maxItemsPerEpisode
+        self.premiumPodsPerWeek = premiumPodsPerWeek
+        self.defaultPodsPerWeek = defaultPodsPerWeek
+        self.premiumPodsRemainingThisWeek = premiumPodsRemainingThisWeek
+        self.defaultPodsRemainingThisWeek = defaultPodsRemainingThisWeek
+        self.isInTrial = isInTrial
+        self.trialPremiumPodsRemaining = trialPremiumPodsRemaining
+        self.isInFirstMonth = isInFirstMonth
+        self.firstMonthEndsAt = firstMonthEndsAt
     }
 }
 
@@ -231,6 +298,7 @@ struct UserEpisodeDTO: Codable {
     let id: String
     let title: String
     let description: String
+    let publishedAt: Date
     let durationSeconds: Int?
     let processedItemCount: Int
     let droppedItemCount: Int
@@ -241,6 +309,7 @@ struct UserEpisodeDTO: Codable {
         case id
         case title
         case description
+        case publishedAt = "published_at"
         case durationSeconds = "duration_seconds"
         case processedItemCount = "processed_item_count"
         case droppedItemCount = "dropped_item_count"

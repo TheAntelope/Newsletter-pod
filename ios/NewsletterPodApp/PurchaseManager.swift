@@ -16,11 +16,16 @@ final class PurchaseManager: ObservableObject {
         defer { isLoading = false }
 
         do {
-            products = try await Product.products(for: [
-                AppConfiguration.monthlyProductID,
-                AppConfiguration.annualProductID,
-            ])
-            products.sort { $0.price < $1.price }
+            products = try await Product.products(for: Set(AppConfiguration.allProductIDs))
+            // Pin display order to AppConfiguration.allProductIDs (pro monthly,
+            // pro annual, max monthly, max annual) so the paywall renders Pro
+            // above Max regardless of price comparison results.
+            let ordering = Dictionary(
+                uniqueKeysWithValues: AppConfiguration.allProductIDs.enumerated().map { ($1, $0) }
+            )
+            products.sort { (lhs, rhs) in
+                (ordering[lhs.id] ?? Int.max) < (ordering[rhs.id] ?? Int.max)
+            }
         } catch {
             lastPurchaseMessage = error.localizedDescription
         }

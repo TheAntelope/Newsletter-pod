@@ -6,7 +6,7 @@ What is included:
 - Native SwiftUI app entry point
 - Sign in with Apple flow wired to `POST /v1/auth/apple`
 - Backend API client for profile, sources, podcast config, schedule, feed, and billing state
-- StoreKit 2 purchase manager with monthly and annual product IDs
+- StoreKit 2 purchase manager with Pro and Max subscription tiers (monthly + annual each)
 - Screens for onboarding, dashboard, sources, podcast setup, schedule, paywall, and feed delivery
 
 Environment note:
@@ -17,8 +17,10 @@ Environment note:
 Backend assumptions:
 - Base URL points at the deployed FastAPI service
 - Product IDs match the backend defaults:
-  - `com.newsletterpod.paid.monthly`
-  - `com.newsletterpod.paid.annual`
+  - `com.newsletterpod.pro.monthly`
+  - `com.newsletterpod.pro.annual`
+  - `com.newsletterpod.max.monthly`
+  - `com.newsletterpod.max.annual`
 
 ## Local project generation on macOS
 
@@ -39,9 +41,11 @@ Use Codemagic as the hosted macOS builder.
 2. Create an Apple Developer account and an App Store Connect app record.
 3. Use bundle ID `com.newsletterpod.app`, or change `PRODUCT_BUNDLE_IDENTIFIER` in `ios/project.yml` before creating the app record.
 4. Enable **Sign in with Apple** for the bundle ID.
-5. Create the two StoreKit subscription product IDs in App Store Connect:
-   - `com.newsletterpod.paid.monthly`
-   - `com.newsletterpod.paid.annual`
+5. Create the four StoreKit subscription product IDs in App Store Connect:
+   - `com.newsletterpod.pro.monthly` ($19.99/mo)
+   - `com.newsletterpod.pro.annual` ($179.99/yr)
+   - `com.newsletterpod.max.monthly` ($29.99/mo)
+   - `com.newsletterpod.max.annual` ($269.99/yr)
 6. In Codemagic, connect the GitHub repository.
 7. In Codemagic, create an App Store Connect API key integration named `codemagic`.
 8. In Codemagic, enable iOS code signing for App Store distribution for bundle ID `com.newsletterpod.app`.

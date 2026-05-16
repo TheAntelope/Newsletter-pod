@@ -76,8 +76,16 @@ final class AppViewModel: ObservableObject {
             tier: "free",
             maxDeliveryDays: 7,
             minDurationMinutes: 3,
-            maxDurationMinutes: 8,
-            maxItemsPerEpisode: 25
+            maxDurationMinutes: 5,
+            maxItemsPerEpisode: 25,
+            premiumPodsPerWeek: 5,
+            defaultPodsPerWeek: 0,
+            premiumPodsRemainingThisWeek: 5,
+            defaultPodsRemainingThisWeek: 0,
+            isInTrial: true,
+            trialPremiumPodsRemaining: 5,
+            isInFirstMonth: false,
+            firstMonthEndsAt: nil
         )
         // Seed a representative profile + schedule so the Podcast Setup tab
         // renders populated UI in screenshot tests (3/4/5-min duration picker
@@ -112,7 +120,14 @@ final class AppViewModel: ObservableObject {
     }
 
     var isAuthenticated: Bool { sessionToken != nil }
-    var isPaid: Bool { subscription?.tier == "paid" }
+    /// Backwards-compatible "user has any paid subscription" flag. True for
+    /// pro, max, or legacy paid rows; false for free.
+    var isPaid: Bool {
+        let tier = subscription?.tier ?? "free"
+        return tier == "pro" || tier == "max" || tier == "paid"
+    }
+    var isPro: Bool { subscription?.tier == "pro" || subscription?.tier == "paid" }
+    var isMax: Bool { subscription?.tier == "max" }
     var isGenerating: Bool { activeRunID != nil }
 
     func signIn(identityToken: String, givenName: String? = nil) async {
