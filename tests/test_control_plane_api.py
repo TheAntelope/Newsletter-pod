@@ -1494,6 +1494,113 @@ def test_forwarded_mail_creates_synthetic_swipe_when_sender_matches_user_email()
     assert "Anthropic" in forwarded_seeds[0].title
 
 
+def test_discover_substacks_endpoint_returns_validated_candidates(monkeypatch):
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("discover-user", "discover@example.com")
+    )
+
+    from newsletter_pod.substack import SubstackProbeResult
+    from newsletter_pod.substack_discovery import (
+        DiscoveredPublication,
+        SubstackDiscoveryService,
+    )
+
+    class _Stub:
+        def discover(self, query):
+            return [
+                DiscoveredPublication(
+                    probe=SubstackProbeResult(
+                        pub_url="https://stratechery.substack.com",
+                        pub_host="stratechery.substack.com",
+                        title="Stratechery",
+                        author="Ben Thompson",
+                        icon_url=None,
+                        has_paid_tier=True,
+                        feed_url="https://stratechery.substack.com/feed",
+                    ),
+                    why="AI strategy and platform economics.",
+                ),
+            ]
+
+    container.control_plane.substack_discovery = _Stub()
+    response = client.post(
+        "/v1/substack/discover",
+        json={"query": "AI strategy"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["candidates"]) == 1
+    candidate = body["candidates"][0]
+    assert candidate["pub_host"] == "stratechery.substack.com"
+    assert candidate["title"] == "Stratechery"
+    assert candidate["why"] == "AI strategy and platform economics."
+
+
+def test_discover_substacks_returns_400_when_discovery_unavailable():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("discover-no-llm", "noll@example.com")
+    )
+    container.control_plane.substack_discovery = None
+
+    response = client.post(
+        "/v1/substack/discover",
+        json={"query": "anything"},
+        headers=headers,
+    )
+    assert response.status_code == 400
+
+
+def test_discover_substacks_rejects_empty_query():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("discover-empty", "empty@example.com")
+    )
+
+    class _StubAlwaysEmpty:
+        def discover(self, query):
+            return []
+
+    container.control_plane.substack_discovery = _StubAlwaysEmpty()
+    response = client.post(
+        "/v1/substack/discover", json={"query": "   "}, headers=headers
+    )
+    assert response.status_code == 400
+
+
+def test_cold_start_deck_runs_card_summaries():
+    """Cold-start deck items get card_summary populated by the configured
+    summarizer service before being serialized."""
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("card-summary-user", "cs@example.com")
+    )
+
+    # Seed an embedded item so the k-means deck has something to pick.
+    _seed_source_item(container, "cs-key-1", embedding=[1.0, 0.0])
+
+    class _StubSummarizer:
+        model = "stub"
+
+        def summarize(self, items):
+            return [f"brief: {title}" for title, _body in items]
+
+    from newsletter_pod.card_summary import CardSummaryService
+    container.control_plane.card_summarizer = _StubSummarizer()
+    container.control_plane._card_summary_service = CardSummaryService(
+        repository=container.control_repository,
+        summarizer=_StubSummarizer(),
+    )
+
+    response = client.get("/v1/me/swipe-deck/cold-start", headers=headers)
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert items, "deck should not be empty"
+    assert items[0]["card_summary"].startswith("brief: ")
+
+
 def test_forwarded_mail_does_not_seed_when_sender_does_not_match_user_email():
     from newsletter_pod.embeddings import DeterministicFakeEmbeddingProvider
     from newsletter_pod.inbound import InboundEmailHandler

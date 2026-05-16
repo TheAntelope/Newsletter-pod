@@ -111,6 +111,10 @@ class SubmitVoiceIntakeRequest(BaseModel):
     transcript: str
 
 
+class DiscoverSubstacksRequest(BaseModel):
+    query: str
+
+
 @dataclass
 class ServiceContainer:
     settings: Settings
@@ -340,6 +344,18 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         assert container.control_plane is not None
         try:
             return container.control_plane.probe_substack_publication(url)
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    @app.post("/v1/substack/discover")
+    def discover_substacks(
+        request_payload: DiscoverSubstacksRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.discover_substacks(request_payload.query)
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
@@ -687,6 +703,8 @@ def _build_control_plane(
     task_enqueuer = build_task_enqueuer(settings)
     embedding_provider = _build_embedding_provider(settings)
     intake_extractor = _build_intake_extractor(settings)
+    card_summarizer = _build_card_summarizer(settings)
+    substack_discovery = _build_substack_discovery(settings)
     control_plane = ControlPlaneService(
         settings=settings,
         repository=control_repository,
@@ -698,6 +716,8 @@ def _build_control_plane(
         task_enqueuer=task_enqueuer,
         embedding_provider=embedding_provider,
         intake_extractor=intake_extractor,
+        card_summarizer=card_summarizer,
+        substack_discovery=substack_discovery,
     )
     return control_repository, control_plane
 
@@ -732,6 +752,40 @@ def _build_intake_extractor(settings: Settings):
     return OpenAIIntakeExtractor(
         api_key=api_key,
         model=settings.voice_intake_model,
+    )
+
+
+def _build_card_summarizer(settings: Settings):
+    """Swipe-deck card-summary LLM. Returns None when no OpenAI key is set;
+    the CardSummaryService skips the pass and the iOS client falls back to
+    cleaning the raw RSS summary on-device.
+    """
+    from .card_summary import OpenAICardSummarizer
+
+    api_key = settings.openai_embedding_api_key or settings.podcast_api_key
+    if not api_key:
+        return None
+    return OpenAICardSummarizer(
+        api_key=api_key,
+        model=settings.card_summary_model,
+    )
+
+
+def _build_substack_discovery(settings: Settings):
+    """Substack-discovery service. Returns None when no OpenAI key is set;
+    `discover_substacks` then rejects calls with a clear 400 instead of
+    silently returning an empty list.
+    """
+    from .substack_discovery import OpenAISubstackSuggester, SubstackDiscoveryService
+
+    api_key = settings.openai_embedding_api_key or settings.podcast_api_key
+    if not api_key:
+        return None
+    return SubstackDiscoveryService(
+        suggester=OpenAISubstackSuggester(
+            api_key=api_key,
+            model=settings.substack_discovery_model,
+        )
     )
 
 

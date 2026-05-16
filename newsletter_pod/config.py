@@ -105,6 +105,18 @@ class Settings(BaseSettings):
     # model since the prompt is small and the output is structured JSON.
     voice_intake_model: str = Field(default="gpt-4o-mini", alias="VOICE_INTAKE_MODEL")
 
+    # Card-summary LLM model. Produces 1-2 sentence rewrites of raw RSS
+    # summaries for swipe-deck cards. Cached on the source_items doc so each
+    # item is summarized at most once.
+    card_summary_model: str = Field(default="gpt-4o-mini", alias="CARD_SUMMARY_MODEL")
+
+    # Substack-discovery LLM model. Takes a free-text user description and
+    # proposes candidate Substack publications, validated server-side via the
+    # existing probe_publication helper.
+    substack_discovery_model: str = Field(
+        default="gpt-4o-mini", alias="SUBSTACK_DISCOVERY_MODEL"
+    )
+
     # Cold-start swipe deck (Phase 3). The deck is global, recomputed lazily
     # on the first request after the TTL expires. Recent-items deck is per-user,
     # never cached, drawn from items the user's currently-attached sources

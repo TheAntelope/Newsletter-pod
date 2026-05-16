@@ -2994,7 +2994,7 @@ private struct OnboardingSwipeStep: View {
                         swipeCount += 1
                         Task { await viewModel.submitSwipe(card: card, direction: direction) }
                     }
-                    .frame(maxWidth: .infinity, minHeight: 440)
+                    .frame(maxWidth: .infinity, minHeight: 380)
                     Text(progressLabel)
                         .font(Theme.Typography.meta)
                         .foregroundStyle(Theme.Palette.muted)
@@ -3050,10 +3050,14 @@ private struct OnboardingSwipeStep: View {
 
 private struct OnboardingNewslettersStep: View {
     @EnvironmentObject private var viewModel: AppViewModel
+    @StateObject private var dictation = FeedbackDictation()
     @State private var input: String = ""
+    @State private var candidates: [SubstackCandidateDTO] = []
     @State private var registered: [SubstackIntentDTO] = []
-    @State private var isSubmitting: Bool = false
+    @State private var addingCandidateID: String?
+    @State private var isSearching: Bool = false
     @State private var lastError: String?
+    @State private var hasSearched: Bool = false
     let onBack: () -> Void
     let onContinue: () -> Void
 
@@ -3061,45 +3065,47 @@ private struct OnboardingNewslettersStep: View {
 
     var body: some View {
         OnboardingStepShell(
-            title: "Any Substacks you already read?",
-            subtitle: "Drop a handle or URL — we'll subscribe you using your private inbound address so the first episode pulls from what you actually read. Up to three is plenty.",
+            title: "What newsletters do you read?",
+            subtitle: "Describe what you're into in a sentence — we'll find Substacks that match and you can confirm the right ones. Or paste a handle directly if you already know one.",
             primaryLabel: "Continue",
             primaryDisabled: false,
             onPrimary: onContinue,
             onBack: onBack
         ) {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                HStack(spacing: Theme.Spacing.s) {
-                    TextField("@stratechery or platformer.news", text: $input)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                        .padding(Theme.Spacing.s)
-                        .background(Color.white, in: RoundedRectangle(cornerRadius: 10))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10)
-                                .stroke(Theme.Palette.rule, lineWidth: 1)
-                        )
-                    Button(action: addEntry) {
-                        if isSubmitting {
-                            ProgressView()
-                        } else {
-                            Text("Add")
-                        }
-                    }
-                    .buttonStyle(.amberFilled)
-                    .disabled(addDisabled)
+                queryRow
+                if let error = dictation.errorMessage {
+                    Text(error)
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(.red)
                 }
                 if let lastError {
                     Text(lastError)
                         .font(Theme.Typography.callout)
                         .foregroundStyle(.red)
                 }
-                if registered.isEmpty {
-                    Text("Common ones: stratechery.com, platformer.news, lennysnewsletter.com, oneusefulthing.org.")
+                if isSearching {
+                    HStack(spacing: Theme.Spacing.s) {
+                        ProgressView()
+                        Text("Searching…")
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.muted)
+                    }
+                }
+                if !candidates.isEmpty {
+                    suggestionsList
+                } else if hasSearched && !isSearching {
+                    Text("No clear matches — try describing it differently, or paste a handle below.")
                         .font(Theme.Typography.callout)
                         .foregroundStyle(Theme.Palette.muted)
-                } else {
+                } else if !hasSearched && !isSearching {
+                    Text("Try: \"AI strategy and platform regulation\", or \"longevity research and habits\", or just \"@stratechery\".")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.muted)
+                }
+                if !registered.isEmpty {
+                    Divider().padding(.vertical, 4)
+                    MetaLabel(text: "Added to your pod")
                     ForEach(registered) { intent in
                         registeredRow(intent)
                     }
@@ -3114,10 +3120,103 @@ private struct OnboardingNewslettersStep: View {
         }
     }
 
-    private var addDisabled: Bool {
-        isSubmitting
-            || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || registered.count >= maxEntries
+    private var queryRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            HStack(spacing: Theme.Spacing.s) {
+                TextField("Describe what you read…", text: $input, axis: .vertical)
+                    .lineLimit(1...3)
+                    .textInputAutocapitalization(.sentences)
+                    .padding(Theme.Spacing.s)
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Theme.Palette.rule, lineWidth: 1)
+                    )
+                Button(action: toggleDictation) {
+                    Image(systemName: dictation.isRecording ? "stop.fill" : "mic.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(dictation.isRecording ? Color.red : Theme.Palette.amberDeep, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(dictation.isRecording ? "Stop dictation" : "Dictate")
+            }
+            HStack {
+                if reachedMax {
+                    Text("Max \(maxEntries) reached — Continue to keep going.")
+                        .font(Theme.Typography.meta)
+                        .foregroundStyle(Theme.Palette.muted)
+                }
+                Spacer()
+                Button(action: search) {
+                    if isSearching {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text(input.contains(".") || input.hasPrefix("@") ? "Add directly" : "Find Substacks")
+                    }
+                }
+                .buttonStyle(.amberFilled)
+                .disabled(searchDisabled)
+            }
+        }
+        .onChange(of: dictation.transcript) { _, newValue in
+            // Live-update the text field while the user dictates so they can
+            // see what was captured before tapping Find.
+            input = newValue
+        }
+    }
+
+    private var suggestionsList: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            MetaLabel(text: "Suggestions")
+            ForEach(candidates) { candidate in
+                suggestionRow(candidate)
+            }
+        }
+    }
+
+    private func suggestionRow(_ candidate: SubstackCandidateDTO) -> some View {
+        let alreadyAdded = registered.contains { $0.pubHost == candidate.pubHost }
+        return EditorialCard {
+            HStack(alignment: .top, spacing: Theme.Spacing.m) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(candidate.title ?? candidate.pubHost)
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.Palette.ink)
+                    if let author = candidate.author, !author.isEmpty {
+                        Text(author)
+                            .font(Theme.Typography.meta)
+                            .foregroundStyle(Theme.Palette.muted)
+                    }
+                    if let why = candidate.why, !why.isEmpty {
+                        Text(why)
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text(candidate.pubHost)
+                        .font(Theme.Typography.meta)
+                        .foregroundStyle(Theme.Palette.muted)
+                }
+                Spacer(minLength: 0)
+                if alreadyAdded {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                } else if addingCandidateID == candidate.id {
+                    ProgressView()
+                } else {
+                    Button {
+                        addCandidate(candidate)
+                    } label: {
+                        Text("Add")
+                    }
+                    .buttonStyle(.amberFilled)
+                    .disabled(reachedMax)
+                }
+            }
+        }
     }
 
     private func registeredRow(_ intent: SubstackIntentDTO) -> some View {
@@ -3140,20 +3239,86 @@ private struct OnboardingNewslettersStep: View {
         }
     }
 
-    private func addEntry() {
-        let raw = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty, !isSubmitting else { return }
-        isSubmitting = true
+    private var trimmedInput: String {
+        input.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var searchDisabled: Bool {
+        isSearching || trimmedInput.isEmpty || reachedMax
+    }
+
+    private var reachedMax: Bool {
+        registered.count >= maxEntries
+    }
+
+    private func toggleDictation() {
+        if dictation.isRecording {
+            dictation.stop()
+        } else {
+            input = ""
+            Task { await dictation.start() }
+        }
+    }
+
+    private func search() {
+        let query = trimmedInput
+        guard !query.isEmpty, !isSearching, !reachedMax else { return }
+        if dictation.isRecording { dictation.stop() }
         lastError = nil
+
+        // Short / URL-like inputs are a direct paste — go straight to intent
+        // creation instead of paying for an LLM round-trip.
+        if query.hasPrefix("@") || query.contains(".") && !query.contains(" ") {
+            addByURL(query)
+            return
+        }
+
+        isSearching = true
+        hasSearched = true
+        candidates = []
         Task {
-            let result = await viewModel.createSubstackIntent(pubURL: raw)
+            let results = await viewModel.discoverSubstacks(query: query)
             await MainActor.run {
-                isSubmitting = false
-                if let result {
-                    if !registered.contains(where: { $0.id == result.id }) {
-                        registered.append(result)
+                isSearching = false
+                candidates = results
+                if results.isEmpty {
+                    lastError = viewModel.errorMessage
+                }
+            }
+        }
+    }
+
+    private func addByURL(_ raw: String) {
+        isSearching = true
+        Task {
+            let intent = await viewModel.createSubstackIntent(pubURL: raw)
+            await MainActor.run {
+                isSearching = false
+                if let intent {
+                    if !registered.contains(where: { $0.id == intent.id }) {
+                        registered.append(intent)
                     }
                     input = ""
+                    candidates = []
+                    hasSearched = false
+                } else {
+                    lastError = viewModel.errorMessage ?? "Couldn't add that publication."
+                }
+            }
+        }
+    }
+
+    private func addCandidate(_ candidate: SubstackCandidateDTO) {
+        guard !reachedMax else { return }
+        addingCandidateID = candidate.id
+        Task {
+            let intent = await viewModel.createSubstackIntent(pubURL: candidate.pubURL)
+            await MainActor.run {
+                addingCandidateID = nil
+                if let intent {
+                    if !registered.contains(where: { $0.id == intent.id }) {
+                        registered.append(intent)
+                    }
                 } else {
                     lastError = viewModel.errorMessage ?? "Couldn't add that publication."
                 }
@@ -4307,14 +4472,14 @@ private struct SwipeDeckCardStack: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, Theme.Spacing.l)
-            .padding(.top, Theme.Spacing.xl)
+            .padding(.top, Theme.Spacing.m)
 
             SwipeDeckActionBar(
                 onPass: { commitSwipe(direction: -1) },
                 onLike: { commitSwipe(direction: 1) }
             )
             .padding(.horizontal, Theme.Spacing.l)
-            .padding(.bottom, Theme.Spacing.xl)
+            .padding(.bottom, Theme.Spacing.s)
         }
     }
 
@@ -4417,10 +4582,11 @@ private struct SwipeCardChrome: View {
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Palette.ink)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(card.summary)
+                .lineLimit(3)
+            Text(card.displaySummary)
                 .font(Theme.Typography.callout)
                 .foregroundStyle(Theme.Palette.inkSoft)
-                .lineLimit(8)
+                .lineLimit(5)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             HStack(spacing: Theme.Spacing.s) {
@@ -4441,7 +4607,7 @@ private struct SwipeCardChrome: View {
             .font(Theme.Typography.callout)
             .foregroundStyle(Theme.Palette.muted)
         }
-        .frame(minHeight: 420)
+        .frame(minHeight: 320)
     }
 
     private static let dateFormatter: DateFormatter = {

@@ -63,6 +63,11 @@ class SourceItemRecord(BaseModel):
     Document id is the dedupe_key. embedding/embedded_at are populated by the
     embedding pipeline; they are nullable so an item can be persisted before
     the embedding call (or when the embedding provider is disabled).
+
+    `card_summary` is a short LLM-generated 1-2 sentence rewrite of the raw
+    RSS summary, suitable for swipe cards. Populated lazily the first time
+    an item appears in any swipe deck; written back to Firestore so all
+    subsequent reads are free.
     """
 
     dedupe_key: str
@@ -78,6 +83,9 @@ class SourceItemRecord(BaseModel):
     embedding: Optional[list[float]] = None
     embedding_model: Optional[str] = None
     embedded_at: Optional[datetime] = None
+    card_summary: Optional[str] = None
+    card_summary_model: Optional[str] = None
+    card_summarized_at: Optional[datetime] = None
 
 
 class SourceItemRef(BaseModel):

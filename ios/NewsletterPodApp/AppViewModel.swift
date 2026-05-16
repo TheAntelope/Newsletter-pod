@@ -479,6 +479,18 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func discoverSubstacks(query: String) async -> [SubstackCandidateDTO] {
+        guard let sessionToken else { return [] }
+        do {
+            errorMessage = nil
+            let envelope = try await apiClient.discoverSubstacks(token: sessionToken, query: query)
+            return envelope.candidates
+        } catch {
+            errorMessage = error.localizedDescription
+            return []
+        }
+    }
+
     func submitSwipe(card: SwipeDeckCardDTO, direction: Int) async {
         guard let sessionToken else { return }
         do {

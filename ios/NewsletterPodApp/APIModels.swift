@@ -332,6 +332,37 @@ struct SubstackProbeDTO: Codable, Hashable {
     }
 }
 
+/// One LLM-suggested + probe-validated Substack candidate from the discovery
+/// endpoint. Same shape as `SubstackProbeDTO` plus a one-line `why` reason
+/// rendered next to the title.
+struct SubstackCandidateDTO: Codable, Hashable, Identifiable {
+    let pubURL: String
+    let pubHost: String
+    let title: String?
+    let author: String?
+    let iconURL: String?
+    let hasPaidTier: Bool
+    let feedURL: String
+    let why: String?
+
+    var id: String { pubHost }
+
+    private enum CodingKeys: String, CodingKey {
+        case pubURL = "pub_url"
+        case pubHost = "pub_host"
+        case title
+        case author
+        case iconURL = "icon_url"
+        case hasPaidTier = "has_paid_tier"
+        case feedURL = "feed_url"
+        case why
+    }
+}
+
+struct SubstackDiscoveryEnvelope: Codable {
+    let candidates: [SubstackCandidateDTO]
+}
+
 enum SubstackIntentStatus: String, Codable {
     case pending
     case autoConfirmed = "auto_confirmed"
@@ -458,6 +489,9 @@ struct SwipeDeckCardDTO: Codable, Identifiable, Equatable {
     let sourceItemDedupeKey: String
     let title: String
     let summary: String
+    /// LLM-generated brief summary. When present, the card uses this instead
+    /// of the raw `summary` (which is often unstripped HTML or feed boilerplate).
+    let cardSummary: String?
     let sourceID: String
     let sourceName: String
     let link: String
@@ -465,10 +499,38 @@ struct SwipeDeckCardDTO: Codable, Identifiable, Equatable {
 
     var id: String { sourceItemDedupeKey }
 
+    /// Best-available human-readable summary for swipe cards. Prefers the
+    /// LLM-generated `cardSummary`; falls back to a cleaned `summary`.
+    var displaySummary: String {
+        if let card = cardSummary, !card.isEmpty {
+            return card
+        }
+        return SwipeDeckCardDTO.cleanFallback(summary)
+    }
+
+    private static func cleanFallback(_ raw: String) -> String {
+        // Strip simple HTML tags + collapse whitespace so feed-html summaries
+        // are at least readable until the LLM card_summary backfills land.
+        let withoutTags = raw.replacingOccurrences(
+            of: "<[^>]+>",
+            with: " ",
+            options: .regularExpression
+        )
+        let collapsed = withoutTags.replacingOccurrences(
+            of: "\\s+",
+            with: " ",
+            options: .regularExpression
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        if collapsed.count <= 280 { return collapsed }
+        let cutoff = collapsed.index(collapsed.startIndex, offsetBy: 280)
+        return String(collapsed[..<cutoff]).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+    }
+
     private enum CodingKeys: String, CodingKey {
         case sourceItemDedupeKey = "source_item_dedupe_key"
         case title
         case summary
+        case cardSummary = "card_summary"
         case sourceID = "source_id"
         case sourceName = "source_name"
         case link

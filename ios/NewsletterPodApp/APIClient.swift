@@ -229,6 +229,15 @@ final class APIClient {
         )
     }
 
+    func discoverSubstacks(token: String, query: String) async throws -> SubstackDiscoveryEnvelope {
+        try await request(
+            path: "/v1/substack/discover",
+            method: "POST",
+            body: DiscoverSubstacksBody(query: query),
+            token: token
+        )
+    }
+
     func probeSubstack(url: String) async throws -> SubstackProbeDTO {
         guard var components = URLComponents(string: "/v1/substack/probe") else {
             throw APIError.invalidResponse
@@ -427,6 +436,10 @@ private struct CreateSubstackIntentBody: Encodable {
     private enum CodingKeys: String, CodingKey {
         case pubURL = "pub_url"
     }
+}
+
+private struct DiscoverSubstacksBody: Encodable {
+    let query: String
 }
 
 private struct SubstackDeleteAck: Decodable {

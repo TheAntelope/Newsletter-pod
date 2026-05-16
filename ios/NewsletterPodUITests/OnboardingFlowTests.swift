@@ -59,9 +59,9 @@ final class OnboardingFlowTests: XCTestCase {
         attach("03-swipe-deck")
         tapPrimary(label: "Continue")
 
-        // Step 4 of 8 — Newsletters (optional paste)
+        // Step 4 of 8 — Newsletters (search + voice + paste)
         XCTAssertTrue(
-            app.staticTexts["Any Substacks you already read?"].waitForExistence(timeout: 5),
+            app.staticTexts["What newsletters do you read?"].waitForExistence(timeout: 5),
             "Newsletters step did not appear"
         )
         attach("04-newsletters")

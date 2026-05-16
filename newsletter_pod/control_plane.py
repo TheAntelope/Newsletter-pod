@@ -39,8 +39,14 @@ from .mailer import Mailer
 from .models import PodcastUxConfig, PublishStatus, SourceDefinition, SourceItem, SourceItemRecord, SourceItemRef
 from .podcast_api import PodcastApiClient
 from .prompting import build_digest_prompt
+from .card_summary import CardSummarizer, CardSummaryService
 from .ranker import rank_items
 from .source_persistence import SourceItemPersistenceService
+from .substack_discovery import (
+    DiscoveredPublication,
+    OpenAISubstackSuggester,
+    SubstackDiscoveryService,
+)
 from .voice_intake import ExtractedIntake, IntakeExtractor, OpenAIIntakeExtractor
 from .storage import AudioStorage
 from .swipe_deck import SwipeDeckService
@@ -168,6 +174,8 @@ class ControlPlaneService:
     task_enqueuer: TaskEnqueuer
     embedding_provider: Optional[EmbeddingProvider] = None
     intake_extractor: Optional[IntakeExtractor] = None
+    card_summarizer: Optional[CardSummarizer] = None
+    substack_discovery: Optional[SubstackDiscoveryService] = None
 
     def __post_init__(self) -> None:
         self._catalog = {source.id: source for source in load_sources(self.settings.sources_file)}
@@ -179,6 +187,10 @@ class ControlPlaneService:
         self._swipe_deck_service = SwipeDeckService(
             repository=self.repository,
             config=self.settings,
+        )
+        self._card_summary_service = CardSummaryService(
+            repository=self.repository,
+            summarizer=self.card_summarizer,
         )
 
     def authenticate_with_apple(
@@ -406,6 +418,32 @@ class ControlPlaneService:
         profile.updated_at = utc_now()
         self.repository.save_profile(profile)
 
+    def discover_substacks(self, raw_query: str) -> dict[str, Any]:
+        """Free-text / voice-transcript -> validated Substack candidate cards.
+
+        Returns the same shape as the probe endpoint per candidate so the iOS
+        layer can route each entry through the existing intent-creation flow.
+        Best-effort: any LLM/probe failure returns an empty list rather than
+        an error, so the onboarding step never blocks on the search.
+        """
+        if self.substack_discovery is None:
+            raise ControlPlaneError(
+                "Substack discovery is unavailable (LLM key not configured)"
+            )
+        cleaned = (raw_query or "").strip()
+        if not cleaned:
+            raise ControlPlaneError("Query is empty")
+        candidates = self.substack_discovery.discover(cleaned)
+        return {
+            "candidates": [self._serialize_discovery(candidate) for candidate in candidates],
+        }
+
+    @staticmethod
+    def _serialize_discovery(candidate: DiscoveredPublication) -> dict[str, Any]:
+        payload = ControlPlaneService._serialize_probe(candidate.probe)
+        payload["why"] = candidate.why
+        return payload
+
     def list_substack_intents(self, user_id: str) -> dict[str, Any]:
         user = self._require_user(user_id)
         ensure_user_inbound_alias(self.repository, user)
@@ -562,6 +600,7 @@ class ControlPlaneService:
     def get_cold_start_swipe_deck(self, user_id: str) -> dict[str, Any]:
         self._require_user(user_id)
         records = self._swipe_deck_service.get_cold_start_deck(user_id)
+        records = self._card_summary_service.ensure_summaries(records)
         return {"items": [_swipe_card_payload(record) for record in records]}
 
     def get_recent_swipe_deck(self, user_id: str) -> dict[str, Any]:
@@ -583,6 +622,7 @@ class ControlPlaneService:
                     exc_info=True,
                 )
             records = self._swipe_deck_service.get_recent_deck(user_id, source_ids)
+        records = self._card_summary_service.ensure_summaries(records)
         return {"items": [_swipe_card_payload(record) for record in records]}
 
     def warm_user_corpus(self, user_id: str) -> dict[str, Any]:
@@ -1758,6 +1798,7 @@ def _swipe_card_payload(record: SourceItemRecord) -> dict[str, Any]:
         "source_item_dedupe_key": record.dedupe_key,
         "title": record.title,
         "summary": record.summary,
+        "card_summary": record.card_summary,
         "source_id": record.source_id,
         "source_name": record.source_name,
         "link": record.link,
