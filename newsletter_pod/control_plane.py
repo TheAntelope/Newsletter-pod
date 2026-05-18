@@ -609,6 +609,24 @@ class ControlPlaneService:
         records = self._card_summary_service.ensure_summaries(records)
         return {"items": [_swipe_card_payload(record) for record in records]}
 
+    def refresh_cold_start_deck(self) -> dict[str, Any]:
+        """Force-refresh the global cold-start swipe deck.
+
+        Invoked by the weekly scheduler so the deck stays fresh even on weeks
+        when no user opens it (lazy refresh on access only kicks in when a
+        client requests the deck).
+        """
+        deck = self._swipe_deck_service.refresh_cold_start_deck()
+        if deck is None:
+            return {"status": "skipped", "reason": "empty_corpus"}
+        return {
+            "status": "refreshed",
+            "deck_size": len(deck.dedupe_keys),
+            "corpus_size": deck.corpus_size,
+            "computed_at": deck.computed_at.isoformat(),
+            "version": deck.version,
+        }
+
     def get_recent_swipe_deck(self, user_id: str) -> dict[str, Any]:
         self._require_user(user_id)
         sources = self.repository.list_user_sources(user_id)
@@ -2062,18 +2080,57 @@ class ControlPlaneService:
         to produce a meaningful vector, or no usable embeddings can be loaded —
         in which case the caller falls back to chronological selection.
         """
+        candidate_count = len(items)
         if not self.settings.swipe_ranker_enabled or top_n <= 0:
+            logger.info(
+                "swipe_ranker user=%s used=false reason=disabled "
+                "candidates=%d top_n=%d",
+                user_id,
+                candidate_count,
+                top_n,
+            )
             return None
         swipe_count = self.repository.count_user_swipes(user_id)
         if swipe_count < self.settings.swipe_ranker_min_swipes:
+            logger.info(
+                "swipe_ranker user=%s used=false reason=below_min_swipes "
+                "swipes=%d min=%d candidates=%d top_n=%d",
+                user_id,
+                swipe_count,
+                self.settings.swipe_ranker_min_swipes,
+                candidate_count,
+                top_n,
+            )
             return None
         swipes = self.repository.list_user_swipes(user_id)
         user_vector = compute_user_vector(swipes)
         if user_vector is None:
+            logger.info(
+                "swipe_ranker user=%s used=false reason=no_user_vector "
+                "swipes=%d candidates=%d top_n=%d",
+                user_id,
+                swipe_count,
+                candidate_count,
+                top_n,
+            )
             return None
         records = self.repository.get_source_items([item.dedupe_key for item in items])
         embedding_by_key = {record.dedupe_key: record.embedding for record in records}
-        return rank_items(items, user_vector, embedding_by_key.get, top_n)
+        ranked = rank_items(items, user_vector, embedding_by_key.get, top_n)
+        embeddings_resolved = sum(
+            1 for item in items if embedding_by_key.get(item.dedupe_key)
+        )
+        logger.info(
+            "swipe_ranker user=%s used=true swipes=%d candidates=%d "
+            "embeddings_resolved=%d top_n=%d returned=%d",
+            user_id,
+            swipe_count,
+            candidate_count,
+            embeddings_resolved,
+            top_n,
+            len(ranked),
+        )
+        return ranked
 
     def _build_user_ux(
         self,

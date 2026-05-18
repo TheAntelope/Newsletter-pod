@@ -125,6 +125,35 @@ def test_cold_start_deck_recomputes_after_ttl_expires():
     assert len(first) == 3
 
 
+def test_refresh_cold_start_deck_recomputes_even_when_fresh():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [_record(f"k{i}", embedding=[float(i), 0.0]) for i in range(6)]
+    )
+    # Long TTL — lazy refresh would *not* fire, but explicit refresh must.
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=3, cold_start_deck_ttl_hours=168),
+    )
+    service.get_cold_start_deck("u1")
+    first_cached = repo.get_swipe_deck(COLD_START_DECK_ID)
+    assert first_cached is not None
+    first_computed_at = first_cached.computed_at
+
+    deck = service.refresh_cold_start_deck()
+    assert deck is not None
+    after = repo.get_swipe_deck(COLD_START_DECK_ID)
+    assert after is not None
+    assert after.computed_at >= first_computed_at
+
+
+def test_refresh_cold_start_deck_returns_none_when_corpus_empty():
+    repo = InMemoryControlPlaneRepository()
+    service = SwipeDeckService(repository=repo, config=_Config(cold_start_deck_size=5))
+    assert service.refresh_cold_start_deck() is None
+    assert repo.get_swipe_deck(COLD_START_DECK_ID) is None
+
+
 def test_recent_deck_returns_only_items_from_user_sources():
     repo = InMemoryControlPlaneRepository()
     repo.upsert_source_items(

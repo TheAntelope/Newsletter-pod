@@ -323,6 +323,50 @@ def test_feedback_digest_second_run_uses_cursor(monkeypatch):
     assert "first item" not in email_body
 
 
+def test_refresh_cold_start_deck_job_recomputes_when_corpus_available():
+    from newsletter_pod.models import SourceItemRecord
+    from newsletter_pod.swipe_deck import COLD_START_DECK_ID
+
+    container, client = _build_app()
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    records = [
+        SourceItemRecord(
+            dedupe_key=f"k{i}",
+            source_id="src-1",
+            source_name="Source 1",
+            guid=f"k{i}",
+            link=f"https://example.com/{i}",
+            title=f"Title {i}",
+            summary="summary",
+            published_at=now,
+            first_seen_at=now,
+            last_seen_at=now,
+            embedding=[float(i), 1.0],
+            embedding_model="fake",
+            embedded_at=now,
+        )
+        for i in range(6)
+    ]
+    container.control_repository.upsert_source_items(records)
+
+    resp = client.post("/jobs/refresh-cold-start-deck")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "refreshed"
+    assert body["corpus_size"] == 6
+    assert body["deck_size"] > 0
+    assert container.control_repository.get_swipe_deck(COLD_START_DECK_ID) is not None
+
+
+def test_refresh_cold_start_deck_job_skips_when_corpus_empty():
+    container, client = _build_app()
+    resp = client.post("/jobs/refresh-cold-start-deck")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "skipped"
+    assert body["reason"] == "empty_corpus"
+
+
 def _seed_source_item(container, dedupe_key: str, *, embedding: list[float] | None = None) -> None:
     from newsletter_pod.models import SourceItemRecord
 
