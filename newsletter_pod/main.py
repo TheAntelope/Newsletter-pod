@@ -196,6 +196,15 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
             )
 
+    @app.post("/jobs/refresh-cold-start-deck")
+    def refresh_cold_start_deck(
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.control_plane is not None
+        return container.control_plane.refresh_cold_start_deck()
+
     @app.post("/v1/auth/apple")
     def auth_with_apple(request_payload: AppleAuthRequest) -> dict:
         assert container.control_plane is not None

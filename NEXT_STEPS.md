@@ -88,40 +88,43 @@ Status: not started. Treat as a major workstream — touches script generation, 
 
 ### Swipe-based interest learning (replaces topic groupings as the relevance signal)
 
-Status: not started. Decision logged 2026-05-11. Driver: user feedback that topic groupings only feel ~50% relevant — even within a chosen topic, half the items don't match what the user actually cares about.
+Status: **shipped** (2026-05-18). End-to-end backend + iOS. Driver: user feedback that topic groupings only feel ~50% relevant — even within a chosen topic, half the items don't match what the user actually cares about.
 
-**Today's behavior:** onboarding asks the user to pick from 12 topic groupings; every source attached to a chosen group is equally eligible during script generation. There is no per-user signal about *which* items inside a group resonate. No item-level embeddings, no per-user interest vector, no ranker — selection is essentially "everything in the chosen groups, recency-filtered."
+**Shipped components:**
 
-**Target design:** the topic gate is replaced by an implicit interest vector learned from swipes. The user reveals themselves through ~10–15 swipes; the system scores candidate items by cosine similarity to their evolving vector and feeds the top-N into script generation. Topic groupings stay around as a Sources-tab UI affordance and a cold-start fallback, but they no longer drive item selection.
+- Persistent `source_items` Firestore collection, OpenAI `text-embedding-3-small` (1536d) embedded at ingest (`source_persistence.py`, `embeddings.py`, wired in `control_plane.py:1375-1383`).
+- `swipes` collection + `POST /v1/me/swipes` endpoint (`user_models.py:206-231`, `main.py:438-458`).
+- User interest vector (mean R − mean L, L2-normalized) computed on demand (`interest_vector.py`).
+- Ranker step in script generation, on by default behind `SWIPE_RANKER_ENABLED` (min 3 swipes, `control_plane.py:_apply_swipe_ranker`).
+- Cold-start k-means swipe deck endpoint + lazy refresh on access (`swipe_deck.py`, `clustering.py`).
+- iOS swipe UI: onboarding card stack + post-episode "Tune your pod" deck (`Screens.swift`).
+- Weekly cold-start deck refresh job: `POST /jobs/refresh-cold-start-deck` (Cloud Scheduler target, idempotent, returns `{status, deck_size, corpus_size, computed_at}`).
+- Ranker observability: structured log line per generation pass (`swipe_ranker user=... used=... reason=... swipes=... candidates=... embeddings_resolved=... top_n=...`) so we can answer "is the ranker firing, and how often do users have <3 swipes" from Cloud Logging.
 
-**Architectural prerequisite (Phase 1):** items today are *ephemeral* — `RSSIngestionService.fetch_new_items` returns an in-memory list per generation run and only a slim `SourceItemRef` (title + link) survives on `UserEpisodeRecord.source_item_refs` for show-notes attribution. There is no persistent item collection in Firestore. Phase 1 introduces a global `source_items` collection (keyed by `dedupe_key`) so items are first-class and can carry embeddings, support cross-user dedup, and ground future "more like this" features.
+**Notes on the "<min_swipes" fallback:** the spec called for a topic-group fallback when the user has too few swipes. In practice items reaching the ranker are already filtered to the user's enabled sources (which carry the topic membership), so the chronological-top-N fallback IS topic-filtered. No separate code path needed.
 
-**Mechanism:**
+**Cloud Scheduler wiring (operational TODO):** add a weekly job that POSTs to `/jobs/refresh-cold-start-deck` with the job-trigger token. Same pattern as `/jobs/send-feedback-digest`.
 
-1. **Persistent items + embeddings.** Introduce a `source_items` Firestore collection. At ingest time, every newly-fetched item is upserted (keyed by `dedupe_key`) with an embedding of `title + summary` from **OpenAI `text-embedding-3-small`** (1536 dims, ~$0.02 / 1M tokens). Embedding stored as `array<double>` on the same doc. No backfill needed — items have always been ephemeral; the corpus accrues from the first run after deploy.
-2. **Swipe storage.** New Firestore collection: `{user_id, source_item_id, direction (+1/-1), embedding_snapshot, timestamp}`. Embedding is snapshotted onto the swipe so the vector survives even if the source item later rolls off / is repriced / is re-embedded with a different model.
-3. **User interest vector.** Computed on demand (or cached per user with a short TTL) as `mean(right-swipe vectors) − mean(left-swipe vectors)`, L2-normalized. Cheap enough to recompute per generation run at expected scale.
-4. **Ranker step in script generation.** Before `build_digest_prompt`, score each candidate item by cosine similarity to the user vector and take the top-N. Falls back to current group-membership filtering when the user has fewer than ~5 swipes.
-5. **Cold-start deck.** Endpoint `GET /v1/swipe-deck/cold-start` returns ~15–20 items chosen as k-means cluster centers across the full corpus, so the first swipes deliberately probe different regions of interest space rather than reinforcing one. Refresh weekly via a Cloud Scheduler job.
-6. **iOS swipe UI.** New onboarding step replaces the topics picker: card stack, swipe right = more like this, left = less. Post-onboarding, surface a "tune your pod" deck (3–5 candidate items from the next episode pool) after each episode to keep the signal fresh.
+**Open follow-ups:**
 
-**Vector store choice:** Firestore (vectors as `array<double>` on the new `source_items` collection). Cosine similarity computed in app code. Fine up to ~10k items; revisit (pgvector on Cloud SQL) when corpus growth or per-generation latency makes the linear scan painful.
+- Negative-swipe weighting: today every left-swipe drags the centroid in proportion to its magnitude. Strong negatives could pull the vector into meaningless territory once we have power users. Revisit if we see vector quality drop with deep swipe histories.
+- Inbound-email items currently compete with everything else in the ranker. Decide whether to force-include them as a separate slot.
+
+### Per-item sub-topic tags via emergent clustering (option C — layering on D)
+
+Status: not started. Logged 2026-05-18. Driver: D handles per-user selection well, but cards (and show-notes attribution) still lack a visible category, and users have no manual lever like "less AI, more finance this week."
+
+**Approach:** run k-means periodically over the same `source_items` embeddings the ranker uses; expose cluster IDs as opaque tags first, label them (LLM or by hand) once they stabilize. No upfront taxonomy. New sources flow through the same embed-at-ingest pipeline; between full re-cluster runs, new items get a tag by argmin-distance to existing centroids. Full re-cluster rides the existing weekly cold-start scheduler.
 
 **Sequencing:**
 
-1. Backend: persistent `source_items` collection + embedding at ingest. Ingestion still returns the in-memory list to the existing generation path; no selection-behavior change yet, but every fetched item is now stored and embedded.
-2. Backend: swipe collection, user-vector computation, ranker step behind a feature flag. Topics-based selection stays default.
-3. Backend: cold-start k-means deck endpoint + weekly refresh job.
-4. iOS: swipe UI in onboarding (replacing topics step) + post-episode "tune your pod" deck.
-5. Flip the flag; demote topic groupings to Sources-tab grouping + cold-start fallback only.
+1. Backend: add cluster-assignment field to `SourceItemRecord` + a `clusters` collection (centroid + member count + provisional label). Re-cluster job hooked into the weekly refresh.
+2. Backend: nearest-cluster assignment at ingest for new items (cheap argmin).
+3. Backend: surface tags on swipe-card payload (`/v1/me/swipe-deck/*`) and on episode show-notes attribution.
+4. Backend: cluster labeling pass (one LLM call per cluster, cached).
+5. iOS: render tag on swipe cards + a per-tag filter sheet ("less of this", "more of this") that writes synthetic swipes against the cluster centroid.
 
-**Open questions:**
-
-- How does this interact with the welcome episode? It currently covers "we have nothing yet" — does it stay generic, or do we wait for the first ~10 swipes before generating it?
-- Negative-swipe weighting: does a left-swipe count as `−1` against the centroid, or does it just remove the item from candidate pools without poisoning the vector? (Strong negatives can drag the centroid into a meaningless region.)
-- Source-level vs item-level: do users still want to add/remove *sources* explicitly (current Sources tab), or does swiping eventually subsume that too?
-- Inbound-email items (per-user `<alias>@theclawcast.com`) — should they bypass the ranker and always be included, or compete with everything else?
-- Does the swipe deck itself need topic labels on the cards, or is a clean title-only card the right UX (forces the user to react to the *content*, not the category)?
+**Gating:** Don't start until we have ~2 weeks of ranker observability data (need to confirm D is actually shifting episode relevance before we layer on UI complexity).
 
 ## Deferred (not on public roadmap)
 

@@ -85,6 +85,19 @@ class SwipeDeckService:
         }
         return [records_by_key[key] for key in keys if key in records_by_key]
 
+    def refresh_cold_start_deck(self) -> Optional[SwipeDeckRecord]:
+        """Force a recompute of the global cold-start deck regardless of TTL.
+
+        Used by the weekly scheduler job so the deck is kept fresh even when
+        no user happens to hit the lazy path. Returns the new deck record on
+        success, or None if the corpus is empty (no embedded items yet).
+        """
+        refreshed = self._compute_cold_start_deck()
+        if refreshed is None:
+            return None
+        self._repository.save_swipe_deck(refreshed)
+        return refreshed
+
     def get_recent_deck(
         self, user_id: str, source_ids: list[str]
     ) -> list[SourceItemRecord]:
