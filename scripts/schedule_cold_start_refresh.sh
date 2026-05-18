@@ -13,9 +13,9 @@
 #
 # Optional env:
 #   REGION               Scheduler region (default: europe-west1)
-#   JOB_NAME             Scheduler job ID (default: refresh-cold-start-deck-weekly)
+#   JOB_NAME             Scheduler job ID (default: newsletter-pod-cold-start-refresh)
 #   SCHEDULE             cron expression (default: "0 3 * * 0" — Sundays 03:00)
-#   TIME_ZONE            IANA tz (default: Europe/Amsterdam)
+#   TIME_ZONE            IANA tz (default: Europe/Copenhagen)
 #
 # Usage:
 #   GCP_PROJECT=clawcast-prod \
@@ -29,10 +29,16 @@ set -euo pipefail
 : "${SERVICE_URL:?SERVICE_URL is required}"
 : "${JOB_TRIGGER_TOKEN:?JOB_TRIGGER_TOKEN is required}"
 
+# Strip CRLF defensively — Secret Manager values uploaded from Windows often
+# carry a trailing \r, and gcloud will faithfully pass that into the header,
+# causing the receiving FastAPI handler to 401 on a token mismatch.
+JOB_TRIGGER_TOKEN="${JOB_TRIGGER_TOKEN//$'\r'/}"
+JOB_TRIGGER_TOKEN="${JOB_TRIGGER_TOKEN//$'\n'/}"
+
 REGION="${REGION:-europe-west1}"
-JOB_NAME="${JOB_NAME:-refresh-cold-start-deck-weekly}"
+JOB_NAME="${JOB_NAME:-newsletter-pod-cold-start-refresh}"
 SCHEDULE="${SCHEDULE:-0 3 * * 0}"
-TIME_ZONE="${TIME_ZONE:-Europe/Amsterdam}"
+TIME_ZONE="${TIME_ZONE:-Europe/Copenhagen}"
 URI="${SERVICE_URL%/}/jobs/refresh-cold-start-deck"
 
 common_args=(
