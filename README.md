@@ -26,6 +26,8 @@ Multi-tenant private podcast backend powering the **ClawCast** iOS app. Each use
 Job endpoints (require `X-Job-Trigger-Token` or OIDC bearer):
 - `POST /jobs/dispatch-due-users`
 - `POST /jobs/process-user-podcast`
+- `POST /jobs/send-feedback-digest`
+- `POST /jobs/refresh-cold-start-deck` — weekly recompute of the global cold-start swipe deck. Wire with Cloud Scheduler via `scripts/schedule_cold_start_refresh.sh` (idempotent; defaults to Sundays 03:00 Europe/Amsterdam).
 
 User-facing API (require Apple session bearer token):
 - `POST /v1/auth/apple`
