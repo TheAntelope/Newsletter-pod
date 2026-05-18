@@ -529,6 +529,35 @@ final class AppViewModel: ObservableObject {
         return true
     }
 
+    /// Wipes the user's onboarding state on the backend (sources, schedule,
+    /// podcast profile, swipes, substack intents, per-source cursors) and
+    /// re-shows the onboarding wizard. Keeps the session, feed token,
+    /// subscription, and episode history. Returns true on success.
+    func resetAlgorithm() async -> Bool {
+        guard let sessionToken else { return false }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        do {
+            _ = try await apiClient.resetAlgorithm(token: sessionToken)
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+        pollTask?.cancel()
+        pollTask = nil
+        profile = nil
+        schedule = nil
+        selectedSources = []
+        substackIntents = []
+        activeRunID = nil
+        UserDefaults.standard.removeObject(forKey: Self.onboardingCompleteKey)
+        showOnboarding = true
+        selectedTab = .home
+        flashSaved("Algorithm reset")
+        return true
+    }
+
     func discoverSubstacks(query: String) async -> [SubstackCandidateDTO] {
         guard let sessionToken else { return [] }
         do {

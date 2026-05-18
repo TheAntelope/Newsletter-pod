@@ -1033,6 +1033,29 @@ class ControlPlaneService:
             "episodes": [episode.model_dump(mode="json") for episode in episodes],
         }
 
+    def reset_user_account(self, user_id: str) -> dict[str, Any]:
+        """Wipe per-user onboarding state so the iOS wizard re-runs while
+        keeping the account itself (Apple Sign-in linkage, feed token,
+        subscription, episode history, billing events) intact.
+
+        Mirrors `scripts/reset_user.py` but is callable from inside the app
+        so users can self-serve via a "Reset my algorithm" button instead of
+        an operator running the admin script.
+
+        Idempotent: if the user has nothing to reset, returns zero counts.
+        Raises ControlPlaneError if the user record cannot be found.
+        """
+        user = self.repository.get_user(user_id)
+        if user is None:
+            raise ControlPlaneError(f"Unknown user: {user_id}")
+
+        counts = self.repository.reset_user_state(user_id)
+        logger.info("Account reset: user=%s records=%s", user_id, counts)
+        return {
+            "user_id": user_id,
+            "records": counts,
+        }
+
     def delete_user_account(self, user_id: str) -> dict[str, Any]:
         """Hard-delete every per-user record we hold for `user_id`, plus all
         of the user's audio blobs in object storage. Idempotent: if the user

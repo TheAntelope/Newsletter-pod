@@ -1899,6 +1899,126 @@ def test_delete_me_is_idempotent():
     assert second.status_code in (401, 404)
 
 
+def test_reset_me_wipes_onboarding_state_but_keeps_account():
+    from newsletter_pod.substack import build_intent_id
+    from newsletter_pod.user_models import (
+        DeliveryScheduleRecord,
+        PodcastProfileRecord,
+        SwipeRecord,
+        UserSourceRecord,
+        UserSubstackIntent,
+    )
+
+    container, client = _build_app()
+    verifier = FakeAppleVerifier("reset-user", "reset@example.com")
+    token, headers = _auth_headers(client, verifier)
+    repo = container.control_repository
+    user_id = container.control_plane.get_authenticated_user(token).id
+
+    now = datetime(2026, 5, 16, tzinfo=timezone.utc)
+    repo.replace_user_sources(
+        user_id,
+        [
+            UserSourceRecord(
+                id=f"{user_id}:src-a",
+                user_id=user_id,
+                source_id="src-a",
+                name="Source A",
+                rss_url="https://example.com/a.rss",
+                created_at=now,
+                updated_at=now,
+            )
+        ],
+    )
+    repo.save_profile(
+        PodcastProfileRecord(user_id=user_id, created_at=now, updated_at=now)
+    )
+    repo.save_schedule(
+        DeliveryScheduleRecord(user_id=user_id, created_at=now, updated_at=now)
+    )
+    repo.save_swipe(
+        SwipeRecord(
+            id="swipe-1",
+            user_id=user_id,
+            source_item_dedupe_key="dk-1",
+            direction=1,
+            title="An item",
+            link="https://example.com/1",
+            source_id="src-a",
+            source_name="Source A",
+            embedding=[0.1, 0.2],
+            embedding_model="test",
+            swiped_at=now,
+        )
+    )
+    repo.save_substack_intent(
+        UserSubstackIntent(
+            id=build_intent_id(user_id, "example.substack.com"),
+            user_id=user_id,
+            pub_url="https://example.substack.com",
+            pub_host="example.substack.com",
+            pub_title="Test Pub",
+            alias_email="aaa@theclawcast.com",
+            created_at=now,
+        )
+    )
+    repo.update_user_source_cursors(user_id, {"src-a": now})
+    user = repo.get_user(user_id)
+    user.last_weekly_update_iso_week = "2026-W20"
+    repo.save_user(user)
+
+    # Also stash an episode so we can prove reset KEEPS episode history.
+    repo.save_user_episode(
+        UserEpisodeRecord(
+            id="ep-1",
+            user_id=user_id,
+            title="Past episode",
+            description="",
+            published_at=now,
+            audio_object_name="audio/ep-1.mp3",
+            audio_size_bytes=10,
+        )
+    )
+
+    resp = client.post("/v1/me/reset", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["user_id"] == user_id
+    records = body["records"]
+    assert records["user_sources"] == 1
+    assert records["podcast_profiles"] == 1
+    assert records["delivery_schedules"] == 1
+    assert records["swipes"] == 1
+    assert records["user_substack_intents"] == 1
+    assert records["user_cursors"] == 1
+
+    assert repo.list_user_sources(user_id) == []
+    assert repo.get_profile(user_id) is None
+    assert repo.get_schedule(user_id) is None
+    assert repo.list_user_swipes(user_id) == []
+    assert repo.list_user_substack_intents(user_id) == []
+    assert repo.get_user_source_cursor(user_id, "src-a") is None
+    assert repo.get_user(user_id).last_weekly_update_iso_week is None
+
+    # Account, session, and episode history survive.
+    assert repo.get_user(user_id) is not None
+    assert repo.list_recent_user_episodes(user_id, limit=5)[0].id == "ep-1"
+    me_after = client.get("/v1/me", headers=headers)
+    assert me_after.status_code == 200
+
+
+def test_reset_me_is_idempotent():
+    container, client = _build_app()
+    verifier = FakeAppleVerifier("reset-twice-user", "reset2@example.com")
+    _, headers = _auth_headers(client, verifier)
+
+    first = client.post("/v1/me/reset", headers=headers)
+    assert first.status_code == 200
+    second = client.post("/v1/me/reset", headers=headers)
+    assert second.status_code == 200
+    assert all(count == 0 for count in second.json()["records"].values())
+
+
 def test_delete_me_anonymizes_billing_events():
     from newsletter_pod.user_models import BillingEventRecord
 

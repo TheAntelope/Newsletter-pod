@@ -278,6 +278,15 @@ final class APIClient {
         )
     }
 
+    func resetAlgorithm(token: String) async throws -> AccountResetAck {
+        try await request(
+            path: "/v1/me/reset",
+            method: "POST",
+            body: Optional<Int>.none,
+            token: token
+        )
+    }
+
     private func request<T: Decodable, Body: Encodable>(
         path: String,
         method: String,
@@ -484,5 +493,13 @@ struct AccountDeletionAck: Decodable {
         case userID = "user_id"
         case alreadyDeleted = "already_deleted"
         case audioObjectsDeleted = "audio_objects_deleted"
+    }
+}
+
+struct AccountResetAck: Decodable {
+    let userID: String
+
+    private enum CodingKeys: String, CodingKey {
+        case userID = "user_id"
     }
 }

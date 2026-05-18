@@ -247,6 +247,19 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         assert container.control_plane is not None
         return container.control_plane.delete_user_account(user.id)
 
+    @app.post("/v1/me/reset")
+    def reset_me(authorization: str | None = Header(default=None)) -> dict:
+        """Wipe the caller's onboarding state so the iOS wizard re-runs:
+        deletes sources, schedule, podcast profile, swipes, substack intents,
+        and per-source cursors. Keeps the account, feed token, subscription,
+        and episode history. Idempotent."""
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.reset_user_account(user.id)
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
     @app.get("/v1/sources/catalog")
     def get_source_catalog() -> dict:
         assert container.control_plane is not None

@@ -270,6 +270,40 @@ class ControlPlaneRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def reset_user_state(self, user_id: str) -> dict[str, int]:
+        """Wipe per-user onboarding state so the iOS wizard re-runs, while
+        keeping the user record, Apple Sign-in linkage, feed token,
+        subscription, episode history, runs, billing events, costs, inbound
+        items, and feedback intact.
+
+        Idempotent: safe to call on a user who has already been reset; counts
+        will be zero or near-zero.
+
+        Deletes:
+          - user_sources           (where user_id == uid)
+          - podcast_profiles/{uid}
+          - delivery_schedules/{uid}
+          - swipes                 (where user_id == uid — includes seeds)
+          - user_substack_intents  (where user_id == uid)
+          - user_cursors           (where user_id == uid — re-attached
+                                    sources fetch from scratch)
+        Resets:
+          - users/{uid}.last_weekly_update_iso_week -> None
+
+        Returns a per-collection count of what was removed, e.g.::
+
+            {
+                "user_sources": 5,
+                "podcast_profiles": 1,
+                "delivery_schedules": 1,
+                "swipes": 240,
+                "user_substack_intents": 3,
+                "user_cursors": 5,
+            }
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def delete_user_account(self, user_id: str) -> dict[str, int]:
         """Wipe every per-user document we hold for `user_id` and return a
         per-collection count of what was removed.
@@ -584,6 +618,47 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
 
     def delete_substack_intent(self, intent_id: str) -> None:
         self._substack_intents.pop(intent_id, None)
+
+    def reset_user_state(self, user_id: str) -> dict[str, int]:
+        counts: dict[str, int] = {
+            "user_sources": 0,
+            "podcast_profiles": 0,
+            "delivery_schedules": 0,
+            "swipes": 0,
+            "user_substack_intents": 0,
+            "user_cursors": 0,
+        }
+
+        counts["user_sources"] = len(self._sources.pop(user_id, []) or [])
+        counts["podcast_profiles"] = 1 if self._profiles.pop(user_id, None) else 0
+        counts["delivery_schedules"] = 1 if self._schedules.pop(user_id, None) else 0
+
+        swipe_keys = [
+            key for key, swipe in self._swipes.items() if swipe.user_id == user_id
+        ]
+        for key in swipe_keys:
+            self._swipes.pop(key, None)
+        counts["swipes"] = len(swipe_keys)
+
+        intent_keys = [
+            key
+            for key, intent in self._substack_intents.items()
+            if intent.user_id == user_id
+        ]
+        for key in intent_keys:
+            self._substack_intents.pop(key, None)
+        counts["user_substack_intents"] = len(intent_keys)
+
+        cursor_keys = [key for key in self._cursors if key[0] == user_id]
+        for key in cursor_keys:
+            self._cursors.pop(key, None)
+        counts["user_cursors"] = len(cursor_keys)
+
+        user = self._users.get(user_id)
+        if user is not None:
+            user.last_weekly_update_iso_week = None
+
+        return counts
 
     def delete_user_account(self, user_id: str) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -1092,6 +1167,44 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
 
     def delete_substack_intent(self, intent_id: str) -> None:
         self._substack_intents.document(intent_id).delete()
+
+    def reset_user_state(self, user_id: str) -> dict[str, int]:
+        counts: dict[str, int] = {
+            "user_sources": 0,
+            "podcast_profiles": 0,
+            "delivery_schedules": 0,
+            "swipes": 0,
+            "user_substack_intents": 0,
+            "user_cursors": 0,
+        }
+
+        # Single-doc collections keyed by user_id.
+        for collection, key in (
+            (self._profiles, "podcast_profiles"),
+            (self._schedules, "delivery_schedules"),
+        ):
+            ref = collection.document(user_id)
+            snapshot = ref.get()
+            if snapshot.exists:
+                ref.delete()
+                counts[key] = 1
+
+        # Multi-doc per-user collections: query by user_id, batch-delete.
+        for collection, key in (
+            (self._sources, "user_sources"),
+            (self._swipes, "swipes"),
+            (self._substack_intents, "user_substack_intents"),
+            (self._cursors, "user_cursors"),
+        ):
+            counts[key] = self._batch_delete_where_user(collection, user_id)
+
+        # Clear the weekly-update marker so the next eligible run regenerates
+        # the weekly summary card on the user's first post-reset episode.
+        user_ref = self._users.document(user_id)
+        if user_ref.get().exists:
+            user_ref.update({"last_weekly_update_iso_week": None})
+
+        return counts
 
     def delete_user_account(self, user_id: str) -> dict[str, int]:
         counts: dict[str, int] = {

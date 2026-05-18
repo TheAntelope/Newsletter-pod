@@ -1731,6 +1731,8 @@ struct PodcastSetupView: View {
 
                 ScheduleSection()
 
+                ResetAlgorithmSection()
+
                 DeleteAccountSection()
             }
             .navigationTitle("Podcast Setup")
@@ -2081,6 +2083,49 @@ struct ScheduleSection: View {
                 weekdays: weekdays,
                 localTime: OnboardingScheduleStep.formattedHHmm(deliveryTime)
             )
+        }
+    }
+}
+
+/// Lets the user wipe their onboarding state (sources, schedule, podcast
+/// profile, swipes, substack intents) and re-run the wizard, without losing
+/// their account, feed token, subscription, or episode history. Calls
+/// `POST /v1/me/reset`; AppViewModel.resetAlgorithm clears local state and
+/// flips `showOnboarding` so the wizard reappears on confirm.
+struct ResetAlgorithmSection: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @State private var showConfirm = false
+
+    var body: some View {
+        Section("Start over") {
+            Button(role: .destructive) {
+                showConfirm = true
+            } label: {
+                HStack {
+                    Text("Reset my algorithm")
+                    Spacer()
+                    if viewModel.isLoading {
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(viewModel.isLoading)
+
+            Text("Clears your sources, schedule, podcast format, and swipe history, then re-runs onboarding so you can pick everything again. Your account, subscription, and past episodes are kept.")
+                .font(Theme.Typography.callout)
+                .foregroundStyle(.secondary)
+        }
+        .confirmationDialog(
+            "Reset your algorithm?",
+            isPresented: $showConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Reset my algorithm", role: .destructive) {
+                Task { await viewModel.resetAlgorithm() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("We'll wipe your sources, schedule, and swipe history and walk you back through setup. Past episodes stay in your feed.")
         }
     }
 }
