@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,12 @@ class SourceDefinition(BaseModel):
     rss_url: str
     enabled: bool = True
     topic: Optional[str] = None
+    # "full"   — feed carries the complete article/post text
+    # "excerpt" — feed carries only a teaser; full content lives behind the link
+    ingest_mode: Literal["full", "excerpt"] = "excerpt"
+    # True for press publishers established in EU/EEA member states where
+    # Article 15 DSM Directive (press-publisher neighbouring right) may apply.
+    jurisdiction_sensitive: bool = False
 
 
 class VoiceDefinition(BaseModel):
