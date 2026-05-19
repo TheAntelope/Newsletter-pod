@@ -77,12 +77,13 @@ SAMPLE_SCRIPTS: dict[str, str] = {
 class Voice:
     id: str
     name: str
+    speed: float | None = None
 
 
 def load_voices(voices_yaml_path: Path) -> list[Voice]:
     data = yaml.safe_load(voices_yaml_path.read_text(encoding="utf-8"))
     return [
-        Voice(id=item["id"], name=item["name"])
+        Voice(id=item["id"], name=item["name"], speed=item.get("speed"))
         for item in data.get("voices", [])
         if item.get("enabled", True)
     ]
@@ -99,14 +100,16 @@ def resolve_elevenlabs_key() -> str:
     return response.payload.data.decode("utf-8").strip()
 
 
-def synthesize(text: str, voice_id: str, api_key: str) -> bytes:
+def synthesize(text: str, voice_id: str, api_key: str, *, speed: float | None = None) -> bytes:
     url = f"{ELEVENLABS_BASE_URL}/v1/text-to-speech/{voice_id}"
     headers = {
         "xi-api-key": api_key,
         "Content-Type": "application/json",
         "Accept": "audio/mpeg",
     }
-    payload = {"text": text, "model_id": ELEVENLABS_MODEL}
+    payload: dict[str, object] = {"text": text, "model_id": ELEVENLABS_MODEL}
+    if speed is not None:
+        payload["voice_settings"] = {"speed": max(0.7, min(1.2, float(speed)))}
     resp = requests.post(url, json=payload, headers=headers, timeout=120)
     resp.raise_for_status()
     return resp.content
@@ -132,6 +135,15 @@ def main() -> int:
         action="store_true",
         help="Render audio locally to ./voice_samples/ without uploading.",
     )
+    parser.add_argument(
+        "--voice-id",
+        action="append",
+        default=None,
+        help=(
+            "Limit rendering to one or more voice IDs (repeat the flag, or pass "
+            "a comma-separated list). Default: every enabled voice in voices.yml."
+        ),
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent
@@ -139,6 +151,19 @@ def main() -> int:
     if not voices:
         print("No enabled voices in voices.yml", file=sys.stderr)
         return 1
+
+    if args.voice_id:
+        wanted: set[str] = set()
+        for raw in args.voice_id:
+            wanted.update(part.strip() for part in raw.split(",") if part.strip())
+        voices = [v for v in voices if v.id in wanted]
+        missing = wanted - {v.id for v in voices}
+        if missing:
+            print(f"ERROR: unknown voice ids: {', '.join(sorted(missing))}", file=sys.stderr)
+            return 1
+        if not voices:
+            print("No voices match --voice-id filter", file=sys.stderr)
+            return 1
 
     missing_scripts = [v for v in voices if v.id not in SAMPLE_SCRIPTS]
     if missing_scripts:
@@ -155,8 +180,9 @@ def main() -> int:
     public_urls: dict[str, str] = {}
     for voice in voices:
         text = SAMPLE_SCRIPTS[voice.id]
-        print(f"Rendering {voice.name} ({voice.id}, {len(text)} chars)…")
-        audio = synthesize(text, voice.id, api_key)
+        speed_label = f" @ {voice.speed}x" if voice.speed is not None else ""
+        print(f"Rendering {voice.name} ({voice.id}, {len(text)} chars){speed_label}…")
+        audio = synthesize(text, voice.id, api_key, speed=voice.speed)
         if args.dry_run:
             path = out_dir / f"{voice.id}.mp3"
             path.write_bytes(audio)

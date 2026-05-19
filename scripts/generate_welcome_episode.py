@@ -1,21 +1,26 @@
 """One-shot generator for the bundled welcome podcast.
 
 Renders the two-host welcome script via ElevenLabs (Vinnie + Demi voices) and
-writes a single MP3 to ./welcome_v1.mp3. Mirrors the segment-by-segment
+writes a single MP3 to ./welcome_v2.mp3. Mirrors the segment-by-segment
 synthesis the runtime uses in `podcast_api.py:_synthesize_speech` so the result
 sounds like every other ClawCast episode.
 
+Versioning: never overwrite a previously-uploaded welcome object. Bump
+WELCOME_EPISODE_VERSION + object name when re-recording (v1 → v2 etc.) so
+already-delivered welcome rows keep resolving to the bytes the listener
+originally heard. See memory `welcome_episode_architecture.md`.
+
 Usage:
     export ELEVENLABS_API_KEY=...
-    python scripts/generate_welcome_episode.py [--output welcome_v1.mp3]
+    python scripts/generate_welcome_episode.py [--output welcome_v2.mp3]
 
 Then upload the resulting MP3 to GCS at the configured `WELCOME_EPISODE_OBJECT_NAME`
-key (e.g. `static/welcome-v1.mp3`) and set the matching env vars in your deployment:
+key (e.g. `static/welcome-v2.mp3`) and set the matching env vars in your deployment:
 
-    WELCOME_EPISODE_OBJECT_NAME=static/welcome-v1.mp3
+    WELCOME_EPISODE_OBJECT_NAME=static/welcome-v2.mp3
     WELCOME_EPISODE_SIZE_BYTES=<the printed size>
     WELCOME_EPISODE_DURATION_SECONDS=<the printed duration>
-    WELCOME_EPISODE_VERSION=v1
+    WELCOME_EPISODE_VERSION=v2
 """
 from __future__ import annotations
 
@@ -32,6 +37,9 @@ ELEVENLABS_MODEL = "eleven_multilingual_v2"
 # Voice IDs match newsletter_pod/config.py defaults.
 VOICE_VINNIE = os.environ.get("ELEVENLABS_VOICE_PRIMARY_ID", "suMMgpGbVcnihP1CcgFS")
 VOICE_DEMI = os.environ.get("ELEVENLABS_VOICE_SECONDARY_ID", "RKCbSROXui75bk1SVpy8")
+# Keep in sync with voices.yml `speed:` for Vinnie + Demi so the welcome
+# MP3's pace matches what users hear in regular episodes.
+WELCOME_VOICE_SPEED = 1.2
 
 
 @dataclass
@@ -114,7 +122,11 @@ def synthesize(text: str, voice_id: str, api_key: str) -> bytes:
         "Content-Type": "application/json",
         "Accept": "audio/mpeg",
     }
-    payload = {"text": text, "model_id": ELEVENLABS_MODEL}
+    payload: dict[str, object] = {
+        "text": text,
+        "model_id": ELEVENLABS_MODEL,
+        "voice_settings": {"speed": WELCOME_VOICE_SPEED},
+    }
     resp = requests.post(url, json=payload, headers=headers, timeout=120)
     resp.raise_for_status()
     return resp.content
@@ -122,14 +134,15 @@ def synthesize(text: str, voice_id: str, api_key: str) -> bytes:
 
 def estimate_duration_seconds(text: str) -> float:
     """Rough wpm-based estimate so we can print a sanity-check duration without
-    decoding MP3 frames. 155 wpm ~= conversational two-host pace."""
+    decoding MP3 frames. 155 wpm ~= conversational two-host pace at 1.0x;
+    scaled by WELCOME_VOICE_SPEED for the actual rendered output."""
     words = len(text.split())
-    return words / 155.0 * 60.0
+    return words / (155.0 * WELCOME_VOICE_SPEED) * 60.0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", default="welcome_v1.mp3", help="local output path (default: welcome_v1.mp3)")
+    parser.add_argument("--output", default="welcome_v2.mp3", help="local output path (default: welcome_v2.mp3)")
     args = parser.parse_args()
 
     api_key = os.environ.get("ELEVENLABS_API_KEY")
@@ -160,12 +173,12 @@ def main() -> int:
     print("Next steps:")
     print(f"  1. Listen to {args.output} and confirm it sounds right.")
     print(f"  2. Upload to GCS, e.g.:")
-    print(f"       gsutil cp {args.output} gs://<your-bucket>/static/welcome-v1.mp3")
+    print(f"       gsutil cp {args.output} gs://<your-bucket>/static/welcome-v2.mp3")
     print(f"  3. Set deployment env vars:")
-    print(f"       WELCOME_EPISODE_OBJECT_NAME=static/welcome-v1.mp3")
+    print(f"       WELCOME_EPISODE_OBJECT_NAME=static/welcome-v2.mp3")
     print(f"       WELCOME_EPISODE_SIZE_BYTES={size}")
     print(f"       WELCOME_EPISODE_DURATION_SECONDS=<actual duration once you've measured>")
-    print(f"       WELCOME_EPISODE_VERSION=v1")
+    print(f"       WELCOME_EPISODE_VERSION=v2")
     return 0
 
 

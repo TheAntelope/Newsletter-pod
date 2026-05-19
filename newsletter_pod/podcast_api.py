@@ -5,7 +5,7 @@ import json
 import logging
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional
 
 import requests
@@ -44,6 +44,10 @@ class PodcastApiClient:
     tts_provider: str = "openai"
     elevenlabs_api_key: Optional[str] = None
     elevenlabs_model: str = "eleven_multilingual_v2"
+    # Per-voice ElevenLabs voice_settings.speed (range 0.7-1.2). Populated
+    # from voices.yml at container construction; voices without an entry are
+    # synthesized at ElevenLabs' default speed.
+    voice_speed_by_id: dict[str, float] = field(default_factory=dict)
 
     def generate(
         self,
@@ -373,6 +377,11 @@ class PodcastApiClient:
             "text": script,
             "model_id": self.elevenlabs_model,
         }
+        speed = self.voice_speed_by_id.get(voice_id)
+        if speed is not None:
+            # ElevenLabs accepts speed in [0.7, 1.2]; clamp defensively so a
+            # bad voices.yml entry doesn't 4xx the synth call.
+            payload["voice_settings"] = {"speed": max(0.7, min(1.2, float(speed)))}
 
         response = requests.post(
             url,

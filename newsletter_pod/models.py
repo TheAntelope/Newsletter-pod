@@ -37,6 +37,11 @@ class VoiceDefinition(BaseModel):
     description: str = ""
     preview_url: str = ""
     enabled: bool = True
+    # ElevenLabs voice_settings.speed, in API range 0.7-1.2. None = let the
+    # provider use its default. We bake the speed into the voice rather than
+    # the user profile because it's a per-voice character trait — some
+    # voices read naturally slow and want a nudge faster.
+    speed: Optional[float] = None
 
 
 class SourceItem(BaseModel):

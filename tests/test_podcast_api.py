@@ -216,6 +216,128 @@ def test_elevenlabs_routes_segments_to_two_voices_by_role(monkeypatch):
     assert generated.audio_segments[1].speaker == "Demi Dreams"
 
 
+def _fake_elevenlabs_post_factory(calls: list[tuple[str, dict]]):
+    """Shared ElevenLabs fake: returns a one-segment script then bytes for
+    each TTS call, capturing every payload into `calls`."""
+
+    def fake_post(url, json, headers, timeout):
+        calls.append((url, json))
+        if url.endswith("/v1/responses"):
+            return FakeResponse(
+                json_data={
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": (
+                                        '{"episode_title":"2026-05-19: AI",'
+                                        '"show_notes":"- A",'
+                                        '"audio_segments":['
+                                        '{"role":"primary","text":"Hello there."}'
+                                        "]}"
+                                    ),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        if "/v1/text-to-speech/" in url:
+            return FakeResponse(content=b"mp3-bytes")
+        raise AssertionError(url)
+
+    return fake_post
+
+
+def test_elevenlabs_passes_voice_settings_speed_when_configured(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "newsletter_pod.podcast_api.requests.post",
+        _fake_elevenlabs_post_factory(calls),
+    )
+
+    vinnie = "suMMgpGbVcnihP1CcgFS"
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="ignored",
+        tts_voice="ignored",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key="el-key",
+        elevenlabs_model="eleven_multilingual_v2",
+        voice_speed_by_id={vinnie: 1.2},
+    )
+    client.generate(prompt="Source", title="t", voice_id=vinnie)
+
+    tts_payload = next(payload for url, payload in calls if "/v1/text-to-speech/" in url)
+    assert tts_payload["voice_settings"] == {"speed": 1.2}
+
+
+def test_elevenlabs_omits_voice_settings_when_voice_has_no_speed(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "newsletter_pod.podcast_api.requests.post",
+        _fake_elevenlabs_post_factory(calls),
+    )
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="ignored",
+        tts_voice="ignored",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key="el-key",
+        elevenlabs_model="eleven_multilingual_v2",
+        # Map populated, but our test voice isn't in it.
+        voice_speed_by_id={"some-other-voice": 1.2},
+    )
+    client.generate(prompt="Source", title="t", voice_id="unmapped-voice")
+
+    tts_payload = next(payload for url, payload in calls if "/v1/text-to-speech/" in url)
+    assert "voice_settings" not in tts_payload
+
+
+def test_elevenlabs_clamps_speed_to_api_range(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "newsletter_pod.podcast_api.requests.post",
+        _fake_elevenlabs_post_factory(calls),
+    )
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="ignored",
+        tts_voice="ignored",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key="el-key",
+        elevenlabs_model="eleven_multilingual_v2",
+        voice_speed_by_id={"v1": 1.9, "v2": 0.4},
+    )
+    client.generate(prompt="Source", title="t", voice_id="v1")
+    client.generate(prompt="Source", title="t", voice_id="v2")
+
+    tts_payloads = [payload for url, payload in calls if "/v1/text-to-speech/" in url]
+    assert tts_payloads[0]["voice_settings"] == {"speed": 1.2}
+    assert tts_payloads[1]["voice_settings"] == {"speed": 0.7}
+
+
 def test_stage_two_closing_segment_is_appended_when_ux_provided(monkeypatch):
     responses_calls: list[dict] = []
 

@@ -20,6 +20,7 @@ voices:
     description: Confident and clear; default anchor.
     preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/suMMgpGbVcnihP1CcgFS.mp3
     enabled: true
+    speed: 1.2
 
   - id: RKCbSROXui75bk1SVpy8
     name: Demi Dreams
@@ -27,6 +28,7 @@ voices:
     description: Warm and conversational; default commentator.
     preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/RKCbSROXui75bk1SVpy8.mp3
     enabled: true
+    speed: 1.2
 
   # ============================================================
   # Premium voices (3 male / 3 female on top of Vinnie + Demi = 8 total).

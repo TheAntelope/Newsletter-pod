@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .auth import AppleIdentityVerifier, AuthError, SessionManager
-from .config import Settings
+from .config import Settings, load_voices
 from .control_plane import ControlPlaneError, ControlPlaneService, build_task_enqueuer
 from .embeddings import EmbeddingProvider, OpenAIEmbeddingProvider
 from .feed import build_feed_xml
@@ -640,6 +640,11 @@ def _build_container(settings: Settings) -> ServiceContainer:
             raise RuntimeError("GCS_BUCKET_NAME is required when USE_INMEMORY_ADAPTERS=false")
         storage = GCSAudioStorage(settings.gcs_bucket_name, prefix=settings.gcs_prefix)
 
+    voice_speed_by_id = {
+        voice.id: voice.speed
+        for voice in load_voices(settings.voices_file)
+        if voice.speed is not None
+    }
     podcast_client = PodcastApiClient(
         enabled=settings.podcast_api_enabled,
         provider=settings.podcast_provider,
@@ -654,6 +659,7 @@ def _build_container(settings: Settings) -> ServiceContainer:
         tts_provider=settings.podcast_tts_provider,
         elevenlabs_api_key=settings.elevenlabs_api_key,
         elevenlabs_model=settings.elevenlabs_model,
+        voice_speed_by_id=voice_speed_by_id,
     )
 
     mailer_required = (
@@ -726,21 +732,28 @@ def _build_control_plane(
     else:
         control_repository = FirestoreControlPlaneRepository(settings.firestore_collection_prefix)
 
-    podcast_client = podcast_client or PodcastApiClient(
-        enabled=settings.podcast_api_enabled,
-        provider=settings.podcast_provider,
-        base_url=settings.podcast_api_base_url,
-        api_key=settings.podcast_api_key,
-        timeout_seconds=settings.podcast_api_timeout_seconds,
-        poll_seconds=settings.podcast_api_poll_seconds,
-        text_model=settings.podcast_text_model,
-        tts_model=settings.podcast_tts_model,
-        tts_voice=settings.podcast_tts_voice,
-        tts_instructions=settings.podcast_tts_instructions,
-        tts_provider=settings.podcast_tts_provider,
-        elevenlabs_api_key=settings.elevenlabs_api_key,
-        elevenlabs_model=settings.elevenlabs_model,
-    )
+    if podcast_client is None:
+        voice_speed_by_id = {
+            voice.id: voice.speed
+            for voice in load_voices(settings.voices_file)
+            if voice.speed is not None
+        }
+        podcast_client = PodcastApiClient(
+            enabled=settings.podcast_api_enabled,
+            provider=settings.podcast_provider,
+            base_url=settings.podcast_api_base_url,
+            api_key=settings.podcast_api_key,
+            timeout_seconds=settings.podcast_api_timeout_seconds,
+            poll_seconds=settings.podcast_api_poll_seconds,
+            text_model=settings.podcast_text_model,
+            tts_model=settings.podcast_tts_model,
+            tts_voice=settings.podcast_tts_voice,
+            tts_instructions=settings.podcast_tts_instructions,
+            tts_provider=settings.podcast_tts_provider,
+            elevenlabs_api_key=settings.elevenlabs_api_key,
+            elevenlabs_model=settings.elevenlabs_model,
+            voice_speed_by_id=voice_speed_by_id,
+        )
     session_manager = SessionManager(
         signing_secret=settings.session_signing_secret,
         ttl_hours=settings.session_ttl_hours,
