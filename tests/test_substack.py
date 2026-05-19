@@ -13,6 +13,7 @@ from newsletter_pod.substack import (
     build_intent_id,
     canonicalize_pub_url,
     extract_confirm_url,
+    fetch_latest_post,
     is_substack_sender,
     match_intent_host,
     probe_publication,
@@ -213,6 +214,64 @@ def test_probe_publication_raises_on_http_error():
         probe_publication("https://broken.substack.com", session=fake)
 
 
+# ---------- fetch_latest_post ----------
+
+
+_SAMPLE_FEED_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>Letters from an American</title>
+  <link>https://heathercoxrichardson.substack.com</link>
+  <item>
+    <title>May 11, 2026</title>
+    <link>https://heathercoxrichardson.substack.com/p/may-11-2026</link>
+    <description>&lt;p&gt;Today's letter &amp;mdash; news and analysis.&lt;/p&gt;</description>
+    <pubDate>Sun, 11 May 2026 23:00:00 +0000</pubDate>
+  </item>
+  <item>
+    <title>May 10, 2026</title>
+    <link>https://heathercoxrichardson.substack.com/p/may-10-2026</link>
+    <description>Older post body.</description>
+    <pubDate>Sat, 10 May 2026 23:00:00 +0000</pubDate>
+  </item>
+</channel></rss>
+"""
+
+
+def test_fetch_latest_post_returns_first_entry_with_cleaned_summary():
+    fake = _FakeSession(_FakeResponse(_SAMPLE_FEED_XML))
+    post = fetch_latest_post(
+        "https://heathercoxrichardson.substack.com/feed", session=fake
+    )
+    assert post is not None
+    assert post.title == "May 11, 2026"
+    assert post.link == "https://heathercoxrichardson.substack.com/p/may-11-2026"
+    # HTML tags and entities stripped from the summary.
+    assert post.summary == "Today's letter — news and analysis."
+    assert post.published_at.year == 2026 and post.published_at.month == 5
+    assert post.published_at.day == 11
+
+
+def test_fetch_latest_post_returns_none_on_empty_feed():
+    empty = '<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>'
+    fake = _FakeSession(_FakeResponse(empty))
+    assert fetch_latest_post("https://x.substack.com/feed", session=fake) is None
+
+
+def test_fetch_latest_post_returns_none_on_http_error():
+    fake = _FakeSession(_FakeResponse("oops", status_code=502))
+    assert fetch_latest_post("https://x.substack.com/feed", session=fake) is None
+
+
+def test_fetch_latest_post_returns_none_on_request_exception():
+    import requests as _requests
+
+    class _Boom:
+        def get(self, url, **kwargs):
+            raise _requests.ConnectionError("nope")
+
+    assert fetch_latest_post("https://x.substack.com/feed", session=_Boom()) is None
+
+
 # ---------- endpoint integration ----------
 
 SIGNING_KEY = "test-signing-key"
@@ -269,6 +328,31 @@ def _install_fake_probe(monkeypatch, html: str = "<title>Pub</title>") -> list[s
         def get(url, **kwargs):
             calls.append(url)
             return _FakeResponse(html)
+
+    monkeypatch.setattr(substack_module, "requests", _M)
+    return calls
+
+
+def _install_fake_probe_with_feed(
+    monkeypatch,
+    *,
+    homepage_html: str,
+    feed_xml: str,
+    feed_status: int = 200,
+) -> list[str]:
+    """Fake stub that returns homepage_html for non-/feed URLs and feed_xml
+    (with optional status code) for /feed URLs. Lets integration tests
+    exercise both the probe path and the RSS prefetch path in one request.
+    """
+    calls: list[str] = []
+
+    class _M:
+        @staticmethod
+        def get(url, **kwargs):
+            calls.append(url)
+            if url.rstrip("/").endswith("/feed"):
+                return _FakeResponse(feed_xml, status_code=feed_status)
+            return _FakeResponse(homepage_html)
 
     monkeypatch.setattr(substack_module, "requests", _M)
     return calls
@@ -385,3 +469,66 @@ def test_delete_intent_404s_for_unknown_id(monkeypatch):
         headers=headers,
     )
     assert response.status_code == 404
+
+
+def test_create_intent_prefetches_latest_post_into_inbound_items(monkeypatch):
+    container, user, client, headers = _build_app_with_authenticated_user(monkeypatch)
+    calls = _install_fake_probe_with_feed(
+        monkeypatch,
+        homepage_html='<meta property="og:title" content="Letters" />',
+        feed_xml=_SAMPLE_FEED_XML,
+    )
+    response = client.post(
+        "/v1/me/substack/intents",
+        json={"pub_url": "heathercoxrichardson.substack.com"},
+        headers=headers,
+    )
+    assert response.status_code == 201
+    # Both the homepage probe and the /feed prefetch were attempted.
+    assert any(url.endswith("/feed") for url in calls), calls
+
+    items = container.control_repository.list_recent_inbound_items(user.id, limit=10)
+    assert len(items) == 1
+    item = items[0]
+    assert item.subject == "May 11, 2026"
+    assert item.article_url == "https://heathercoxrichardson.substack.com/p/may-11-2026"
+    assert item.sender_domain == "heathercoxrichardson.substack.com"
+    # No real email Message-Id for RSS-prefetched items.
+    assert item.message_id is None
+    # Body summary was cleaned (HTML stripped, entities unescaped).
+    assert "Today's letter — news and analysis." in item.body_text
+
+
+def test_create_intent_prefetch_is_idempotent_on_re_subscribe(monkeypatch):
+    container, user, client, headers = _build_app_with_authenticated_user(monkeypatch)
+    _install_fake_probe_with_feed(
+        monkeypatch,
+        homepage_html="<title>Pub</title>",
+        feed_xml=_SAMPLE_FEED_XML,
+    )
+    payload = {"pub_url": "heathercoxrichardson.substack.com"}
+    client.post("/v1/me/substack/intents", json=payload, headers=headers)
+    client.post("/v1/me/substack/intents", json=payload, headers=headers)
+    items = container.control_repository.list_recent_inbound_items(user.id, limit=10)
+    # Second call hits the existing-intent short-circuit; first call's
+    # URL-keyed inbound item is the only one we should see.
+    assert len(items) == 1
+
+
+def test_create_intent_survives_feed_fetch_failure(monkeypatch):
+    container, user, client, headers = _build_app_with_authenticated_user(monkeypatch)
+    _install_fake_probe_with_feed(
+        monkeypatch,
+        homepage_html="<title>Pub</title>",
+        feed_xml="ignored",
+        feed_status=503,
+    )
+    response = client.post(
+        "/v1/me/substack/intents",
+        json={"pub_url": "lenny.substack.com"},
+        headers=headers,
+    )
+    # Intent creation still succeeds even though the prefetch HTTP 503'd.
+    assert response.status_code == 201
+    items = container.control_repository.list_recent_inbound_items(user.id, limit=10)
+    assert items == []

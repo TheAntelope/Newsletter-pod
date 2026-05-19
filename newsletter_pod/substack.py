@@ -15,13 +15,18 @@ without touching the webhook.
 from __future__ import annotations
 
 import hashlib
+import html as html_lib
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
+import feedparser
 import requests
+
+from .utils import parse_datetime, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +88,14 @@ class SubstackProbeResult:
     icon_url: Optional[str]
     has_paid_tier: bool
     feed_url: str
+
+
+@dataclass(frozen=True)
+class SubstackFeedPost:
+    title: str
+    link: str
+    summary: str
+    published_at: datetime
 
 
 def canonicalize_pub_url(raw: str) -> tuple[str, str]:
@@ -237,6 +250,92 @@ def match_intent_host(
         if _SUBSTACK_SENDER_PATTERN.search(sender_domain) and host in haystack:
             return pub_host
     return None
+
+
+_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+_FEED_FETCH_TIMEOUT_SECONDS = 10.0
+
+
+def _clean_post_summary(value: str) -> str:
+    if not value:
+        return ""
+    stripped = _HTML_TAG_PATTERN.sub(" ", value)
+    unescaped = html_lib.unescape(stripped)
+    return re.sub(r"\s+", " ", unescaped).strip()
+
+
+def fetch_latest_post(
+    feed_url: str,
+    *,
+    session: Optional[requests.Session] = None,
+) -> Optional[SubstackFeedPost]:
+    """Best-effort fetch of the most-recent free post from a Substack feed.
+
+    Why: a new intent otherwise sits empty until the publication next sends
+    out an email — which can be days for low-volume Substacks. Pulling the
+    latest post from `/feed` gives the user immediate material to mix into
+    their next podcast. Paid-only posts won't appear here (Substack's public
+    feed only carries free content), which is the desired behavior.
+
+    Returns None on any failure (network, parse, no entries with usable
+    link) so the caller can treat it as a non-blocking enhancement.
+    """
+    http = session or requests
+    try:
+        response = http.get(
+            feed_url,
+            headers={
+                "User-Agent": _PROBE_UA,
+                "Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8",
+            },
+            timeout=_FEED_FETCH_TIMEOUT_SECONDS,
+            allow_redirects=True,
+        )
+    except requests.RequestException as exc:
+        logger.info("Substack feed fetch raised: %s url=%s", exc, feed_url)
+        return None
+    if not response.ok:
+        logger.info(
+            "Substack feed fetch non-2xx: status=%s url=%s",
+            response.status_code,
+            feed_url,
+        )
+        return None
+
+    parsed = feedparser.parse(response.text or "")
+    entries = list(parsed.entries or [])
+    if not entries:
+        return None
+
+    entry = entries[0]
+    link = (entry.get("link") or "").strip()
+    if not link:
+        return None
+    title = (entry.get("title") or "").strip() or "Untitled post"
+
+    raw_summary = ""
+    if entry.get("summary"):
+        raw_summary = entry.get("summary")
+    elif entry.get("description"):
+        raw_summary = entry.get("description")
+    elif entry.get("content"):
+        content = entry.get("content")
+        if isinstance(content, list) and content:
+            raw_summary = content[0].get("value", "")
+    summary = _clean_post_summary(raw_summary)
+
+    published_at = (
+        parse_datetime(entry.get("published"))
+        or parse_datetime(entry.get("updated"))
+        or utc_now()
+    )
+
+    return SubstackFeedPost(
+        title=title,
+        link=link,
+        summary=summary,
+        published_at=published_at,
+    )
 
 
 def fetch_confirm_url(url: str, *, session: Optional[requests.Session] = None) -> bool:

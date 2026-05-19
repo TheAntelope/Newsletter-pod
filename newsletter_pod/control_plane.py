@@ -28,9 +28,11 @@ from .feedback_digest import (
 )
 from .inbound import ensure_user_inbound_alias
 from .substack import (
+    SubstackFeedPost,
     SubstackProbeResult,
     build_intent_id,
     canonicalize_pub_url,
+    fetch_latest_post,
     probe_publication,
 )
 from .ingestion import RSSIngestionService
@@ -64,6 +66,7 @@ from .user_models import (
     DeliveryScheduleRecord,
     FeedbackRecord,
     FeedTokenRecord,
+    InboundEmailItem,
     PodcastProfileRecord,
     SubscriptionRecord,
     SwipeRecord,
@@ -308,6 +311,7 @@ class ControlPlaneService:
         )
         self.repository.save_substack_intent(intent)
         self._seed_interest_from_substack_intent(intent)
+        self._prefetch_latest_post_for_intent(intent, probe.feed_url)
         logger.info(
             "Substack intent created: user=%s pub_host=%s intent_id=%s",
             user_id,
@@ -315,6 +319,66 @@ class ControlPlaneService:
             intent_id,
         )
         return {"intent": self._serialize_intent(intent)}
+
+    def _prefetch_latest_post_for_intent(
+        self,
+        intent: UserSubstackIntent,
+        feed_url: str,
+    ) -> None:
+        """Pull the publication's most-recent free post from its RSS feed and
+        store it as an InboundEmailItem so the user's next podcast can pick it
+        up immediately, instead of waiting for the publication's next email.
+
+        Best-effort: any failure (network, parse, no entries) is swallowed.
+        The item id is keyed on the post URL so re-running this for an idempotent
+        intent-create won't create duplicates.
+        """
+        try:
+            post = fetch_latest_post(feed_url)
+        except Exception:  # pragma: no cover — fetch is best-effort
+            logger.warning(
+                "Substack latest-post prefetch raised: user=%s pub_host=%s",
+                intent.user_id,
+                intent.pub_host,
+                exc_info=True,
+            )
+            return
+        if post is None:
+            return
+
+        item_id = link_hash(post.link)[:32]
+        if self.repository.get_inbound_item(item_id) is not None:
+            return
+
+        item = InboundEmailItem(
+            id=item_id,
+            user_id=intent.user_id,
+            message_id=None,
+            from_email=f"rss@{intent.pub_host}",
+            from_name=intent.pub_title or intent.pub_author or intent.pub_host,
+            sender_domain=intent.pub_host,
+            subject=post.title,
+            body_text=post.summary[:8000],
+            article_url=post.link,
+            received_at=post.published_at,
+        )
+        try:
+            self.repository.save_inbound_item(item)
+        except Exception:  # pragma: no cover — storage is best-effort here
+            logger.warning(
+                "Substack latest-post prefetch save failed: user=%s pub_host=%s",
+                intent.user_id,
+                intent.pub_host,
+                exc_info=True,
+            )
+            return
+        logger.info(
+            "Substack latest-post prefetched: user=%s pub_host=%s item_id=%s url=%s",
+            intent.user_id,
+            intent.pub_host,
+            item_id,
+            post.link,
+        )
 
     def _seed_interest_from_substack_intent(self, intent: UserSubstackIntent) -> None:
         """Seed the user's interest vector with the publication metadata so
