@@ -3248,10 +3248,13 @@ private struct OnboardingNewslettersStep: View {
     @State private var isSearching: Bool = false
     @State private var lastError: String?
     @State private var hasSearched: Bool = false
+    @State private var didAutoSearch: Bool = false
+    @FocusState private var isInputFocused: Bool
     let onBack: () -> Void
     let onContinue: () -> Void
 
     private let maxEntries = 5
+    private static let queryAnchorID = "newsletters-query-row"
 
     var body: some View {
         OnboardingStepShell(
@@ -3262,51 +3265,82 @@ private struct OnboardingNewslettersStep: View {
             onPrimary: onContinue,
             onBack: onBack
         ) {
-            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                queryRow
-                if let error = dictation.errorMessage {
-                    Text(error)
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(.red)
-                }
-                if let lastError {
-                    Text(lastError)
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(.red)
-                }
-                if isSearching {
-                    HStack(spacing: Theme.Spacing.s) {
-                        ProgressView()
-                        Text("Searching…")
+            ScrollViewReader { proxy in
+                VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                    queryRow
+                        .id(Self.queryAnchorID)
+                    if let error = dictation.errorMessage {
+                        Text(error)
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(.red)
+                    }
+                    if let lastError {
+                        Text(lastError)
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(.red)
+                    }
+                    if isSearching {
+                        HStack(spacing: Theme.Spacing.s) {
+                            ProgressView()
+                            Text("Searching…")
+                                .font(Theme.Typography.callout)
+                                .foregroundStyle(Theme.Palette.muted)
+                        }
+                    }
+                    if !candidates.isEmpty {
+                        suggestionsList
+                    } else if hasSearched && !isSearching {
+                        Text("No clear matches — try describing it differently, or paste a handle below.")
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.muted)
+                    } else if !hasSearched && !isSearching {
+                        Text("Try: \"AI strategy and platform regulation\", or \"longevity research and habits\", or just \"@stratechery\".")
                             .font(Theme.Typography.callout)
                             .foregroundStyle(Theme.Palette.muted)
                     }
+                    if !registered.isEmpty {
+                        Divider().padding(.vertical, 4)
+                        MetaLabel(text: "Added to your pod")
+                        ForEach(registered) { intent in
+                            registeredRow(intent)
+                        }
+                    }
+                    Button(action: onContinue) {
+                        Text("Skip — I don't have any in mind")
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.muted)
+                    }
+                    .buttonStyle(.plain)
                 }
-                if !candidates.isEmpty {
-                    suggestionsList
-                } else if hasSearched && !isSearching {
-                    Text("No clear matches — try describing it differently, or paste a handle below.")
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(Theme.Palette.muted)
-                } else if !hasSearched && !isSearching {
-                    Text("Try: \"AI strategy and platform regulation\", or \"longevity research and habits\", or just \"@stratechery\".")
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(Theme.Palette.muted)
-                }
-                if !registered.isEmpty {
-                    Divider().padding(.vertical, 4)
-                    MetaLabel(text: "Added to your pod")
-                    ForEach(registered) { intent in
-                        registeredRow(intent)
+                .onChange(of: isInputFocused) { _, focused in
+                    // Scroll the input to the top once the keyboard is up so the
+                    // title/subtitle slide out of view, leaving room for results
+                    // between the field and the footer buttons.
+                    guard focused else { return }
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(Self.queryAnchorID, anchor: .top)
                     }
                 }
-                Button(action: onContinue) {
-                    Text("Skip — I don't have any in mind")
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(Theme.Palette.muted)
-                }
-                .buttonStyle(.plain)
             }
+        }
+        .task { await autoSearchFromVoiceIntake() }
+    }
+
+    private func autoSearchFromVoiceIntake() async {
+        guard !didAutoSearch, !hasSearched, candidates.isEmpty else { return }
+        let transcript = (viewModel.lastVoiceIntakeTranscript ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !transcript.isEmpty else { return }
+        didAutoSearch = true
+        isSearching = true
+        hasSearched = true
+        let results = await viewModel.discoverSubstacks(query: transcript)
+        isSearching = false
+        candidates = results
+        if results.isEmpty {
+            // Reset so the user sees the example hints again instead of the
+            // "no clear matches" copy — they haven't actually searched yet.
+            hasSearched = false
         }
     }
 
@@ -3316,6 +3350,7 @@ private struct OnboardingNewslettersStep: View {
                 TextField("Describe what you read…", text: $input, axis: .vertical)
                     .lineLimit(1...3)
                     .textInputAutocapitalization(.sentences)
+                    .focused($isInputFocused)
                     .padding(Theme.Spacing.s)
                     .background(Color.white, in: RoundedRectangle(cornerRadius: 10))
                     .overlay(

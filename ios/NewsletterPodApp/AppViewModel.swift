@@ -34,6 +34,10 @@ final class AppViewModel: ObservableObject {
     @Published var activeRunID: String?
     @Published var showOnboarding: Bool = false
     @Published var selectedTab: DashboardTab = .home
+    /// Last transcript submitted via the onboarding voice intake step. We hold
+    /// onto it so the newsletters step can pre-search Substacks based on what
+    /// the user just told us, instead of waiting for them to retype it.
+    @Published var lastVoiceIntakeTranscript: String?
 
     let apiClient: APIClient
     let purchaseManager: PurchaseManager
@@ -484,10 +488,12 @@ final class AppViewModel: ObservableObject {
     func submitVoiceIntake(transcript: String) async -> VoiceIntakeAck? {
         guard let sessionToken else { return nil }
         do {
-            return try await apiClient.submitVoiceIntake(
+            let ack = try await apiClient.submitVoiceIntake(
                 token: sessionToken,
                 transcript: transcript
             )
+            lastVoiceIntakeTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ack
         } catch {
             errorMessage = error.localizedDescription
             return nil
