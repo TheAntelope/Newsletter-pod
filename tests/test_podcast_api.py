@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import requests
+
 from newsletter_pod.models import PodcastUxConfig
 from newsletter_pod.podcast_api import PodcastApiClient
 
@@ -336,6 +338,132 @@ def test_elevenlabs_clamps_speed_to_api_range(monkeypatch):
     tts_payloads = [payload for url, payload in calls if "/v1/text-to-speech/" in url]
     assert tts_payloads[0]["voice_settings"] == {"speed": 1.2}
     assert tts_payloads[1]["voice_settings"] == {"speed": 0.7}
+
+
+def test_elevenlabs_failure_falls_back_to_openai_tts(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    def fake_post(url, json, headers, timeout):
+        calls.append((url, json))
+        if url.endswith("/v1/responses"):
+            return FakeResponse(
+                json_data={
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": (
+                                        '{"episode_title":"2026-05-22: Briefing",'
+                                        '"show_notes":"- A",'
+                                        '"audio_segments":['
+                                        '{"role":"primary","text":"Hello there."}'
+                                        "]}"
+                                    ),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        if "/v1/text-to-speech/" in url:
+            # ElevenLabs is down — surface a real requests-level error.
+            raise requests.ConnectionError("eleven down")
+        if url.endswith("/v1/audio/speech"):
+            return FakeResponse(content=b"openai-mp3-bytes")
+        raise AssertionError(url)
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="gpt-4o-mini-tts",
+        tts_voice="alloy",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key="el-key",
+        elevenlabs_model="eleven_multilingual_v2",
+    )
+
+    generated = client.generate(
+        prompt="Source content",
+        title="Daily Briefing",
+        voice_id="RKCbSROXui75bk1SVpy8",
+    )
+
+    assert generated.audio_bytes == b"openai-mp3-bytes"
+    urls = [url for url, _ in calls]
+    # Order: responses (script) -> elevenlabs (fails) -> openai audio (fallback).
+    assert urls[0].endswith("/v1/responses")
+    assert "/v1/text-to-speech/" in urls[1]
+    assert urls[2].endswith("/v1/audio/speech")
+    fallback_payload = calls[2][1]
+    # Fallback must use the OpenAI default voice, not the ElevenLabs voice id.
+    assert fallback_payload["voice"] == "alloy"
+    assert fallback_payload["model"] == "gpt-4o-mini-tts"
+
+
+def test_elevenlabs_failure_falls_back_when_api_key_missing(monkeypatch):
+    """If the ElevenLabs key isn't configured the synth raises PodcastApiUnavailable;
+    the fallback should still kick in as long as OpenAI is configured."""
+    calls: list[tuple[str, dict]] = []
+
+    def fake_post(url, json, headers, timeout):
+        calls.append((url, json))
+        if url.endswith("/v1/responses"):
+            return FakeResponse(
+                json_data={
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": (
+                                        '{"episode_title":"E",'
+                                        '"show_notes":"x",'
+                                        '"audio_segments":['
+                                        '{"role":"primary","text":"Hello."}'
+                                        "]}"
+                                    ),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        if url.endswith("/v1/audio/speech"):
+            return FakeResponse(content=b"openai-mp3-bytes")
+        raise AssertionError(url)
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="gpt-4o-mini-tts",
+        tts_voice="alloy",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key=None,
+        elevenlabs_model="eleven_multilingual_v2",
+    )
+
+    generated = client.generate(
+        prompt="Source",
+        title="Daily Briefing",
+        voice_id="RKCbSROXui75bk1SVpy8",
+    )
+
+    assert generated.audio_bytes == b"openai-mp3-bytes"
 
 
 def test_stage_two_closing_segment_is_appended_when_ux_provided(monkeypatch):

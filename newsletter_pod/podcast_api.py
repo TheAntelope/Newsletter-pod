@@ -332,7 +332,19 @@ class PodcastApiClient:
     def _synthesize_speech(self, script: str, voice_id: Optional[str]) -> bytes:
         provider = (self.tts_provider or "openai").strip().lower()
         if provider == "elevenlabs":
-            return self._generate_elevenlabs_speech(script, voice_id)
+            try:
+                return self._generate_elevenlabs_speech(script, voice_id)
+            except (PodcastApiError, requests.RequestException) as exc:
+                if not self.api_key:
+                    # No OpenAI key configured — can't fall back.
+                    raise
+                # ElevenLabs voice IDs are not valid OpenAI voices, so we let
+                # the OpenAI call use its configured default voice.
+                logger.warning(
+                    "ElevenLabs TTS failed (%s); falling back to OpenAI TTS",
+                    exc,
+                )
+                return self._generate_openai_speech(script, voice_id=None)
         return self._generate_openai_speech(script, voice_id)
 
     def _speech_max_chars(self) -> int:
