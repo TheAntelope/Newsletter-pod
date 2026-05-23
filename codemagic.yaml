@@ -69,6 +69,10 @@ workflows:
               LATEST_BUILD_NUMBER=$AS_BUILD
             fi
             echo "Latest build: TestFlight=$TF_BUILD AppStore=$AS_BUILD -> using $LATEST_BUILD_NUMBER"
+            if [ "$LATEST_BUILD_NUMBER" -eq 0 ]; then
+              echo "ERROR: both get-latest-testflight-build-number and get-latest-app-store-build-number returned 0. ASC API may be down or the integration token is broken — refusing to upload CFBundleVersion=1." >&2
+              exit 1
+            fi
           fi
           NEXT_BUILD_NUMBER=$((LATEST_BUILD_NUMBER + 1))
           echo "Setting CFBundleVersion to $NEXT_BUILD_NUMBER"
