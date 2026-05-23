@@ -53,15 +53,25 @@ workflows:
       - name: Increment build number
         script: |
           cd "$CM_BUILD_DIR/ios"
+          # `app-store-connect get-latest-build-number` filters by the latest
+          # App Store version it finds (e.g. a draft 1.1), which misses builds
+          # uploaded against an older version line — caused 5 consecutive
+          # TestFlight upload failures stuck at build 93 in May 2026. Query
+          # TestFlight and App Store directly and take the max instead.
+          LATEST_BUILD_NUMBER=0
           if [ -n "$APP_STORE_APPLE_ID" ]; then
-            LATEST_BUILD_NUMBER=$(app-store-connect get-latest-build-number "$APP_STORE_APPLE_ID")
-            if [ -z "$LATEST_BUILD_NUMBER" ]; then
-              LATEST_BUILD_NUMBER=0
+            TF_BUILD=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" --platform IOS 2>/dev/null || echo 0)
+            AS_BUILD=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APPLE_ID" --platform IOS 2>/dev/null || echo 0)
+            case "$TF_BUILD" in ''|*[!0-9]*) TF_BUILD=0 ;; esac
+            case "$AS_BUILD" in ''|*[!0-9]*) AS_BUILD=0 ;; esac
+            LATEST_BUILD_NUMBER=$TF_BUILD
+            if [ "$AS_BUILD" -gt "$LATEST_BUILD_NUMBER" ]; then
+              LATEST_BUILD_NUMBER=$AS_BUILD
             fi
-            NEXT_BUILD_NUMBER=$(($LATEST_BUILD_NUMBER + 1))
-          else
-            NEXT_BUILD_NUMBER="${BUILD_NUMBER:-1}"
+            echo "Latest build: TestFlight=$TF_BUILD AppStore=$AS_BUILD -> using $LATEST_BUILD_NUMBER"
           fi
+          NEXT_BUILD_NUMBER=$((LATEST_BUILD_NUMBER + 1))
+          echo "Setting CFBundleVersion to $NEXT_BUILD_NUMBER"
           agvtool new-version -all "$NEXT_BUILD_NUMBER"
       - name: Patch Info.plist for App Store validation
         script: |
