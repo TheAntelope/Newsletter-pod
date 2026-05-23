@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from datetime import date, datetime, timedelta
 from typing import Optional
 
+from google.api_core import exceptions as gax_exceptions
 from google.cloud import firestore
 
 from .models import SourceItemRecord, SwipeDeckRecord
@@ -204,6 +205,20 @@ class ControlPlaneRepository(ABC):
 
     @abstractmethod
     def list_recent_inbound_items(self, user_id: str, limit: int) -> list[InboundEmailItem]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_unconsumed_inbound_items(self, user_id: str) -> list[InboundEmailItem]:
+        """Return all inbound items for `user_id` where `consumed_at` is None,
+        oldest-first so callers can include them in chronological order."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def mark_inbound_items_consumed(
+        self, item_ids: list[str], consumed_at: datetime
+    ) -> None:
+        """Stamp `consumed_at` on the given inbound items. No-op for ids
+        already consumed or not present."""
         raise NotImplementedError
 
     @abstractmethod
@@ -551,6 +566,26 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         items = [item for item in self._inbound_items.values() if item.user_id == user_id]
         items.sort(key=lambda item: item.received_at, reverse=True)
         return items[:limit]
+
+    def list_unconsumed_inbound_items(self, user_id: str) -> list[InboundEmailItem]:
+        items = [
+            item
+            for item in self._inbound_items.values()
+            if item.user_id == user_id and item.consumed_at is None
+        ]
+        items.sort(key=lambda item: item.received_at)
+        return items
+
+    def mark_inbound_items_consumed(
+        self, item_ids: list[str], consumed_at: datetime
+    ) -> None:
+        for item_id in item_ids:
+            existing = self._inbound_items.get(item_id)
+            if existing is None or existing.consumed_at is not None:
+                continue
+            self._inbound_items[item_id] = existing.model_copy(
+                update={"consumed_at": consumed_at}
+            )
 
     def save_feedback(self, feedback: FeedbackRecord) -> None:
         self._feedback[feedback.id] = feedback
@@ -1066,6 +1101,39 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
                 .stream()
         )
         return [InboundEmailItem.model_validate(doc.to_dict()) for doc in docs]
+
+    def list_unconsumed_inbound_items(self, user_id: str) -> list[InboundEmailItem]:
+        # Firestore won't let us combine an equality filter with "consumed_at
+        # IS NULL" without a composite index, so we filter consumed_at in
+        # Python. The per-user inbound volume is small (one user's mail), so
+        # the scan is cheap.
+        docs = list(
+            self._inbound_items
+                .where("user_id", "==", user_id)
+                .stream()
+        )
+        items: list[InboundEmailItem] = []
+        for doc in docs:
+            item = InboundEmailItem.model_validate(doc.to_dict())
+            if item.consumed_at is None:
+                items.append(item)
+        items.sort(key=lambda item: item.received_at)
+        return items
+
+    def mark_inbound_items_consumed(
+        self, item_ids: list[str], consumed_at: datetime
+    ) -> None:
+        # Volume per episode is small (a handful of inbound items at most),
+        # so we do individual updates rather than a batch — that way a doc
+        # deleted between read and write (NotFound) doesn't fail the others
+        # and won't get recreated as a stub the way set(merge=True) would.
+        for item_id in item_ids:
+            try:
+                self._inbound_items.document(item_id).update(
+                    {"consumed_at": consumed_at}
+                )
+            except gax_exceptions.NotFound:
+                continue
 
     def save_feedback(self, feedback: FeedbackRecord) -> None:
         self._feedback.document(feedback.id).set(feedback.model_dump(mode="python"))

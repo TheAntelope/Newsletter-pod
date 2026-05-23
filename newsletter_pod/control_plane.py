@@ -32,6 +32,7 @@ from .substack import (
     SubstackProbeResult,
     build_intent_id,
     canonicalize_pub_url,
+    extract_confirm_url,
     fetch_latest_post,
     probe_publication,
 )
@@ -168,6 +169,55 @@ class _UserCursorRepositoryAdapter:
 
     def update_source_cursors(self, cursors: dict[str, datetime]) -> None:
         self._repository.update_user_source_cursors(self._user_id, cursors)
+
+
+def _inbound_item_to_source_item(
+    item: InboundEmailItem,
+    intent_by_host: dict[str, UserSubstackIntent],
+) -> SourceItem:
+    """Project an inbound newsletter email into the same shape as an RSS item
+    so the digest pipeline (ranker, cap, prompt builder) can treat both
+    uniformly. Source attribution prefers a matched Substack intent's title
+    (the publication name the user actually subscribed to) over the raw
+    sender domain.
+    """
+    host = (item.sender_domain or "").lower()
+    intent = intent_by_host.get(host)
+    if intent and intent.pub_title:
+        source_name = intent.pub_title
+    elif item.from_name:
+        source_name = item.from_name
+    else:
+        source_name = host or "Forwarded mail"
+    source_id = f"inbound:{host or item.from_email or item.id}"
+    # SourceItem.link is required (not Optional). When the inbound mail has
+    # no extractable "read on web" URL, fall back to a deterministic
+    # synthetic link so the field is populated and ref-tracking still works.
+    link = item.article_url or f"clawcast://inbound/{item.id}"
+    summary = item.body_text or item.subject or ""
+    return SourceItem(
+        source_id=source_id,
+        source_name=source_name,
+        guid=item.message_id or item.id,
+        link=link,
+        title=item.subject or "Untitled newsletter",
+        summary=summary,
+        published_at=item.received_at,
+        dedupe_key=f"inbound:{item.id}",
+    )
+
+
+def _is_substack_confirmation_email(item: InboundEmailItem) -> bool:
+    """Substack double-opt-in confirmation mails are stored as InboundEmailItem
+    alongside real posts (the inbound handler doesn't drop them). Detect
+    them so the digest pipeline doesn't drag a "Confirm your subscription
+    to X" into a user's podcast script.
+    """
+    if not item.sender_domain:
+        return False
+    if "substack.com" not in item.sender_domain.lower():
+        return False
+    return extract_confirm_url(item.body_text or "") is not None
 
 
 @dataclass
@@ -1486,7 +1536,50 @@ class ControlPlaneService:
                 user_id,
                 exc_info=True,
             )
-        candidate_count = len(ingestion.items)
+
+        # Pull unconsumed inbound items (Substack newsletter posts via alias,
+        # forwarded mail, prefetched latest-post-on-intent-create) and project
+        # them into the same SourceItem shape as RSS items so they flow
+        # through the existing ranker/cap/prompt pipeline. consumed_at gets
+        # stamped after the episode publishes, but only on items that survive
+        # into source_item_refs.
+        try:
+            raw_inbound = self.repository.list_unconsumed_inbound_items(user_id)
+        except Exception:  # pragma: no cover — non-fatal, fall back to RSS-only
+            logger.warning(
+                "Listing unconsumed inbound items failed for user=%s; "
+                "continuing without inbound content",
+                user_id,
+                exc_info=True,
+            )
+            raw_inbound = []
+        try:
+            intents = self.repository.list_user_substack_intents(user_id)
+        except Exception:  # pragma: no cover
+            intents = []
+        intent_by_host = {intent.pub_host.lower(): intent for intent in intents}
+        inbound_items: list[InboundEmailItem] = []
+        inbound_source_items: list[SourceItem] = []
+        inbound_dedupe_to_item_id: dict[str, str] = {}
+        for inbound_item in raw_inbound:
+            if _is_substack_confirmation_email(inbound_item):
+                continue
+            source_item = _inbound_item_to_source_item(inbound_item, intent_by_host)
+            inbound_items.append(inbound_item)
+            inbound_source_items.append(source_item)
+            inbound_dedupe_to_item_id[source_item.dedupe_key] = inbound_item.id
+        if inbound_source_items:
+            logger.info(
+                "Inbound items merged into candidate pool: user=%s count=%d "
+                "intents=%d",
+                user_id,
+                len(inbound_source_items),
+                len(intent_by_host),
+            )
+
+        combined_candidates = ingestion.items + inbound_source_items
+        combined_candidates.sort(key=lambda item: item.published_at)
+        candidate_count = len(combined_candidates)
         if candidate_count == 0:
             self.repository.update_user_source_cursors(user_id, ingestion.cursor_updates)
             run = UserRunRecord(
@@ -1502,7 +1595,7 @@ class ControlPlaneService:
             self.repository.save_user_run(run)
             return run.model_dump(mode="json")
 
-        items = ingestion.items
+        items = combined_candidates
         dropped_count = 0
         cap_hit = False
         ranked_items = self._apply_swipe_ranker(user_id, items, entitlements.max_items_per_episode)
@@ -1607,6 +1700,29 @@ class ControlPlaneService:
         )
         self.repository.save_user_episode(episode)
         self.repository.update_user_source_cursors(user_id, ingestion.cursor_updates)
+
+        # Stamp consumed_at on the inbound items that survived ranker + cap
+        # into this episode. Items that got dropped stay unconsumed so they
+        # can be picked up on the next run. Best-effort: a failure here
+        # would only cause an item to be retried (i.e. duplicated in a
+        # later episode), so we log and continue rather than fail the run.
+        consumed_inbound_ids = [
+            inbound_dedupe_to_item_id[item.dedupe_key]
+            for item in items
+            if item.dedupe_key in inbound_dedupe_to_item_id
+        ]
+        if consumed_inbound_ids:
+            try:
+                self.repository.mark_inbound_items_consumed(
+                    consumed_inbound_ids, consumed_at=utc_now()
+                )
+            except Exception:  # pragma: no cover — non-fatal
+                logger.warning(
+                    "Marking inbound items consumed failed: user=%s count=%d",
+                    user_id,
+                    len(consumed_inbound_ids),
+                    exc_info=True,
+                )
 
         # Charge this episode against the appropriate per-week counter. If we
         # used premium voice and the user is still in trial, also decrement
