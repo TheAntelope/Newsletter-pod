@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
@@ -775,6 +776,62 @@ def test_apply_swipe_ranker_orders_items_by_user_vector_when_enabled():
     # is below east (it was left-swiped). Top 2 should be east + north,
     # restored to chronological order (east at index 0, north at index 1).
     assert [item.dedupe_key for item in ranked] == ["east", "north"]
+
+
+def test_apply_swipe_ranker_boosts_inbound_dedupe_keys_above_weak_rss_match():
+    from newsletter_pod.models import SourceItem
+
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("ranker-boost-user", "rb@example.com"))
+
+    # Seed swipes that build a user_vector pointing east, with an RSS item
+    # whose embedding is only weakly east-aligned (cosine ≈ 0.3). The inbound
+    # item has no embedding (neutral score 0.0). Without bias, the RSS item
+    # wins the top_n=1 slot; with a 0.5 bias it loses to the inbound item.
+    _seed_source_item(container, "rss-weak", embedding=[0.3, math.sqrt(1 - 0.09)])
+    _seed_source_item(container, "rss-east", embedding=[1.0, 0.0])
+    for direction in (1, 1, 1):
+        client.post(
+            "/v1/me/swipes",
+            json={"source_item_dedupe_key": "rss-east", "direction": direction},
+            headers=headers,
+        )
+    user_id = list(container.control_repository._swipes.values())[0].user_id
+
+    container.control_plane.settings.swipe_ranker_enabled = True
+    container.control_plane.settings.swipe_ranker_min_swipes = 1
+    container.control_plane.settings.inbound_ranker_bias = 0.5
+
+    items = [
+        SourceItem(
+            source_id="src", source_name="Source",
+            guid="rss-weak", link="https://example.com/rss",
+            title="rss", summary="x",
+            published_at=datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc),
+            dedupe_key="rss-weak",
+        ),
+        SourceItem(
+            source_id="inbound:example.com", source_name="Inbound Pub",
+            guid="inbound-key", link="https://example.com/inbound",
+            title="inbound", summary="x",
+            published_at=datetime(2026, 5, 11, 12, 1, tzinfo=timezone.utc),
+            dedupe_key="inbound:high-intent",
+        ),
+    ]
+
+    without_bias = container.control_plane._apply_swipe_ranker(
+        user_id, items, top_n=1, boosted_dedupe_keys=set()
+    )
+    assert [item.dedupe_key for item in without_bias] == ["rss-weak"], (
+        "control: without the inbound key in boosted set, RSS wins on cosine"
+    )
+
+    with_bias = container.control_plane._apply_swipe_ranker(
+        user_id, items, top_n=1, boosted_dedupe_keys={"inbound:high-intent"}
+    )
+    assert [item.dedupe_key for item in with_bias] == ["inbound:high-intent"], (
+        "bias of 0.5 should beat RSS cosine of 0.3"
+    )
 
 
 def test_cold_start_swipe_deck_endpoint_returns_centroid_items():

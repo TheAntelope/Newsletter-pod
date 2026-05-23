@@ -101,6 +101,16 @@ class Settings(BaseSettings):
     swipe_ranker_enabled: bool = Field(default=True, alias="SWIPE_RANKER_ENABLED")
     swipe_ranker_min_swipes: int = Field(default=3, alias="SWIPE_RANKER_MIN_SWIPES")
 
+    # Score bonus added to inbound newsletter items (Substack subscriptions,
+    # forwarded mail, prefetched-on-intent posts) when the swipe ranker is
+    # active. The bonus is added to cosine_similarity(user_vector, item) in
+    # [-1, +1] space, so +0.25 reliably places inbound items above the bulk
+    # of RSS items but still lets a strongly-aligned RSS item rank above
+    # them. Set to 0.0 to disable; raise toward 1.0 to make inbound content
+    # nearly always survive the per-episode cap. Has no effect on users
+    # below swipe_ranker_min_swipes (chronological fallback ignores it).
+    inbound_ranker_bias: float = Field(default=0.25, alias="INBOUND_RANKER_BIAS")
+
     # Voice-intake LLM model. Light extraction task; default to a fast/cheap
     # model since the prompt is small and the output is structured JSON.
     voice_intake_model: str = Field(default="gpt-4o-mini", alias="VOICE_INTAKE_MODEL")

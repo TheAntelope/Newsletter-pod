@@ -69,3 +69,32 @@ def test_rank_items_handles_top_n_greater_than_corpus():
 def test_rank_items_returns_empty_for_zero_top_n_or_no_items():
     assert rank_items([_item("a")], [1.0], lambda key: [1.0], top_n=0) == []
     assert rank_items([], [1.0], lambda key: [1.0], top_n=5) == []
+
+
+def test_rank_items_bias_lookup_flips_order_when_bias_exceeds_similarity_gap():
+    # Boosted inbound "b" (no embedding, score 0 + 0.5 bias = 0.5) should
+    # beat weakly-positive RSS "a" (cos = 0.3, no bias).
+    items = [_item("a", minutes_offset=0), _item("b", minutes_offset=10)]
+    # Use a user_vector and embedding pair that produces cosine = 0.3 exactly.
+    user_vector = [1.0, 0.0]
+    embeddings = {"a": [0.3, math.sqrt(1 - 0.09)]}  # cos = 0.3
+    bias = {"b": 0.5}
+    ranked = rank_items(
+        items,
+        user_vector,
+        embeddings.get,
+        top_n=1,
+        bias_lookup=lambda key: bias.get(key, 0.0),
+    )
+    assert [item.dedupe_key for item in ranked] == ["b"]
+
+
+def test_rank_items_bias_lookup_zero_for_unknown_keys_is_default_safe():
+    # bias_lookup omitted entirely should behave identically to passing
+    # `lambda key: 0.0` — the existing tests already prove that path; here
+    # we just assert the optional arg defaults to None without side effects.
+    items = [_item("a"), _item("b")]
+    embeddings = {"a": [1.0, 0.0]}  # b unscored
+    user_vector = [1.0, 0.0]
+    ranked = rank_items(items, user_vector, embeddings.get, top_n=2)
+    assert [item.dedupe_key for item in ranked] == ["a", "b"]

@@ -1598,7 +1598,12 @@ class ControlPlaneService:
         items = combined_candidates
         dropped_count = 0
         cap_hit = False
-        ranked_items = self._apply_swipe_ranker(user_id, items, entitlements.max_items_per_episode)
+        ranked_items = self._apply_swipe_ranker(
+            user_id,
+            items,
+            entitlements.max_items_per_episode,
+            boosted_dedupe_keys=set(inbound_dedupe_to_item_id),
+        )
         if ranked_items is not None:
             if len(ranked_items) < len(items):
                 cap_hit = True
@@ -2276,12 +2281,17 @@ class ControlPlaneService:
         user_id: str,
         items: list[SourceItem],
         top_n: int,
+        boosted_dedupe_keys: Optional[set[str]] = None,
     ) -> Optional[list[SourceItem]]:
         """Score and select items by similarity to the user's interest vector.
 
         Returns None when the ranker is disabled, the user has too few swipes
         to produce a meaningful vector, or no usable embeddings can be loaded —
         in which case the caller falls back to chronological selection.
+
+        `boosted_dedupe_keys`, if provided, receives a positive score bonus
+        (`settings.inbound_ranker_bias`) so high-intent content like inbound
+        newsletter mail outranks neutrally-scored RSS items at the cap.
         """
         candidate_count = len(items)
         if not self.settings.swipe_ranker_enabled or top_n <= 0:
@@ -2319,17 +2329,28 @@ class ControlPlaneService:
             return None
         records = self.repository.get_source_items([item.dedupe_key for item in items])
         embedding_by_key = {record.dedupe_key: record.embedding for record in records}
-        ranked = rank_items(items, user_vector, embedding_by_key.get, top_n)
+        bias_value = self.settings.inbound_ranker_bias
+        boosted = boosted_dedupe_keys or set()
+        bias_lookup = (
+            (lambda key: bias_value if key in boosted else 0.0)
+            if boosted and bias_value
+            else None
+        )
+        ranked = rank_items(
+            items, user_vector, embedding_by_key.get, top_n, bias_lookup=bias_lookup
+        )
         embeddings_resolved = sum(
             1 for item in items if embedding_by_key.get(item.dedupe_key)
         )
         logger.info(
             "swipe_ranker user=%s used=true swipes=%d candidates=%d "
-            "embeddings_resolved=%d top_n=%d returned=%d",
+            "embeddings_resolved=%d boosted=%d bias=%.3f top_n=%d returned=%d",
             user_id,
             swipe_count,
             candidate_count,
             embeddings_resolved,
+            len(boosted),
+            bias_value,
             top_n,
             len(ranked),
         )
