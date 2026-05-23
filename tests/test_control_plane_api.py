@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
@@ -7,7 +8,7 @@ from fastapi.testclient import TestClient
 from newsletter_pod.ingestion import IngestionResult, RSSIngestionService
 from newsletter_pod.main import _build_container, create_app
 from newsletter_pod.models import AudioSegment, GeneratedEpisode, SourceItem
-from newsletter_pod.user_models import UserEpisodeRecord
+from newsletter_pod.user_models import InboundEmailItem, UserEpisodeRecord, UserSubstackIntent
 
 
 class FakeAppleVerifier:
@@ -777,6 +778,62 @@ def test_apply_swipe_ranker_orders_items_by_user_vector_when_enabled():
     assert [item.dedupe_key for item in ranked] == ["east", "north"]
 
 
+def test_apply_swipe_ranker_boosts_inbound_dedupe_keys_above_weak_rss_match():
+    from newsletter_pod.models import SourceItem
+
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("ranker-boost-user", "rb@example.com"))
+
+    # Seed swipes that build a user_vector pointing east, with an RSS item
+    # whose embedding is only weakly east-aligned (cosine ≈ 0.3). The inbound
+    # item has no embedding (neutral score 0.0). Without bias, the RSS item
+    # wins the top_n=1 slot; with a 0.5 bias it loses to the inbound item.
+    _seed_source_item(container, "rss-weak", embedding=[0.3, math.sqrt(1 - 0.09)])
+    _seed_source_item(container, "rss-east", embedding=[1.0, 0.0])
+    for direction in (1, 1, 1):
+        client.post(
+            "/v1/me/swipes",
+            json={"source_item_dedupe_key": "rss-east", "direction": direction},
+            headers=headers,
+        )
+    user_id = list(container.control_repository._swipes.values())[0].user_id
+
+    container.control_plane.settings.swipe_ranker_enabled = True
+    container.control_plane.settings.swipe_ranker_min_swipes = 1
+    container.control_plane.settings.inbound_ranker_bias = 0.5
+
+    items = [
+        SourceItem(
+            source_id="src", source_name="Source",
+            guid="rss-weak", link="https://example.com/rss",
+            title="rss", summary="x",
+            published_at=datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc),
+            dedupe_key="rss-weak",
+        ),
+        SourceItem(
+            source_id="inbound:example.com", source_name="Inbound Pub",
+            guid="inbound-key", link="https://example.com/inbound",
+            title="inbound", summary="x",
+            published_at=datetime(2026, 5, 11, 12, 1, tzinfo=timezone.utc),
+            dedupe_key="inbound:high-intent",
+        ),
+    ]
+
+    without_bias = container.control_plane._apply_swipe_ranker(
+        user_id, items, top_n=1, boosted_dedupe_keys=set()
+    )
+    assert [item.dedupe_key for item in without_bias] == ["rss-weak"], (
+        "control: without the inbound key in boosted set, RSS wins on cosine"
+    )
+
+    with_bias = container.control_plane._apply_swipe_ranker(
+        user_id, items, top_n=1, boosted_dedupe_keys={"inbound:high-intent"}
+    )
+    assert [item.dedupe_key for item in with_bias] == ["inbound:high-intent"], (
+        "bias of 0.5 should beat RSS cosine of 0.3"
+    )
+
+
 def test_cold_start_swipe_deck_endpoint_returns_centroid_items():
     container, client = _build_app()
     _, headers = _auth_headers(client, FakeAppleVerifier("deck-cold-user", "dc@example.com"))
@@ -1307,6 +1364,215 @@ def test_process_user_generation_records_visible_cap(monkeypatch):
     assert "**Sources**" in description
     assert "- **Source A** — [Story Two](https://example.com/2)" in description
     assert "https://example.com/1" not in description
+
+
+def _seed_user_for_inbound_run(client, container, monkeypatch, *, email, subject):
+    """Common scaffolding for the inbound-merge tests: auth a user, attach a
+    source so the no-sources short-circuit doesn't fire, swap in a stub
+    podcast client, and stub RSS to return no items (so the only candidates
+    are inbound). Returns (user_id, headers)."""
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier(subject, email)
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    user_id = auth.json()["user"]["id"]
+    headers = {"Authorization": f"Bearer {auth.json()['session_token']}"}
+    catalog = client.get("/v1/sources/catalog").json()["sources"]
+    client.put(
+        "/v1/me/sources",
+        json={"sources": [{"source_id": catalog[0]["source_id"]}]},
+        headers=headers,
+    )
+    container.control_plane.podcast_client = FakePodcastClient()
+    monkeypatch.setattr(
+        RSSIngestionService,
+        "fetch_new_items",
+        lambda self, sources: IngestionResult(items=[], cursor_updates={}),
+    )
+    return user_id, headers
+
+
+def test_process_user_generation_pulls_unconsumed_inbound_items_into_episode(monkeypatch):
+    container, client = _build_app()
+    user_id, _ = _seed_user_for_inbound_run(
+        client, container, monkeypatch,
+        email="inbound@example.com", subject="apple-inbound-1",
+    )
+
+    repo = container.control_plane.repository
+    received_at = datetime(2026, 4, 15, 8, 0, tzinfo=timezone.utc)
+    inbound_item = InboundEmailItem(
+        id="inbound-item-1",
+        user_id=user_id,
+        message_id="<msg-1@stratechery.com>",
+        from_email="ben@stratechery.com",
+        from_name="Ben Thompson",
+        sender_domain="stratechery.com",
+        subject="The Aggregation Layer",
+        body_text="Today we are talking about platform aggregation theory.",
+        article_url="https://stratechery.com/aggregation",
+        received_at=received_at,
+    )
+    repo.save_inbound_item(inbound_item)
+
+    result = client.post(
+        "/jobs/process-user-podcast",
+        json={"user_id": user_id, "force": True},
+    )
+    assert result.status_code == 200, result.text
+    payload = result.json()
+    assert payload["run"]["candidate_count"] == 1
+    refs = payload["episode"]["source_item_refs"]
+    assert len(refs) == 1
+    assert refs[0]["link"] == "https://stratechery.com/aggregation"
+    assert refs[0]["source_name"] == "Ben Thompson"
+    assert refs[0]["title"] == "The Aggregation Layer"
+
+    stored = repo.get_inbound_item("inbound-item-1")
+    assert stored is not None
+    assert stored.consumed_at is not None, "consumed_at should be stamped on the included item"
+
+
+def test_substack_intent_pub_title_overrides_inbound_source_name(monkeypatch):
+    container, client = _build_app()
+    user_id, _ = _seed_user_for_inbound_run(
+        client, container, monkeypatch,
+        email="intent@example.com", subject="apple-inbound-2",
+    )
+
+    repo = container.control_plane.repository
+    repo.save_substack_intent(
+        UserSubstackIntent(
+            id="intent-1",
+            user_id=user_id,
+            pub_url="https://heathercoxrichardson.substack.com",
+            pub_host="heathercoxrichardson.substack.com",
+            pub_title="Letters from an American",
+            pub_author="Heather Cox Richardson",
+            alias_email="user@theclawcast.com",
+            created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+            confirmed_at=datetime(2026, 4, 2, tzinfo=timezone.utc),
+        )
+    )
+    repo.save_inbound_item(
+        InboundEmailItem(
+            id="inbound-item-2",
+            user_id=user_id,
+            message_id="<msg-2@substack.com>",
+            from_email="noreply@heathercoxrichardson.substack.com",
+            from_name="Heather Cox Richardson",
+            sender_domain="heathercoxrichardson.substack.com",
+            subject="May 22, 2026",
+            body_text="Today in history...",
+            article_url="https://heathercoxrichardson.substack.com/p/may-22",
+            received_at=datetime(2026, 4, 15, 9, 0, tzinfo=timezone.utc),
+        )
+    )
+
+    result = client.post(
+        "/jobs/process-user-podcast",
+        json={"user_id": user_id, "force": True},
+    )
+    assert result.status_code == 200, result.text
+    refs = result.json()["episode"]["source_item_refs"]
+    assert len(refs) == 1
+    assert refs[0]["source_name"] == "Letters from an American"
+
+
+def test_substack_confirmation_email_is_filtered_out_of_candidates(monkeypatch):
+    container, client = _build_app()
+    user_id, _ = _seed_user_for_inbound_run(
+        client, container, monkeypatch,
+        email="confirm@example.com", subject="apple-inbound-3",
+    )
+
+    repo = container.control_plane.repository
+    repo.save_inbound_item(
+        InboundEmailItem(
+            id="confirm-item",
+            user_id=user_id,
+            message_id="<confirm-1@substack.com>",
+            from_email="no-reply@substack.com",
+            from_name="Substack",
+            sender_domain="substack.com",
+            subject="Confirm your subscription to Stratechery",
+            body_text=(
+                "Click the link below to confirm your subscription.\n"
+                "https://substack.com/redeem/abcdef1234567890"
+            ),
+            article_url=None,
+            received_at=datetime(2026, 4, 15, 7, 0, tzinfo=timezone.utc),
+        )
+    )
+
+    result = client.post(
+        "/jobs/process-user-podcast",
+        json={"user_id": user_id, "force": True},
+    )
+    assert result.status_code == 200, result.text
+    # No-content path returns the run record flat (no "run" / "episode" wrapper).
+    payload = result.json()
+    assert payload["status"] == "no_content"
+    assert payload["candidate_count"] == 0
+    stored = repo.get_inbound_item("confirm-item")
+    assert stored is not None
+    assert stored.consumed_at is None, (
+        "Confirmation emails are filtered before the ranker, "
+        "so consumed_at should never be set on them"
+    )
+
+
+def test_inbound_items_dropped_by_cap_stay_unconsumed(monkeypatch):
+    container, client = _build_app()
+    user_id, _ = _seed_user_for_inbound_run(
+        client, container, monkeypatch,
+        email="cap@example.com", subject="apple-inbound-4",
+    )
+    container.settings.free_max_items_per_episode = 1
+
+    repo = container.control_plane.repository
+    older = InboundEmailItem(
+        id="inbound-older",
+        user_id=user_id,
+        message_id="<older@example.com>",
+        from_email="news@example.com",
+        from_name="Example Daily",
+        sender_domain="example.com",
+        subject="Older story",
+        body_text="Older body.",
+        article_url="https://example.com/older",
+        received_at=datetime(2026, 4, 15, 8, 0, tzinfo=timezone.utc),
+    )
+    newer = InboundEmailItem(
+        id="inbound-newer",
+        user_id=user_id,
+        message_id="<newer@example.com>",
+        from_email="news@example.com",
+        from_name="Example Daily",
+        sender_domain="example.com",
+        subject="Newer story",
+        body_text="Newer body.",
+        article_url="https://example.com/newer",
+        received_at=datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc),
+    )
+    repo.save_inbound_item(older)
+    repo.save_inbound_item(newer)
+
+    result = client.post(
+        "/jobs/process-user-podcast",
+        json={"user_id": user_id, "force": True},
+    )
+    assert result.status_code == 200, result.text
+    payload = result.json()
+    assert payload["run"]["candidate_count"] == 2
+    refs = payload["episode"]["source_item_refs"]
+    assert len(refs) == 1
+    kept_link = refs[0]["link"]
+    assert kept_link == "https://example.com/newer"
+
+    # Newer was included (consumed_at set), older was dropped (still unconsumed).
+    stored_newer = repo.get_inbound_item("inbound-newer")
+    stored_older = repo.get_inbound_item("inbound-older")
+    assert stored_newer.consumed_at is not None
+    assert stored_older.consumed_at is None
 
 
 def test_weekly_update_segment_stamps_user_once_per_iso_week(monkeypatch):

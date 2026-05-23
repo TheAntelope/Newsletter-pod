@@ -23,17 +23,26 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (math.sqrt(norm_a) * math.sqrt(norm_b))
 
 
+BiasLookup = Callable[[str], float]
+
+
 def rank_items(
     items: list[SourceItem],
     user_vector: list[float],
     embedding_lookup: EmbeddingLookup,
     top_n: int,
+    bias_lookup: Optional[BiasLookup] = None,
 ) -> list[SourceItem]:
     """Order items by similarity to user_vector (descending), take the top N,
     then restore chronological order for the downstream prompt builder.
 
     Items without a known embedding receive a neutral score of 0.0 — they
     rank below positively-scored items but above negatively-scored ones.
+
+    `bias_lookup`, when provided, returns a float added to each item's
+    score by dedupe_key. Used to boost high-intent content (e.g. inbound
+    newsletter mail the user explicitly subscribed to) so it survives the
+    cap against passively-attached RSS items at neutral similarity.
     """
     if top_n <= 0 or not items:
         return []
@@ -42,6 +51,8 @@ def rank_items(
     for index, item in enumerate(items):
         embedding = embedding_lookup(item.dedupe_key)
         score = cosine_similarity(user_vector, embedding) if embedding else 0.0
+        if bias_lookup is not None:
+            score += bias_lookup(item.dedupe_key)
         scored.append((score, index, item))
 
     # Stable: ties fall back to original (chronological) order.
