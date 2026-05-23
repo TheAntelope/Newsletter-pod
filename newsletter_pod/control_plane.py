@@ -1802,12 +1802,39 @@ class ControlPlaneService:
 
     def start_user_generation(self, user_id: str, force: bool = False) -> dict[str, Any]:
         self._require_user(user_id)
+        now_utc = utc_now()
         existing = self.repository.find_in_progress_user_run(user_id)
         if existing is not None:
-            return {"run": existing.model_dump(mode="json"), "started": False}
+            stale_after = timedelta(
+                minutes=self.settings.generation_stale_after_minutes
+            )
+            age = now_utc - existing.started_at
+            if age <= stale_after:
+                return {"run": existing.model_dump(mode="json"), "started": False}
+            # Orphaned: background task was almost certainly killed by Cloud
+            # Run reclaiming the instance mid-generation, so this row will
+            # never transition on its own. Flip it to FAILED so iOS stops
+            # polling a dead run and the user can start fresh. We accept the
+            # rare race where the original task is genuinely still running
+            # and writes a real result later — its writes would overwrite
+            # this FAILED, which is recoverable; the user-facing alternative
+            # (a wedged Generate button) is not.
+            existing.status = PublishStatus.FAILED.value
+            existing.message = (
+                f"Generation orphaned after "
+                f"{int(age.total_seconds() // 60)} minutes without completing"
+            )
+            existing.completed_at = now_utc
+            self.repository.save_user_run(existing)
+            logger.warning(
+                "Reaped orphaned in-progress run: user=%s run=%s "
+                "age_minutes=%.1f",
+                user_id,
+                existing.id,
+                age.total_seconds() / 60,
+            )
 
         schedule = self._get_schedule(user_id)
-        now_utc = utc_now()
         local_date = now_utc.astimezone(ZoneInfo(schedule.timezone)).date()
         run = UserRunRecord(
             id=uuid4().hex,

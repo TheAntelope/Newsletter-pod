@@ -101,6 +101,16 @@ class Settings(BaseSettings):
     swipe_ranker_enabled: bool = Field(default=True, alias="SWIPE_RANKER_ENABLED")
     swipe_ranker_min_swipes: int = Field(default=3, alias="SWIPE_RANKER_MIN_SWIPES")
 
+    # If an IN_PROGRESS user run sits this long without flipping to
+    # PUBLISHED / NO_CONTENT / SKIPPED / FAILED, treat it as orphaned (the
+    # background task was almost certainly killed by Cloud Run reclaiming
+    # the instance mid-TTS). Fresh runs below this threshold still block
+    # duplicate starts to avoid double-spending generation cost. Tuned for
+    # the 1-3 minute happy path with headroom for TTS slowdowns.
+    generation_stale_after_minutes: int = Field(
+        default=10, alias="GENERATION_STALE_AFTER_MINUTES"
+    )
+
     # Score bonus added to inbound newsletter items (Substack subscriptions,
     # forwarded mail, prefetched-on-intent posts) when the swipe ranker is
     # active. The bonus is added to cosine_similarity(user_vector, item) in
