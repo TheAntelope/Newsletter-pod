@@ -890,21 +890,29 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
     def upsert_source_items(self, records: list[SourceItemRecord]) -> None:
         if not records:
             return
-        batch = self._db.batch()
-        for record in records:
-            ref = self._source_items.document(_source_item_doc_id(record.dedupe_key))
-            existing_doc = ref.get()
-            payload = record.model_dump(mode="python")
-            if existing_doc.exists:
-                existing = existing_doc.to_dict() or {}
-                if "first_seen_at" in existing:
-                    payload["first_seen_at"] = existing["first_seen_at"]
-                if payload.get("embedding") is None and existing.get("embedding") is not None:
-                    payload["embedding"] = existing["embedding"]
-                    payload["embedding_model"] = existing.get("embedding_model")
-                    payload["embedded_at"] = existing.get("embedded_at")
-            batch.set(ref, payload)
-        batch.commit()
+        # Firestore caps a single batch at 500 ops and ~10 MiB payload. Each
+        # SourceItemRecord carries a 1536-dim embedding (~12-18 KB), so the
+        # size cap is the real ceiling — a single-batch write started hitting
+        # "Transaction too big" once the corpus grew (2026-05-22). 200/batch
+        # keeps us comfortably under both limits.
+        BATCH_SIZE = 200
+        for start in range(0, len(records), BATCH_SIZE):
+            chunk = records[start : start + BATCH_SIZE]
+            batch = self._db.batch()
+            for record in chunk:
+                ref = self._source_items.document(_source_item_doc_id(record.dedupe_key))
+                existing_doc = ref.get()
+                payload = record.model_dump(mode="python")
+                if existing_doc.exists:
+                    existing = existing_doc.to_dict() or {}
+                    if "first_seen_at" in existing:
+                        payload["first_seen_at"] = existing["first_seen_at"]
+                    if payload.get("embedding") is None and existing.get("embedding") is not None:
+                        payload["embedding"] = existing["embedding"]
+                        payload["embedding_model"] = existing.get("embedding_model")
+                        payload["embedded_at"] = existing.get("embedded_at")
+                batch.set(ref, payload)
+            batch.commit()
 
     def get_source_item(self, dedupe_key: str) -> Optional[SourceItemRecord]:
         doc = self._source_items.document(_source_item_doc_id(dedupe_key)).get()
