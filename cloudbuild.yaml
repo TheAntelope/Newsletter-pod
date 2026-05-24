@@ -39,7 +39,7 @@ steps:
       # --update-env-vars only touches the listed keys; existing env vars and
       # secret bindings on the service are preserved (unlike --set-env-vars,
       # which would re-create the May 2026 secret-binding regression).
-      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true
+      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true,CANDIDATE_QUEUE_ENABLED=true
       # Pin every critical secret on every deploy so that if a future config
       # edit strips a binding (as happened on revision 00045 on 2026-05-01,
       # and again with MAILGUN_WEBHOOK_SIGNING_KEY in 2026-05), the next deploy
