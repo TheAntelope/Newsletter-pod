@@ -1315,6 +1315,83 @@ class ControlPlaneService:
         self.repository.save_subscription(subscription)
         return {"accepted": True, "event_id": event.id}
 
+    def apply_client_verified_transaction(
+        self,
+        *,
+        user_id: str,
+        signed_transaction_info: str,
+    ) -> dict[str, Any]:
+        """Verify a StoreKit2 transaction JWS the iOS client pushed
+        directly and update the user's subscription tier.
+
+        Mirrors the ASN webhook path, but the trigger is the client
+        immediately after `transaction.finish()` rather than Apple's
+        server. Necessary because sandbox ASN delivery is unreliable —
+        without this, TestFlight purchases never propagate to the
+        backend and the user stays on `free`.
+        """
+        if self.app_store_verifier is None:
+            raise ControlPlaneError(
+                "App Store signedPayload verification is not configured"
+            )
+        try:
+            decoded = self.app_store_verifier.verify_transaction(signed_transaction_info)
+        except AppStoreVerificationError as exc:
+            logger.warning("Client-verified transaction rejected: %s", exc)
+            raise ControlPlaneError(str(exc)) from exc
+
+        verified_user_id = _normalize_app_account_token(decoded.app_account_token)
+        if not verified_user_id:
+            raise ControlPlaneError(
+                "transaction is missing app_account_token"
+            )
+        if verified_user_id != user_id:
+            # JWS is Apple-signed, but the appAccountToken inside may
+            # not match the authenticated session — refuse to attach
+            # someone else's purchase to this user.
+            raise ControlPlaneError(
+                "transaction app_account_token does not match authenticated user"
+            )
+
+        event = BillingEventRecord(
+            id=uuid4().hex,
+            user_id=user_id,
+            notification_type="CLIENT_VERIFIED",
+            subtype=None,
+            product_id=decoded.product_id,
+            raw_payload={
+                "transaction_id": decoded.transaction_id,
+                "product_id": decoded.product_id,
+                "environment": decoded.environment,
+                "bundle_id": decoded.bundle_id,
+                "expires_date_ms": decoded.expires_date_ms,
+                "revocation_date_ms": decoded.revocation_date_ms,
+            },
+            created_at=utc_now(),
+        )
+        self.repository.save_billing_event(event)
+
+        subscription = self._get_subscription(user_id)
+        self._mutate_subscription_from_notification(
+            subscription,
+            notification_type="SUBSCRIBED",
+            product_id=decoded.product_id,
+            expires_date_ms=decoded.expires_date_ms,
+            revocation_date_ms=decoded.revocation_date_ms,
+        )
+        subscription.updated_at = utc_now()
+        self.repository.save_subscription(subscription)
+        return {
+            "accepted": True,
+            "event_id": event.id,
+            "subscription": {
+                "tier": subscription.tier,
+                "status": subscription.status,
+                "product_id": subscription.product_id,
+                "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
+            },
+        }
+
     def _apply_legacy_app_store_notification(
         self, payload: dict[str, Any]
     ) -> dict[str, Any]:

@@ -57,6 +57,20 @@ class DecodedNotification:
     revocation_date_ms: Optional[int]
 
 
+@dataclass
+class DecodedTransaction:
+    """A verified StoreKit2 transaction (Apple-signed). Returned by
+    `verify_transaction` for the iOS client-push path."""
+
+    transaction_id: Optional[str]
+    product_id: Optional[str]
+    app_account_token: Optional[str]
+    expires_date_ms: Optional[int]
+    revocation_date_ms: Optional[int]
+    bundle_id: Optional[str]
+    environment: Optional[str]
+
+
 class AppStoreNotificationVerifier:
     """Lightweight wrapper around Apple's `SignedDataVerifier`.
 
@@ -137,6 +151,31 @@ class AppStoreNotificationVerifier:
             app_account_token=transaction.appAccountToken if transaction else None,
             expires_date_ms=transaction.expiresDate if transaction else None,
             revocation_date_ms=transaction.revocationDate if transaction else None,
+        )
+
+    def verify_transaction(self, signed_transaction_info: str) -> DecodedTransaction:
+        """Verify a StoreKit2 `Transaction.jwsRepresentation` and return
+        the decoded fields. Sandbox ASN delivery is unreliable, so the
+        iOS client pushes this JWS to the backend directly after a
+        successful purchase as the source of truth for tier upgrades."""
+        if not signed_transaction_info:
+            raise AppStoreVerificationError("signed_transaction_info is empty")
+        try:
+            transaction = self._verifier.verify_and_decode_signed_transaction(
+                signed_transaction_info
+            )
+        except VerificationException as exc:
+            raise AppStoreVerificationError(
+                f"signed_transaction_info verification failed: {exc}"
+            ) from exc
+        return DecodedTransaction(
+            transaction_id=transaction.transactionId,
+            product_id=transaction.productId,
+            app_account_token=transaction.appAccountToken,
+            expires_date_ms=transaction.expiresDate,
+            revocation_date_ms=transaction.revocationDate,
+            bundle_id=transaction.bundleId,
+            environment=transaction.rawEnvironment,
         )
 
 

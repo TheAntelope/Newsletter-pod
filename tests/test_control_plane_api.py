@@ -32,9 +32,13 @@ class FakeAppStoreVerifier:
 
     def __init__(self) -> None:
         self.results: dict[str, object] = {}
+        self.transactions: dict[str, object] = {}
 
     def stub(self, signed_payload: str, decoded) -> None:
         self.results[signed_payload] = decoded
+
+    def stub_transaction(self, signed_transaction_info: str, decoded) -> None:
+        self.transactions[signed_transaction_info] = decoded
 
     def verify(self, signed_payload: str):
         from newsletter_pod.app_store_verifier import AppStoreVerificationError
@@ -42,6 +46,13 @@ class FakeAppStoreVerifier:
         if signed_payload not in self.results:
             raise AppStoreVerificationError("signature mismatch")
         return self.results[signed_payload]
+
+    def verify_transaction(self, signed_transaction_info: str):
+        from newsletter_pod.app_store_verifier import AppStoreVerificationError
+
+        if signed_transaction_info not in self.transactions:
+            raise AppStoreVerificationError("signature mismatch")
+        return self.transactions[signed_transaction_info]
 
 
 class FakePodcastClient:
@@ -1150,6 +1161,100 @@ def test_unsigned_notification_rejected_when_require_signed_is_on():
     )
     assert resp.status_code == 400
     assert "signedPayload" in resp.text or "signed" in resp.text.lower()
+
+
+def test_client_verified_transaction_flips_tier_to_max():
+    """iOS posts a StoreKit2 transaction JWS to /v1/me/subscription/verify
+    after a successful purchase, since sandbox ASN delivery is unreliable.
+    The backend should verify, record a billing event, and flip the tier."""
+    from newsletter_pod.app_store_verifier import DecodedTransaction
+
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("client-verify-user", "verify@example.com")
+    )
+    user_id = client.get("/v1/me", headers=headers).json()["user"]["id"]
+
+    fake_verifier = FakeAppStoreVerifier()
+    fake_verifier.stub_transaction(
+        "ios-jws-token",
+        DecodedTransaction(
+            transaction_id="200000000000123",
+            product_id=container.settings.app_store_max_monthly_product_id,
+            app_account_token=f"{user_id[:8]}-{user_id[8:12]}-{user_id[12:16]}-{user_id[16:20]}-{user_id[20:]}",
+            expires_date_ms=2000000000000,
+            revocation_date_ms=None,
+            bundle_id="com.newsletterpod.app",
+            environment="Sandbox",
+        ),
+    )
+    container.control_plane.app_store_verifier = fake_verifier
+
+    resp = client.post(
+        "/v1/me/subscription/verify",
+        json={"signed_transaction_info": "ios-jws-token"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["accepted"] is True
+    assert body["subscription"]["tier"] == "max"
+    assert body["subscription"]["status"] == "active"
+
+    subscription = container.control_repository.get_subscription(user_id)
+    assert subscription.tier == "max"
+    assert subscription.product_id == container.settings.app_store_max_monthly_product_id
+
+
+def test_client_verified_transaction_rejects_token_mismatch():
+    """A JWS Apple signed for someone else's appAccountToken must not be
+    accepted as evidence the *authenticated* user paid. Otherwise one user
+    could attach another user's purchase to their account."""
+    from newsletter_pod.app_store_verifier import DecodedTransaction
+
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("mismatch-user", "mismatch@example.com")
+    )
+
+    fake_verifier = FakeAppStoreVerifier()
+    fake_verifier.stub_transaction(
+        "someone-elses-jws",
+        DecodedTransaction(
+            transaction_id="200000000000124",
+            product_id=container.settings.app_store_max_monthly_product_id,
+            # Different user_id encoded in the appAccountToken
+            app_account_token="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            expires_date_ms=2000000000000,
+            revocation_date_ms=None,
+            bundle_id="com.newsletterpod.app",
+            environment="Sandbox",
+        ),
+    )
+    container.control_plane.app_store_verifier = fake_verifier
+
+    resp = client.post(
+        "/v1/me/subscription/verify",
+        json={"signed_transaction_info": "someone-elses-jws"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+    assert "does not match" in resp.text.lower() or "mismatch" in resp.text.lower()
+
+
+def test_client_verified_transaction_rejects_bad_signature():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("bad-sig-user", "badsig@example.com")
+    )
+    container.control_plane.app_store_verifier = FakeAppStoreVerifier()
+
+    resp = client.post(
+        "/v1/me/subscription/verify",
+        json={"signed_transaction_info": "not-signed-by-apple"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
 
 
 def test_signed_notification_handler_records_billing_event_for_unknown_user():

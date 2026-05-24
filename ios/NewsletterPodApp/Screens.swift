@@ -145,6 +145,7 @@ struct DashboardTabView: View {
 struct HomeView: View {
     @EnvironmentObject private var viewModel: AppViewModel
     @State private var isShowingSwipeDeck: Bool = false
+    @State private var isShowingAccountSheet: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -168,8 +169,22 @@ struct HomeView: View {
             }
             .navigationTitle("Your Briefing")
             .editorialBackground()
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        isShowingAccountSheet = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Account")
+                }
+            }
             .sheet(isPresented: $isShowingSwipeDeck) {
                 SwipeDeckView()
+                    .environmentObject(viewModel)
+            }
+            .sheet(isPresented: $isShowingAccountSheet) {
+                AccountSheet()
                     .environmentObject(viewModel)
             }
         }
@@ -1730,10 +1745,6 @@ struct PodcastSetupView: View {
                 }
 
                 ScheduleSection()
-
-                ResetAlgorithmSection()
-
-                DeleteAccountSection()
             }
             .navigationTitle("Podcast Setup")
             .navigationBarTitleDisplayMode(.inline)
@@ -2172,6 +2183,47 @@ struct DeleteAccountSection: View {
     }
 }
 
+/// Account & legal sheet presented from the Home tab's toolbar gear icon.
+/// Surfaces account deletion prominently (Apple Guideline 5.1.1(v)) and
+/// gives reviewers and users a single discoverable place for Terms /
+/// Privacy and algorithm reset.
+struct AccountSheet: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Signed in") {
+                    if let email = viewModel.user?.email, !email.isEmpty {
+                        Text(email)
+                            .foregroundStyle(.primary)
+                    } else {
+                        Text(viewModel.user?.displayName ?? "Listener")
+                            .foregroundStyle(.primary)
+                    }
+                }
+
+                ResetAlgorithmSection()
+
+                DeleteAccountSection()
+
+                Section("Legal") {
+                    Link("Terms of Use", destination: AppConfiguration.termsURL)
+                    Link("Privacy Policy", destination: AppConfiguration.privacyURL)
+                }
+            }
+            .navigationTitle("Account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Feed access
 
 struct FeedAccessView: View {
@@ -2509,7 +2561,15 @@ private struct PlanCard: View {
             Button {
                 guard let userID = viewModel.user?.id else { return }
                 Task {
-                    await viewModel.purchaseManager.purchase(product: product, userID: userID)
+                    if let jws = await viewModel.purchaseManager.purchase(product: product, userID: userID),
+                       let token = viewModel.sessionToken {
+                        // Sandbox ASN delivery is unreliable, so push the
+                        // verified transaction JWS to the backend ourselves.
+                        _ = try? await viewModel.apiClient.verifySubscription(
+                            token: token,
+                            signedTransactionInfo: jws
+                        )
+                    }
                     try? await viewModel.refresh()
                 }
             } label: {

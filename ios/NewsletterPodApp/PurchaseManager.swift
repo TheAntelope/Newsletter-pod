@@ -31,15 +31,21 @@ final class PurchaseManager: ObservableObject {
         }
     }
 
-    func purchase(product: Product, userID: String) async {
+    /// Returns the Apple-signed transaction JWS on a verified success so
+    /// the caller can push it to the backend's `/v1/me/subscription/verify`
+    /// endpoint. Sandbox ASN delivery is unreliable, so we don't trust
+    /// the webhook alone to upgrade the user's tier in TestFlight.
+    func purchase(product: Product, userID: String) async -> String? {
         do {
             let accountToken = uuidFromHex(userID) ?? UUID()
             let result = try await product.purchase(options: [.appAccountToken(accountToken)])
             switch result {
             case .success(let verification):
                 let transaction = try checkVerified(verification)
+                let jws = verification.jwsRepresentation
                 await transaction.finish()
                 lastPurchaseMessage = "Purchase successful."
+                return jws
             case .userCancelled:
                 lastPurchaseMessage = "Purchase cancelled."
             case .pending:
@@ -50,6 +56,7 @@ final class PurchaseManager: ObservableObject {
         } catch {
             lastPurchaseMessage = error.localizedDescription
         }
+        return nil
     }
 
     private func checkVerified<T>(_ result: VerificationResult<T>) throws -> T {

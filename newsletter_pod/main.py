@@ -92,6 +92,14 @@ class BillingNotificationRequest(BaseModel):
     expires_at: Optional[str] = None
 
 
+class VerifyTransactionRequest(BaseModel):
+    # StoreKit2 `Transaction.jwsRepresentation`. The iOS client posts this
+    # directly after `transaction.finish()` so the backend doesn't depend
+    # on Apple's ASN webhook (which is unreliable in sandbox/TestFlight).
+    signed_transaction_info: Optional[str] = None
+    signedTransactionInfo: Optional[str] = None
+
+
 class ProcessUserRequest(BaseModel):
     user_id: str
     force: bool = False
@@ -547,6 +555,29 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             # Verification failure / unsigned-payload rejection / config
             # missing. Apple retries on non-2xx, so a legitimate retry still
             # lands once the cause is fixed.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
+
+    @app.post("/v1/me/subscription/verify")
+    def verify_subscription(
+        request_payload: VerifyTransactionRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        jws = request_payload.signed_transaction_info or request_payload.signedTransactionInfo
+        if not jws:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="signed_transaction_info is required",
+            )
+        try:
+            return container.control_plane.apply_client_verified_transaction(
+                user_id=user.id,
+                signed_transaction_info=jws,
+            )
+        except ControlPlaneError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
             )

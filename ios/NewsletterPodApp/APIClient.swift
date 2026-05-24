@@ -287,6 +287,15 @@ final class APIClient {
         )
     }
 
+    func verifySubscription(token: String, signedTransactionInfo: String) async throws -> VerifySubscriptionEnvelope {
+        try await request(
+            path: "/v1/me/subscription/verify",
+            method: "POST",
+            body: VerifySubscriptionBody(signedTransactionInfo: signedTransactionInfo),
+            token: token
+        )
+    }
+
     private func request<T: Decodable, Body: Encodable>(
         path: String,
         method: String,
@@ -328,6 +337,40 @@ private struct ServerErrorEnvelope: Decodable {
 
 private struct FeedbackAck: Decodable {
     let id: String
+}
+
+private struct VerifySubscriptionBody: Encodable {
+    let signedTransactionInfo: String
+
+    private enum CodingKeys: String, CodingKey {
+        case signedTransactionInfo = "signed_transaction_info"
+    }
+}
+
+struct VerifySubscriptionEnvelope: Decodable {
+    let accepted: Bool
+    let eventID: String?
+    let subscription: SubscriptionPayload?
+
+    struct SubscriptionPayload: Decodable {
+        let tier: String
+        let status: String?
+        let productID: String?
+        let expiresAt: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case tier
+            case status
+            case productID = "product_id"
+            case expiresAt = "expires_at"
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accepted
+        case eventID = "event_id"
+        case subscription
+    }
 }
 
 private struct SubmitFeedbackBody: Encodable {
