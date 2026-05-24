@@ -22,9 +22,6 @@ struct NewsletterPodApp: App {
             RootView()
                 .environmentObject(viewModel)
                 .preferredColorScheme(.light)
-                .task {
-                    await viewModel.purchaseManager.loadProducts()
-                }
         }
     }
 }

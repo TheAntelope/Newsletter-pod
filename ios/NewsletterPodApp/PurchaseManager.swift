@@ -1,74 +1,11 @@
 import Foundation
-import StoreKit
-
-private struct VerificationError: Error {}
 
 @MainActor
 final class PurchaseManager: ObservableObject {
 
     nonisolated init() {}
-    @Published var products: [Product] = []
-    @Published var isLoading = false
-    @Published var lastPurchaseMessage: String?
 
-    func loadProducts() async {
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            products = try await Product.products(for: Set(AppConfiguration.allProductIDs))
-            // Pin display order to AppConfiguration.allProductIDs (pro monthly,
-            // pro annual, max monthly, max annual) so the paywall renders Pro
-            // above Max regardless of price comparison results.
-            let ordering = Dictionary(
-                uniqueKeysWithValues: AppConfiguration.allProductIDs.enumerated().map { ($1, $0) }
-            )
-            products.sort { (lhs, rhs) in
-                (ordering[lhs.id] ?? Int.max) < (ordering[rhs.id] ?? Int.max)
-            }
-        } catch {
-            lastPurchaseMessage = error.localizedDescription
-        }
-    }
-
-    /// Returns the Apple-signed transaction JWS on a verified success so
-    /// the caller can push it to the backend's `/v1/me/subscription/verify`
-    /// endpoint. Sandbox ASN delivery is unreliable, so we don't trust
-    /// the webhook alone to upgrade the user's tier in TestFlight.
-    func purchase(product: Product, userID: String) async -> String? {
-        do {
-            let accountToken = uuidFromHex(userID) ?? UUID()
-            let result = try await product.purchase(options: [.appAccountToken(accountToken)])
-            switch result {
-            case .success(let verification):
-                let transaction = try checkVerified(verification)
-                let jws = verification.jwsRepresentation
-                await transaction.finish()
-                lastPurchaseMessage = "Purchase successful."
-                return jws
-            case .userCancelled:
-                lastPurchaseMessage = "Purchase cancelled."
-            case .pending:
-                lastPurchaseMessage = "Purchase pending approval."
-            @unknown default:
-                lastPurchaseMessage = "Unknown purchase state."
-            }
-        } catch {
-            lastPurchaseMessage = error.localizedDescription
-        }
-        return nil
-    }
-
-    private func checkVerified<T>(_ result: VerificationResult<T>) throws -> T {
-        switch result {
-        case .unverified:
-            throw VerificationError()
-        case .verified(let safe):
-            return safe
-        }
-    }
-
-    private func uuidFromHex(_ value: String) -> UUID? {
+    static func uuidFromHex(_ value: String) -> UUID? {
         guard value.count == 32 else { return nil }
         let formatted = [
             value.prefix(8),

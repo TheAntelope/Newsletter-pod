@@ -2336,20 +2336,33 @@ struct PaywallView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            SubscriptionStoreView(productIDs: AppConfiguration.allProductIDs) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                     headerCard
                     trialStatusCard
                     comparisonCard
-                    plansSection
-                    if let message = viewModel.purchaseManager.lastPurchaseMessage {
-                        statusCard(message: message)
-                    }
-                    legalFooter
                 }
                 .padding(.horizontal, Theme.Spacing.l)
                 .padding(.top, Theme.Spacing.s)
-                .padding(.bottom, Theme.Spacing.xl)
+                .padding(.bottom, Theme.Spacing.s)
+            }
+            .subscriptionStoreControlStyle(.prominentPicker)
+            .subscriptionStoreButtonLabel(.multiline)
+            .storeButton(.visible, for: .restorePurchases)
+            .subscriptionStorePolicyDestination(url: AppConfiguration.termsURL, for: .termsOfService)
+            .subscriptionStorePolicyDestination(url: AppConfiguration.privacyURL, for: .privacyPolicy)
+            // Tag every purchase with our user ID so backend webhook handling
+            // and ASC reporting can match transactions back to the account.
+            .inAppPurchaseOptions { _ in
+                guard let userID = viewModel.user?.id,
+                      let token = PurchaseManager.uuidFromHex(userID) else { return [] }
+                return [.appAccountToken(token)]
+            }
+            // Sandbox ASN delivery is unreliable, so push the verified
+            // transaction JWS to the backend ourselves rather than waiting
+            // for the App Store Server Notification webhook.
+            .onInAppPurchaseCompletion { _, result in
+                await handlePurchaseCompletion(result)
             }
             .navigationTitle("Upgrade")
             .editorialBackground()
@@ -2464,119 +2477,20 @@ struct PaywallView: View {
         }
     }
 
-    @ViewBuilder
-    private var plansSection: some View {
-        if viewModel.purchaseManager.isLoading {
-            EditorialCard {
-                ProgressView("Loading plans…")
-                    .frame(maxWidth: .infinity)
-            }
-        } else if viewModel.purchaseManager.products.isEmpty {
-            EditorialCard {
-                MetaLabel(text: "Plans unavailable")
-                Text("We couldn't load subscription plans from the App Store.")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Palette.ink)
-                Text("Make sure these product IDs are configured in App Store Connect:")
-                    .font(Theme.Typography.callout)
-                    .foregroundStyle(Theme.Palette.muted)
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(AppConfiguration.allProductIDs, id: \.self) { productID in
-                        Text("• \(productID)")
-                    }
-                }
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(Theme.Palette.inkSoft)
-
-                Button("Retry") {
-                    Task { await viewModel.purchaseManager.loadProducts() }
-                }
-                .buttonStyle(.amberOutlined)
-            }
-        } else {
-            ForEach(viewModel.purchaseManager.products, id: \.id) { product in
-                PlanCard(product: product)
-            }
+    private func handlePurchaseCompletion(_ result: Result<Product.PurchaseResult, Error>) async {
+        guard case .success(let purchaseResult) = result,
+              case .success(let verification) = purchaseResult,
+              case .verified(let transaction) = verification
+        else { return }
+        let jws = verification.jwsRepresentation
+        await transaction.finish()
+        if let token = viewModel.sessionToken {
+            _ = try? await viewModel.apiClient.verifySubscription(
+                token: token,
+                signedTransactionInfo: jws
+            )
         }
-    }
-
-    private func statusCard(message: String) -> some View {
-        EditorialCard {
-            MetaLabel(text: "Purchase status")
-            Text(message)
-                .font(Theme.Typography.callout)
-                .foregroundStyle(Theme.Palette.inkSoft)
-        }
-    }
-
-    private var legalFooter: some View {
-        VStack(spacing: 6) {
-            Text("Subscriptions auto-renew until cancelled. Manage or cancel in Settings → Apple ID → Subscriptions.")
-                .font(Theme.Typography.callout)
-                .foregroundStyle(Theme.Palette.muted)
-                .multilineTextAlignment(.center)
-            HStack(spacing: 16) {
-                Link("Terms of Use", destination: AppConfiguration.termsURL)
-                Text("·").foregroundStyle(Theme.Palette.muted)
-                Link("Privacy Policy", destination: AppConfiguration.privacyURL)
-                Text("·").foregroundStyle(Theme.Palette.muted)
-                Button("Restore") {
-                    Task {
-                        try? await AppStore.sync()
-                        try? await viewModel.refresh()
-                    }
-                }
-            }
-            .font(Theme.Typography.callout)
-            .tint(Theme.Palette.amberDeep)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, Theme.Spacing.s)
-    }
-}
-
-private struct PlanCard: View {
-    @EnvironmentObject private var viewModel: AppViewModel
-    let product: Product
-
-    var body: some View {
-        EditorialCard {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(product.displayName)
-                        .font(Theme.Typography.title)
-                        .foregroundStyle(Theme.Palette.ink)
-                    if !product.description.isEmpty {
-                        Text(product.description)
-                            .font(Theme.Typography.callout)
-                            .foregroundStyle(Theme.Palette.muted)
-                    }
-                }
-                Spacer()
-                Text(product.displayPrice)
-                    .font(Theme.Typography.subtitle)
-                    .foregroundStyle(Theme.Palette.amberDeep)
-            }
-
-            Button {
-                guard let userID = viewModel.user?.id else { return }
-                Task {
-                    if let jws = await viewModel.purchaseManager.purchase(product: product, userID: userID),
-                       let token = viewModel.sessionToken {
-                        // Sandbox ASN delivery is unreliable, so push the
-                        // verified transaction JWS to the backend ourselves.
-                        _ = try? await viewModel.apiClient.verifySubscription(
-                            token: token,
-                            signedTransactionInfo: jws
-                        )
-                    }
-                    try? await viewModel.refresh()
-                }
-            } label: {
-                Text("Subscribe")
-            }
-            .buttonStyle(.amberFilled)
-        }
+        try? await viewModel.refresh()
     }
 }
 
