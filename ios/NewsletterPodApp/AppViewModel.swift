@@ -300,11 +300,33 @@ final class AppViewModel: ObservableObject {
                 errorMessage = "Could not start generation"
                 return
             }
+            // The server short-circuits synchronously when the run can't
+            // start (quota cap, missing sources, etc.) — surface the
+            // message immediately instead of waiting 5s for the first poll.
+            if envelope.run.status != "in_progress" {
+                surfaceRunOutcome(envelope.run)
+                return
+            }
             activeRunID = runID
             pollTask?.cancel()
             pollTask = Task { [weak self] in await self?.pollRun(runID: runID) }
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func surfaceRunOutcome(_ run: UserRunDTO) {
+        switch run.status {
+        case "published":
+            flashSaved("Episode ready")
+        case "no_content":
+            flashSaved(run.message.isEmpty ? "No new items today" : run.message)
+        case "skipped":
+            errorMessage = run.message.isEmpty ? "Generation skipped" : run.message
+        case "failed":
+            errorMessage = run.message.isEmpty ? "Generation failed" : run.message
+        default:
+            break
         }
     }
 
@@ -324,16 +346,7 @@ final class AppViewModel: ObservableObject {
                 if status.run.status != "in_progress" {
                     activeRunID = nil
                     try? await refresh()
-                    switch status.run.status {
-                    case "published":
-                        flashSaved("Episode ready")
-                    case "no_content":
-                        flashSaved("No new items today")
-                    case "failed":
-                        errorMessage = status.run.message.isEmpty ? "Generation failed" : status.run.message
-                    default:
-                        break
-                    }
+                    surfaceRunOutcome(status.run)
                     return
                 }
             } catch {
