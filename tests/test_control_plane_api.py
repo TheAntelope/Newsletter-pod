@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
@@ -1305,6 +1305,97 @@ def test_generate_endpoint_starts_async_run_and_run_status_is_queryable(monkeypa
 
     missing = client.get("/v1/me/runs/does-not-exist", headers=headers)
     assert missing.status_code == 404
+
+
+def test_start_user_generation_blocks_when_fresh_in_progress_run_exists(monkeypatch):
+    from newsletter_pod.user_models import UserRunRecord
+    from newsletter_pod.models import PublishStatus
+
+    container, client = _build_app()
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier(
+        "fresh-inprogress-user", "fresh@example.com"
+    )
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    user_id = auth.json()["user"]["id"]
+    session_token = auth.json()["session_token"]
+    headers = {"Authorization": f"Bearer {session_token}"}
+
+    # Seed a recent IN_PROGRESS run (2 minutes old) directly so we don't have
+    # to race the background task.
+    started = datetime(2026, 5, 23, 12, 0, tzinfo=timezone.utc)
+    container.control_repository.save_user_run(
+        UserRunRecord(
+            id="existing-run",
+            user_id=user_id,
+            local_run_date=started.date(),
+            started_at=started,
+            completed_at=started,
+            status=PublishStatus.IN_PROGRESS.value,
+            message="Generation in progress",
+        )
+    )
+
+    monkeypatch.setattr(
+        "newsletter_pod.control_plane.utc_now",
+        lambda: started + timedelta(minutes=2),
+    )
+
+    response = client.post("/v1/me/generate", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["started"] is False
+    assert body["run"]["id"] == "existing-run"
+
+    reaped = container.control_repository.get_user_run("existing-run")
+    assert reaped.status == PublishStatus.IN_PROGRESS.value, (
+        "Fresh in-progress runs must not be reaped"
+    )
+
+
+def test_start_user_generation_reaps_stale_in_progress_run_and_starts_fresh(monkeypatch):
+    from newsletter_pod.user_models import UserRunRecord
+    from newsletter_pod.models import PublishStatus
+
+    container, client = _build_app()
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier(
+        "stale-inprogress-user", "stale@example.com"
+    )
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    user_id = auth.json()["user"]["id"]
+    session_token = auth.json()["session_token"]
+    headers = {"Authorization": f"Bearer {session_token}"}
+
+    container.control_plane.settings.generation_stale_after_minutes = 10
+    started = datetime(2026, 5, 23, 12, 0, tzinfo=timezone.utc)
+    container.control_repository.save_user_run(
+        UserRunRecord(
+            id="orphan-run",
+            user_id=user_id,
+            local_run_date=started.date(),
+            started_at=started,
+            completed_at=started,
+            status=PublishStatus.IN_PROGRESS.value,
+            message="Generation in progress",
+        )
+    )
+
+    # 25 minutes later — well past the 10-minute staleness threshold.
+    monkeypatch.setattr(
+        "newsletter_pod.control_plane.utc_now",
+        lambda: started + timedelta(minutes=25),
+    )
+
+    response = client.post("/v1/me/generate", headers=headers)
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["started"] is True
+    assert body["run"]["id"] != "orphan-run"
+    assert body["run"]["status"] == PublishStatus.IN_PROGRESS.value
+
+    reaped = container.control_repository.get_user_run("orphan-run")
+    assert reaped.status == PublishStatus.FAILED.value
+    assert "orphaned" in reaped.message.lower()
+    assert "25" in reaped.message  # age in minutes is surfaced for ops
 
 
 def test_process_user_generation_records_visible_cap(monkeypatch):
