@@ -151,6 +151,31 @@ class Settings(BaseSettings):
         default=3, alias="AUTO_ATTACH_RIGHT_SWIPE_THRESHOLD"
     )
 
+    # "Next episode queue" spike — exposes a live view of what's likely to
+    # land in the user's next pod, with pin / exclude levers.
+    # - candidate_queue_enabled: flag-gates the hourly poll job, the queue
+    #   endpoints, and the pin-honoring hook in generation. Default off so
+    #   the feature ships dark.
+    # - next_episode_max_pins: hard cap on how many pinned items can force-
+    #   into a single episode, protecting per-tier item caps from being
+    #   eaten entirely by pins.
+    # - next_episode_candidates_lookback_days: how far back the candidates
+    #   view scans `source_items`. Bounded so a user opening the queue for
+    #   the first time doesn't see months of stale items.
+    # - next_episode_candidates_limit: defensive cap on the response size.
+    candidate_queue_enabled: bool = Field(
+        default=False, alias="CANDIDATE_QUEUE_ENABLED"
+    )
+    next_episode_max_pins: int = Field(
+        default=5, alias="NEXT_EPISODE_MAX_PINS"
+    )
+    next_episode_candidates_lookback_days: int = Field(
+        default=14, alias="NEXT_EPISODE_CANDIDATES_LOOKBACK_DAYS"
+    )
+    next_episode_candidates_limit: int = Field(
+        default=50, alias="NEXT_EPISODE_CANDIDATES_LIMIT"
+    )
+
     gcs_bucket_name: Optional[str] = Field(default=None, alias="GCS_BUCKET_NAME")
     gcs_prefix: str = Field(default="episodes", alias="GCS_PREFIX")
 

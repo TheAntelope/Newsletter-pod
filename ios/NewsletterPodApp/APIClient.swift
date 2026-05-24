@@ -211,6 +211,47 @@ final class APIClient {
         )
     }
 
+    func fetchNextEpisodeQueue(token: String) async throws -> NextEpisodeQueueEnvelope {
+        try await request(
+            path: "/v1/me/next-episode/candidates",
+            method: "GET",
+            body: Optional<Int>.none,
+            token: token
+        )
+    }
+
+    func pinNextEpisodeItem(token: String, dedupeKey: String) async throws {
+        let _: NextEpisodeOverrideAck = try await request(
+            path: "/v1/me/next-episode/pin",
+            method: "POST",
+            body: NextEpisodeOverrideBody(sourceItemDedupeKey: dedupeKey),
+            token: token
+        )
+    }
+
+    func excludeNextEpisodeItem(token: String, dedupeKey: String) async throws {
+        let _: NextEpisodeOverrideAck = try await request(
+            path: "/v1/me/next-episode/exclude",
+            method: "POST",
+            body: NextEpisodeOverrideBody(sourceItemDedupeKey: dedupeKey),
+            token: token
+        )
+    }
+
+    func clearNextEpisodeOverride(token: String, dedupeKey: String) async throws {
+        // DELETE with query string — see backend route note.
+        guard var components = URLComponents(string: "/v1/me/next-episode/override") else {
+            throw APIError.invalidResponse
+        }
+        components.queryItems = [
+            URLQueryItem(name: "source_item_dedupe_key", value: dedupeKey)
+        ]
+        let path = components.string ?? "/v1/me/next-episode/override"
+        let _: NextEpisodeOverrideAck = try await request(
+            path: path, method: "DELETE", body: Optional<Int>.none, token: token
+        )
+    }
+
     func submitVoiceIntake(token: String, transcript: String) async throws -> VoiceIntakeAck {
         try await request(
             path: "/v1/me/voice-intake",
@@ -479,6 +520,21 @@ private struct SubmitSwipeBody: Encodable {
 
 private struct SwipeAck: Decodable {
     let id: String
+}
+
+private struct NextEpisodeOverrideBody: Encodable {
+    let sourceItemDedupeKey: String
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceItemDedupeKey = "source_item_dedupe_key"
+    }
+}
+
+private struct NextEpisodeOverrideAck: Decodable {
+    // The backend returns {status, dedupe_key, pins_remaining?} — we don't
+    // need the fields client-side beyond confirming the call succeeded,
+    // but Decodable requires at least one decode for any present field.
+    let status: String?
 }
 
 struct CorpusRefreshAck: Decodable {

@@ -554,6 +554,80 @@ struct SwipeDeckEnvelope: Codable {
     let items: [SwipeDeckCardDTO]
 }
 
+/// Live preview of what's likely to land in the user's next podcast.
+/// Returned by GET /v1/me/next-episode/candidates. `enabled=false` when
+/// the candidate-queue feature flag is off — clients should hide the UI
+/// without surfacing an error.
+struct NextEpisodeQueueEnvelope: Codable {
+    let enabled: Bool
+    let candidates: [NextEpisodeCandidateDTO]
+    let pinnedCount: Int
+    let maxPins: Int
+    let pinsRemaining: Int
+    let rankerUsed: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case candidates
+        case pinnedCount = "pinned_count"
+        case maxPins = "max_pins"
+        case pinsRemaining = "pins_remaining"
+        case rankerUsed = "ranker_used"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? false
+        candidates = (try? c.decode([NextEpisodeCandidateDTO].self, forKey: .candidates)) ?? []
+        pinnedCount = (try? c.decode(Int.self, forKey: .pinnedCount)) ?? 0
+        maxPins = (try? c.decode(Int.self, forKey: .maxPins)) ?? 0
+        pinsRemaining = (try? c.decode(Int.self, forKey: .pinsRemaining)) ?? 0
+        rankerUsed = (try? c.decode(Bool.self, forKey: .rankerUsed)) ?? false
+    }
+
+    init(
+        enabled: Bool,
+        candidates: [NextEpisodeCandidateDTO],
+        pinnedCount: Int,
+        maxPins: Int,
+        pinsRemaining: Int,
+        rankerUsed: Bool
+    ) {
+        self.enabled = enabled
+        self.candidates = candidates
+        self.pinnedCount = pinnedCount
+        self.maxPins = maxPins
+        self.pinsRemaining = pinsRemaining
+        self.rankerUsed = rankerUsed
+    }
+}
+
+struct NextEpisodeCandidateDTO: Codable, Identifiable, Equatable {
+    let dedupeKey: String
+    let sourceID: String
+    let sourceName: String
+    let title: String
+    let summary: String
+    let link: String
+    let publishedAt: Date
+    let pinned: Bool
+    let likelyIncluded: Bool
+
+    var id: String { dedupeKey }
+
+    private enum CodingKeys: String, CodingKey {
+        case dedupeKey = "dedupe_key"
+        case sourceID = "source_id"
+        case sourceName = "source_name"
+        case title
+        case summary
+        case link
+        case publishedAt = "published_at"
+        case pinned
+        case likelyIncluded = "likely_included"
+    }
+}
+
 struct SwipeDeckCardDTO: Codable, Identifiable, Equatable {
     let sourceItemDedupeKey: String
     let title: String

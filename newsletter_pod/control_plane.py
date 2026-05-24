@@ -36,6 +36,7 @@ from .substack import (
     fetch_latest_post,
     probe_publication,
 )
+from .candidate_queue import CandidateQueueError, CandidateQueueService
 from .ingestion import RSSIngestionService
 from .interest_seeds import (
     SEED_KIND_SUBSTACK,
@@ -250,6 +251,11 @@ class ControlPlaneService:
         self._card_summary_service = CardSummaryService(
             repository=self.repository,
             summarizer=self.card_summarizer,
+        )
+        self._candidate_queue_service = CandidateQueueService(
+            settings=self.settings,
+            repository=self.repository,
+            source_item_persistence=self._source_item_persistence,
         )
 
     def authenticate_with_apple(
@@ -740,6 +746,45 @@ class ControlPlaneService:
             "computed_at": deck.computed_at.isoformat(),
             "version": deck.version,
         }
+
+    def poll_sources(self) -> dict[str, Any]:
+        """Hourly global source-poll target (Cloud Scheduler). No-op when
+        candidate-queue is flag-disabled."""
+        return self._candidate_queue_service.run_poll()
+
+    def list_next_episode_candidates(self, user_id: str) -> dict[str, Any]:
+        if not self.settings.candidate_queue_enabled:
+            return {"enabled": False, "candidates": []}
+        entitlements = self._entitlements_for_user(user_id)
+        payload = self._candidate_queue_service.list_candidates(
+            user_id,
+            per_episode_cap=entitlements.max_items_per_episode,
+        )
+        payload["enabled"] = True
+        return payload
+
+    def pin_next_episode_item(self, user_id: str, dedupe_key: str) -> dict[str, Any]:
+        if not self.settings.candidate_queue_enabled:
+            raise ControlPlaneError("Candidate queue is not enabled")
+        try:
+            return self._candidate_queue_service.pin_item(user_id, dedupe_key)
+        except CandidateQueueError as exc:
+            raise ControlPlaneError(str(exc)) from exc
+
+    def exclude_next_episode_item(self, user_id: str, dedupe_key: str) -> dict[str, Any]:
+        if not self.settings.candidate_queue_enabled:
+            raise ControlPlaneError("Candidate queue is not enabled")
+        try:
+            return self._candidate_queue_service.exclude_item(user_id, dedupe_key)
+        except CandidateQueueError as exc:
+            raise ControlPlaneError(str(exc)) from exc
+
+    def clear_next_episode_override(
+        self, user_id: str, dedupe_key: str
+    ) -> dict[str, Any]:
+        if not self.settings.candidate_queue_enabled:
+            raise ControlPlaneError("Candidate queue is not enabled")
+        return self._candidate_queue_service.clear_override(user_id, dedupe_key)
 
     def get_recent_swipe_deck(self, user_id: str) -> dict[str, Any]:
         self._require_user(user_id)
@@ -1675,21 +1720,91 @@ class ControlPlaneService:
         items = combined_candidates
         dropped_count = 0
         cap_hit = False
-        ranked_items = self._apply_swipe_ranker(
-            user_id,
-            items,
-            entitlements.max_items_per_episode,
-            boosted_dedupe_keys=set(inbound_dedupe_to_item_id),
-        )
-        if ranked_items is not None:
-            if len(ranked_items) < len(items):
+
+        # Next-episode queue overrides (flag-gated spike). Excludes drop from
+        # the candidate pool entirely; pins force-include up to the per-tier
+        # item cap, with the ranker (or chronological fallback) filling
+        # remaining slots. Honored_pin_keys is what we'll mark consumed
+        # once the episode actually publishes.
+        honored_pin_keys: set[str] = set()
+        if self.settings.candidate_queue_enabled:
+            pin_overrides = self.repository.list_next_episode_overrides(
+                user_id, kind="pin", only_unconsumed=True
+            )
+            exclude_overrides = self.repository.list_next_episode_overrides(
+                user_id, kind="exclude", only_unconsumed=True
+            )
+            pinned_keys = {p.source_item_dedupe_key for p in pin_overrides}
+            excluded_keys = {e.source_item_dedupe_key for e in exclude_overrides}
+            if excluded_keys:
+                items = [item for item in items if item.dedupe_key not in excluded_keys]
+            if pinned_keys:
+                cap = entitlements.max_items_per_episode
+                pinned_in_pool = [item for item in items if item.dedupe_key in pinned_keys]
+                # Apply max_pins cap (oldest pins first — same tiebreaker the
+                # candidates view uses, so the UI and generation agree on
+                # which pins survive the cap).
+                pin_budget = min(self.settings.next_episode_max_pins, cap)
+                if len(pinned_in_pool) > pin_budget:
+                    pin_created_at = {
+                        p.source_item_dedupe_key: p.created_at for p in pin_overrides
+                    }
+                    pinned_in_pool.sort(
+                        key=lambda i: pin_created_at.get(i.dedupe_key, utc_now())
+                    )
+                    pinned_in_pool = pinned_in_pool[:pin_budget]
+                honored_pin_keys = {item.dedupe_key for item in pinned_in_pool}
+                unpinned = [item for item in items if item.dedupe_key not in honored_pin_keys]
+                remaining_budget = max(0, cap - len(honored_pin_keys))
+                ranked_unpinned = self._apply_swipe_ranker(
+                    user_id,
+                    unpinned,
+                    remaining_budget,
+                    boosted_dedupe_keys=set(inbound_dedupe_to_item_id),
+                )
+                if ranked_unpinned is None:
+                    if len(unpinned) > remaining_budget:
+                        ranked_unpinned = unpinned[-remaining_budget:] if remaining_budget > 0 else []
+                    else:
+                        ranked_unpinned = list(unpinned)
+                final_items = pinned_in_pool + ranked_unpinned
+                final_items.sort(key=lambda item: item.published_at)
+                if len(final_items) < len(items):
+                    cap_hit = True
+                    dropped_count = len(items) - len(final_items)
+                items = final_items
+            else:
+                ranked_items = self._apply_swipe_ranker(
+                    user_id,
+                    items,
+                    entitlements.max_items_per_episode,
+                    boosted_dedupe_keys=set(inbound_dedupe_to_item_id),
+                )
+                if ranked_items is not None:
+                    if len(ranked_items) < len(items):
+                        cap_hit = True
+                        dropped_count = len(items) - len(ranked_items)
+                    items = ranked_items
+                elif len(items) > entitlements.max_items_per_episode:
+                    cap_hit = True
+                    dropped_count = len(items) - entitlements.max_items_per_episode
+                    items = items[-entitlements.max_items_per_episode :]
+        else:
+            ranked_items = self._apply_swipe_ranker(
+                user_id,
+                items,
+                entitlements.max_items_per_episode,
+                boosted_dedupe_keys=set(inbound_dedupe_to_item_id),
+            )
+            if ranked_items is not None:
+                if len(ranked_items) < len(items):
+                    cap_hit = True
+                    dropped_count = len(items) - len(ranked_items)
+                items = ranked_items
+            elif len(items) > entitlements.max_items_per_episode:
                 cap_hit = True
-                dropped_count = len(items) - len(ranked_items)
-            items = ranked_items
-        elif len(items) > entitlements.max_items_per_episode:
-            cap_hit = True
-            dropped_count = len(items) - entitlements.max_items_per_episode
-            items = items[-entitlements.max_items_per_episode :]
+                dropped_count = len(items) - entitlements.max_items_per_episode
+                items = items[-entitlements.max_items_per_episode :]
 
         # Legacy profiles may store a duration outside the user's current
         # entitlements (e.g. saved before a tier cap tightened). Clamp at
@@ -1803,6 +1918,27 @@ class ControlPlaneService:
                     "Marking inbound items consumed failed: user=%s count=%d",
                     user_id,
                     len(consumed_inbound_ids),
+                    exc_info=True,
+                )
+
+        # Stamp consumed_at on pins that survived into this episode so they
+        # drop off the candidate-queue UI. Mirrors the inbound-item pattern:
+        # only the pins that actually landed in the cut are consumed; bumped
+        # pins stay active for the next run. Best-effort — duplication is
+        # the failure mode, not data loss.
+        consumed_pin_keys = [
+            item.dedupe_key for item in items if item.dedupe_key in honored_pin_keys
+        ]
+        if consumed_pin_keys:
+            try:
+                self.repository.mark_next_episode_overrides_consumed(
+                    user_id, consumed_pin_keys, consumed_at=utc_now()
+                )
+            except Exception:  # pragma: no cover — non-fatal
+                logger.warning(
+                    "Marking next-episode pins consumed failed: user=%s count=%d",
+                    user_id,
+                    len(consumed_pin_keys),
                     exc_info=True,
                 )
 

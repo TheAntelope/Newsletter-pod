@@ -132,7 +132,7 @@ struct DashboardTabView: View {
                 .tabItem { Label("Feed", systemImage: "antenna.radiowaves.left.and.right") }
                 .tag(DashboardTab.feed)
             if showsUpgradeTab {
-                PaywallView()
+                NavigationStack { PaywallView() }
                     .tabItem { Label("Upgrade", systemImage: "sparkles") }
                     .tag(DashboardTab.upgrade)
             }
@@ -2191,6 +2191,12 @@ struct AccountSheet: View {
     @EnvironmentObject private var viewModel: AppViewModel
     @Environment(\.dismiss) private var dismiss
 
+    private var subscriptionTierLabel: String {
+        if viewModel.isMax { return "Max" }
+        if viewModel.isPro { return "Pro" }
+        return "Free"
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -2201,6 +2207,20 @@ struct AccountSheet: View {
                     } else {
                         Text(viewModel.user?.displayName ?? "Listener")
                             .foregroundStyle(.primary)
+                    }
+                }
+
+                Section("Subscription") {
+                    NavigationLink {
+                        PaywallView()
+                    } label: {
+                        HStack {
+                            Text("View plans")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Text(subscriptionTierLabel)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 

@@ -107,6 +107,49 @@ class SourceItemRef(BaseModel):
     guid: Optional[str] = None
 
 
+class SourcePollingStateRecord(BaseModel):
+    """Per-source cursor for the global hourly poll job (candidate-queue spike).
+
+    Unlike `user_cursors`, this state is keyed by source_id only — the poll
+    walks each distinct source once per tick regardless of how many users
+    are attached to it. Doc id = source_id.
+
+    `cursor` tracks the latest `published_at` we've ingested for the source;
+    subsequent polls only persist items newer than that. `last_polled_at` and
+    `last_error` are diagnostic — surfaced in the job response so a flaky
+    source shows up in Cloud Logging.
+    """
+
+    source_id: str
+    last_polled_at: datetime
+    cursor: Optional[datetime] = None
+    last_item_count: int = 0
+    last_error: Optional[str] = None
+
+
+class NextEpisodeOverrideRecord(BaseModel):
+    """A per-user, per-item override against the next episode's selection.
+
+    `kind="pin"` forces the item into the next published episode (up to
+    `next_episode_max_pins`). `kind="exclude"` drops the item from the
+    candidate pool. The two states are mutually exclusive; flipping
+    one to the other replaces the existing record.
+
+    `consumed_at` is stamped when an episode publishes that honored the
+    override — pins drop off the candidate list once consumed; excludes
+    persist until a TTL sweep (out of scope for the spike).
+
+    Doc id: `{user_id}:{dedupe_key_hash}` so two users can pin the same
+    item independently.
+    """
+
+    user_id: str
+    source_item_dedupe_key: str
+    kind: Literal["pin", "exclude"]
+    created_at: datetime
+    consumed_at: Optional[datetime] = None
+
+
 class AudioSegment(BaseModel):
     role: str = "primary"
     speaker: str

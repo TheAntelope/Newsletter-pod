@@ -28,6 +28,8 @@ final class AppViewModel: ObservableObject {
     @Published var isLoadingSubstackIntents = false
     @Published var libraryEpisodes: [LibraryEpisodeDTO] = []
     @Published var isLoadingEpisodes = false
+    @Published var nextEpisodeQueue: NextEpisodeQueueEnvelope?
+    @Published var isLoadingNextEpisodeQueue = false
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var savedMessage: String?
@@ -600,6 +602,135 @@ final class AppViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Pull the live "Coming in your next pod" queue. Tolerates the
+    /// candidate_queue_enabled=false response shape so the caller can hide
+    /// the UI gracefully when the feature flag is off.
+    func loadNextEpisodeQueue() async {
+        if isUITestMode { return }
+        guard let sessionToken else { return }
+        isLoadingNextEpisodeQueue = true
+        defer { isLoadingNextEpisodeQueue = false }
+        do {
+            nextEpisodeQueue = try await apiClient.fetchNextEpisodeQueue(token: sessionToken)
+        } catch {
+            // Non-fatal — keep whatever we had before.
+        }
+    }
+
+    /// Optimistically pin a candidate, then call the backend. On failure we
+    /// revert the local state and surface the error.
+    func pinNextEpisodeCandidate(_ candidate: NextEpisodeCandidateDTO) async {
+        await mutateNextEpisodeCandidate(
+            candidate,
+            applying: { current in
+                NextEpisodeCandidateDTO(
+                    dedupeKey: current.dedupeKey,
+                    sourceID: current.sourceID,
+                    sourceName: current.sourceName,
+                    title: current.title,
+                    summary: current.summary,
+                    link: current.link,
+                    publishedAt: current.publishedAt,
+                    pinned: true,
+                    likelyIncluded: true
+                )
+            },
+            api: { token in
+                try await apiClient.pinNextEpisodeItem(token: token, dedupeKey: candidate.dedupeKey)
+            },
+            pinDelta: candidate.pinned ? 0 : 1
+        )
+    }
+
+    /// Exclude removes the candidate from the local list entirely (it's
+    /// gone from the queue until cleared). Mirrors backend semantics.
+    func excludeNextEpisodeCandidate(_ candidate: NextEpisodeCandidateDTO) async {
+        guard let sessionToken else { return }
+        let snapshot = nextEpisodeQueue
+        // Optimistic remove.
+        if var env = nextEpisodeQueue {
+            let pinDelta = candidate.pinned ? -1 : 0
+            env = removingCandidate(candidate.dedupeKey, from: env, pinDelta: pinDelta)
+            nextEpisodeQueue = env
+        }
+        do {
+            try await apiClient.excludeNextEpisodeItem(token: sessionToken, dedupeKey: candidate.dedupeKey)
+        } catch {
+            errorMessage = error.localizedDescription
+            nextEpisodeQueue = snapshot
+        }
+    }
+
+    /// Undo a previous pin or exclude.
+    func clearNextEpisodeOverride(_ candidate: NextEpisodeCandidateDTO) async {
+        await mutateNextEpisodeCandidate(
+            candidate,
+            applying: { current in
+                NextEpisodeCandidateDTO(
+                    dedupeKey: current.dedupeKey,
+                    sourceID: current.sourceID,
+                    sourceName: current.sourceName,
+                    title: current.title,
+                    summary: current.summary,
+                    link: current.link,
+                    publishedAt: current.publishedAt,
+                    pinned: false,
+                    likelyIncluded: current.likelyIncluded
+                )
+            },
+            api: { token in
+                try await apiClient.clearNextEpisodeOverride(token: token, dedupeKey: candidate.dedupeKey)
+            },
+            pinDelta: candidate.pinned ? -1 : 0
+        )
+    }
+
+    private func mutateNextEpisodeCandidate(
+        _ candidate: NextEpisodeCandidateDTO,
+        applying transform: (NextEpisodeCandidateDTO) -> NextEpisodeCandidateDTO,
+        api: (String) async throws -> Void,
+        pinDelta: Int
+    ) async {
+        guard let sessionToken else { return }
+        let snapshot = nextEpisodeQueue
+        if var env = nextEpisodeQueue {
+            let updated = env.candidates.map { c -> NextEpisodeCandidateDTO in
+                c.dedupeKey == candidate.dedupeKey ? transform(c) : c
+            }
+            env = NextEpisodeQueueEnvelope(
+                enabled: env.enabled,
+                candidates: updated,
+                pinnedCount: max(0, env.pinnedCount + pinDelta),
+                maxPins: env.maxPins,
+                pinsRemaining: max(0, env.pinsRemaining - pinDelta),
+                rankerUsed: env.rankerUsed
+            )
+            nextEpisodeQueue = env
+        }
+        do {
+            try await api(sessionToken)
+        } catch {
+            errorMessage = error.localizedDescription
+            nextEpisodeQueue = snapshot
+        }
+    }
+
+    private func removingCandidate(
+        _ dedupeKey: String,
+        from env: NextEpisodeQueueEnvelope,
+        pinDelta: Int
+    ) -> NextEpisodeQueueEnvelope {
+        let filtered = env.candidates.filter { $0.dedupeKey != dedupeKey }
+        return NextEpisodeQueueEnvelope(
+            enabled: env.enabled,
+            candidates: filtered,
+            pinnedCount: max(0, env.pinnedCount + pinDelta),
+            maxPins: env.maxPins,
+            pinsRemaining: max(0, env.pinsRemaining - pinDelta),
+            rankerUsed: env.rankerUsed
+        )
     }
 
     @Published var isRefreshingCorpus: Bool = false

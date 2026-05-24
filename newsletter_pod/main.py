@@ -116,6 +116,13 @@ class SubmitSwipeRequest(BaseModel):
     direction: int
 
 
+class NextEpisodeOverrideRequest(BaseModel):
+    """Body for POST /v1/me/next-episode/pin and /exclude. The dedupe_key
+    is the SourceItemRecord.dedupe_key from the candidates payload."""
+
+    source_item_dedupe_key: str
+
+
 class CreateSubstackIntentRequest(BaseModel):
     pub_url: str
 
@@ -212,6 +219,18 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         _validate_job_auth(container.settings, authorization, x_job_trigger_token)
         assert container.control_plane is not None
         return container.control_plane.refresh_cold_start_deck()
+
+    @app.post("/jobs/poll-sources")
+    def poll_sources(
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Hourly Cloud Scheduler target. Walks every distinct attached
+        source once, ingests new items into the `source_items` corpus.
+        No-op when CANDIDATE_QUEUE_ENABLED is off."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.control_plane is not None
+        return container.control_plane.poll_sources()
 
     @app.post("/v1/auth/apple")
     def auth_with_apple(request_payload: AppleAuthRequest) -> dict:
@@ -382,6 +401,68 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         user = _require_session_user(container, authorization)
         assert container.control_plane is not None
         return container.control_plane.list_inbound_items(user.id)
+
+    @app.get("/v1/me/next-episode/candidates")
+    def get_next_episode_candidates(
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        """Return the live "Coming in your next pod" queue for the user.
+        When the candidate-queue feature flag is off the response is
+        `{"enabled": false, "candidates": []}` so clients can hide the UI
+        without surfacing an error."""
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        return container.control_plane.list_next_episode_candidates(user.id)
+
+    @app.post("/v1/me/next-episode/pin", status_code=status.HTTP_201_CREATED)
+    def pin_next_episode_item(
+        request_payload: NextEpisodeOverrideRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.pin_next_episode_item(
+                user.id, request_payload.source_item_dedupe_key
+            )
+        except ControlPlaneError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
+
+    @app.post("/v1/me/next-episode/exclude", status_code=status.HTTP_201_CREATED)
+    def exclude_next_episode_item(
+        request_payload: NextEpisodeOverrideRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.exclude_next_episode_item(
+                user.id, request_payload.source_item_dedupe_key
+            )
+        except ControlPlaneError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
+
+    @app.delete("/v1/me/next-episode/override")
+    def clear_next_episode_override(
+        source_item_dedupe_key: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        """Remove a previously-saved pin or exclude. Query param keeps the
+        DELETE body-less, which some HTTP stacks insist on."""
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.clear_next_episode_override(
+                user.id, source_item_dedupe_key
+            )
+        except ControlPlaneError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
 
     @app.get("/v1/substack/probe")
     def probe_substack(url: str) -> dict:

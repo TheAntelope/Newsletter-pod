@@ -8,7 +8,12 @@ from typing import Optional
 from google.api_core import exceptions as gax_exceptions
 from google.cloud import firestore
 
-from .models import SourceItemRecord, SwipeDeckRecord
+from .models import (
+    NextEpisodeOverrideRecord,
+    SourceItemRecord,
+    SourcePollingStateRecord,
+    SwipeDeckRecord,
+)
 from .utils import utc_now
 
 
@@ -22,6 +27,18 @@ def _source_item_doc_id(dedupe_key: str) -> str:
     the id used to address the doc.
     """
     return hashlib.sha256(dedupe_key.encode("utf-8")).hexdigest()
+
+
+def _next_episode_override_doc_id(user_id: str, dedupe_key: str) -> str:
+    """Compose a deterministic Firestore-safe doc id for an override row.
+
+    `(user_id, dedupe_key)` is unique by construction, but dedupe_key can
+    contain `/` (it's often URL-shaped). The user_id prefix keeps the id
+    self-identifying for debugging without leaking PII; the hashed dedupe
+    suffix dodges Firestore's path-character rules. Same approach as
+    `_source_item_doc_id`.
+    """
+    return f"{user_id}:{hashlib.sha256(dedupe_key.encode('utf-8')).hexdigest()}"
 from .user_models import (
     BillingEventRecord,
     CostRecord,
@@ -132,6 +149,20 @@ class ControlPlaneRepository(ABC):
         lookback_days: int,
         limit: int,
     ) -> list[SourceItemRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_source_items_by_source_published_since(
+        self,
+        source_ids: list[str],
+        since: datetime,
+        limit: int,
+    ) -> list[SourceItemRecord]:
+        """Return source items for `source_ids` with `published_at >= since`,
+        newest-first. Unlike `list_recent_source_items_for_sources`, this
+        does NOT filter on embedding presence — the next-episode candidate
+        view needs to surface items whether or not their embedding has
+        landed yet."""
         raise NotImplementedError
 
     @abstractmethod
@@ -285,6 +316,56 @@ class ControlPlaneRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_all_user_sources(self) -> list[UserSourceRecord]:
+        """Return every UserSourceRecord across all users — used by the
+        global hourly source-poll job to walk distinct (source_id, rss_url)
+        pairs once per tick instead of per-user."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_source_polling_state(self, source_id: str) -> Optional[SourcePollingStateRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def upsert_source_polling_state(self, record: SourcePollingStateRecord) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_next_episode_overrides(
+        self,
+        user_id: str,
+        *,
+        kind: Optional[str] = None,
+        only_unconsumed: bool = True,
+    ) -> list[NextEpisodeOverrideRecord]:
+        """Return per-user pin/exclude overrides for the next-episode queue.
+        Pass `kind="pin"` or `kind="exclude"` to filter; `only_unconsumed`
+        defaults True so once an override is honored by a published episode
+        it drops off the active set."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_next_episode_override(self, record: NextEpisodeOverrideRecord) -> None:
+        """Idempotent against (user_id, source_item_dedupe_key). If a record
+        with the opposite kind already exists, it is replaced — pin/exclude
+        are mutually exclusive."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_next_episode_override(self, user_id: str, dedupe_key: str) -> bool:
+        """Remove a user's override for a given item. Returns True if a row
+        was deleted, False if no override existed."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def mark_next_episode_overrides_consumed(
+        self, user_id: str, dedupe_keys: list[str], consumed_at: datetime
+    ) -> None:
+        """Stamp `consumed_at` on the given overrides. No-op for missing or
+        already-consumed records."""
+        raise NotImplementedError
+
+    @abstractmethod
     def reset_user_state(self, user_id: str) -> dict[str, int]:
         """Wipe per-user onboarding state so the iOS wizard re-runs, while
         keeping the user record, Apple Sign-in linkage, feed token,
@@ -384,6 +465,10 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         self._swipes: dict[str, SwipeRecord] = {}
         self._swipe_decks: dict[str, SwipeDeckRecord] = {}
         self._substack_intents: dict[str, UserSubstackIntent] = {}
+        self._source_polling_state: dict[str, SourcePollingStateRecord] = {}
+        # Keyed by (user_id, dedupe_key) so pin/exclude flip is a single
+        # write and we can do per-user listings cheaply.
+        self._next_episode_overrides: dict[tuple[str, str], NextEpisodeOverrideRecord] = {}
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         return self._users.get(user_id)
@@ -483,6 +568,23 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
             and record.last_seen_at >= cutoff
         ]
         items.sort(key=lambda record: record.last_seen_at, reverse=True)
+        return items[:limit]
+
+    def list_source_items_by_source_published_since(
+        self,
+        source_ids: list[str],
+        since: datetime,
+        limit: int,
+    ) -> list[SourceItemRecord]:
+        if not source_ids or limit <= 0:
+            return []
+        source_id_set = set(source_ids)
+        items = [
+            record
+            for record in self._source_items.values()
+            if record.source_id in source_id_set and record.published_at >= since
+        ]
+        items.sort(key=lambda record: record.published_at, reverse=True)
         return items[:limit]
 
     def list_recent_embedded_items_excluding_sources(
@@ -654,6 +756,57 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
     def delete_substack_intent(self, intent_id: str) -> None:
         self._substack_intents.pop(intent_id, None)
 
+    def list_all_user_sources(self) -> list[UserSourceRecord]:
+        results: list[UserSourceRecord] = []
+        for records in self._sources.values():
+            results.extend(records)
+        return results
+
+    def get_source_polling_state(self, source_id: str) -> Optional[SourcePollingStateRecord]:
+        existing = self._source_polling_state.get(source_id)
+        return existing.model_copy() if existing else None
+
+    def upsert_source_polling_state(self, record: SourcePollingStateRecord) -> None:
+        self._source_polling_state[record.source_id] = record.model_copy()
+
+    def list_next_episode_overrides(
+        self,
+        user_id: str,
+        *,
+        kind: Optional[str] = None,
+        only_unconsumed: bool = True,
+    ) -> list[NextEpisodeOverrideRecord]:
+        results: list[NextEpisodeOverrideRecord] = []
+        for (uid, _key), record in self._next_episode_overrides.items():
+            if uid != user_id:
+                continue
+            if kind is not None and record.kind != kind:
+                continue
+            if only_unconsumed and record.consumed_at is not None:
+                continue
+            results.append(record.model_copy())
+        results.sort(key=lambda r: r.created_at)
+        return results
+
+    def save_next_episode_override(self, record: NextEpisodeOverrideRecord) -> None:
+        self._next_episode_overrides[
+            (record.user_id, record.source_item_dedupe_key)
+        ] = record.model_copy()
+
+    def delete_next_episode_override(self, user_id: str, dedupe_key: str) -> bool:
+        return self._next_episode_overrides.pop((user_id, dedupe_key), None) is not None
+
+    def mark_next_episode_overrides_consumed(
+        self, user_id: str, dedupe_keys: list[str], consumed_at: datetime
+    ) -> None:
+        for key in dedupe_keys:
+            existing = self._next_episode_overrides.get((user_id, key))
+            if existing is None or existing.consumed_at is not None:
+                continue
+            self._next_episode_overrides[(user_id, key)] = existing.model_copy(
+                update={"consumed_at": consumed_at}
+            )
+
     def reset_user_state(self, user_id: str) -> dict[str, int]:
         counts: dict[str, int] = {
             "user_sources": 0,
@@ -688,6 +841,12 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         for key in cursor_keys:
             self._cursors.pop(key, None)
         counts["user_cursors"] = len(cursor_keys)
+
+        override_keys = [
+            key for key in self._next_episode_overrides if key[0] == user_id
+        ]
+        for key in override_keys:
+            self._next_episode_overrides.pop(key, None)
 
         user = self._users.get(user_id)
         if user is not None:
@@ -773,6 +932,12 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
                 anonymized += 1
         counts["billing_events_anonymized"] = anonymized
 
+        override_keys = [
+            key for key in self._next_episode_overrides if key[0] == user_id
+        ]
+        for key in override_keys:
+            self._next_episode_overrides.pop(key, None)
+
         return counts
 
 
@@ -797,6 +962,12 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         self._swipe_decks = self._db.collection(f"{collection_prefix}_swipe_decks")
         self._substack_intents = self._db.collection(f"{collection_prefix}_user_substack_intents")
         self._job_state_col = self._db.collection(f"{collection_prefix}_job_state")
+        self._source_polling_state = self._db.collection(
+            f"{collection_prefix}_source_polling_state"
+        )
+        self._next_episode_overrides = self._db.collection(
+            f"{collection_prefix}_next_episode_overrides"
+        )
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         doc = self._users.document(user_id).get()
@@ -825,6 +996,79 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
     def list_user_sources(self, user_id: str) -> list[UserSourceRecord]:
         docs = list(self._sources.where("user_id", "==", user_id).stream())
         return [UserSourceRecord.model_validate(doc.to_dict()) for doc in docs]
+
+    def list_all_user_sources(self) -> list[UserSourceRecord]:
+        # Full collection scan — bounded by total user count × per-user source
+        # count (capped at max_sources_safety_cap). At spike scale this is
+        # cheap; revisit if the user base grows past a few thousand.
+        return [
+            UserSourceRecord.model_validate(doc.to_dict())
+            for doc in self._sources.stream()
+        ]
+
+    def get_source_polling_state(
+        self, source_id: str
+    ) -> Optional[SourcePollingStateRecord]:
+        doc = self._source_polling_state.document(source_id).get()
+        if not doc.exists:
+            return None
+        return SourcePollingStateRecord.model_validate(doc.to_dict())
+
+    def upsert_source_polling_state(self, record: SourcePollingStateRecord) -> None:
+        self._source_polling_state.document(record.source_id).set(
+            record.model_dump(mode="python")
+        )
+
+    def list_next_episode_overrides(
+        self,
+        user_id: str,
+        *,
+        kind: Optional[str] = None,
+        only_unconsumed: bool = True,
+    ) -> list[NextEpisodeOverrideRecord]:
+        # Single equality on user_id + app-side filter on kind/consumed_at
+        # to avoid composite indexes — per-user override counts are bounded
+        # (a user can pin at most a handful of items at a time).
+        docs = list(self._next_episode_overrides.where("user_id", "==", user_id).stream())
+        results: list[NextEpisodeOverrideRecord] = []
+        for doc in docs:
+            record = NextEpisodeOverrideRecord.model_validate(doc.to_dict())
+            if kind is not None and record.kind != kind:
+                continue
+            if only_unconsumed and record.consumed_at is not None:
+                continue
+            results.append(record)
+        results.sort(key=lambda r: r.created_at)
+        return results
+
+    def save_next_episode_override(self, record: NextEpisodeOverrideRecord) -> None:
+        doc_id = _next_episode_override_doc_id(
+            record.user_id, record.source_item_dedupe_key
+        )
+        self._next_episode_overrides.document(doc_id).set(
+            record.model_dump(mode="python")
+        )
+
+    def delete_next_episode_override(self, user_id: str, dedupe_key: str) -> bool:
+        doc_id = _next_episode_override_doc_id(user_id, dedupe_key)
+        ref = self._next_episode_overrides.document(doc_id)
+        snapshot = ref.get()
+        if not snapshot.exists:
+            return False
+        ref.delete()
+        return True
+
+    def mark_next_episode_overrides_consumed(
+        self, user_id: str, dedupe_keys: list[str], consumed_at: datetime
+    ) -> None:
+        for key in dedupe_keys:
+            doc_id = _next_episode_override_doc_id(user_id, key)
+            try:
+                self._next_episode_overrides.document(doc_id).update(
+                    {"consumed_at": consumed_at}
+                )
+            except gax_exceptions.NotFound:
+                continue
 
     def replace_user_sources(self, user_id: str, sources: list[UserSourceRecord]) -> None:
         existing = list(self._sources.where("user_id", "==", user_id).stream())
@@ -949,6 +1193,27 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
                 continue
             records.append(SourceItemRecord.model_validate(data))
         return records
+
+    def list_source_items_by_source_published_since(
+        self,
+        source_ids: list[str],
+        since: datetime,
+        limit: int,
+    ) -> list[SourceItemRecord]:
+        if not source_ids or limit <= 0:
+            return []
+        results: list[SourceItemRecord] = []
+        for chunk_start in range(0, len(source_ids), 30):
+            chunk = source_ids[chunk_start : chunk_start + 30]
+            docs = list(self._source_items.where("source_id", "in", chunk).stream())
+            for doc in docs:
+                data = doc.to_dict() or {}
+                record = SourceItemRecord.model_validate(data)
+                if record.published_at < since:
+                    continue
+                results.append(record)
+        results.sort(key=lambda record: record.published_at, reverse=True)
+        return results[:limit]
 
     def list_recent_source_items_for_sources(
         self,
@@ -1274,6 +1539,10 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         ):
             counts[key] = self._batch_delete_where_user(collection, user_id)
 
+        # Wipe next-episode overrides so a re-onboarded user doesn't carry
+        # forward stale pins/excludes against items in their old source set.
+        self._batch_delete_where_user(self._next_episode_overrides, user_id)
+
         # Clear the weekly-update marker so the next eligible run regenerates
         # the weekly summary card on the user's first post-reset episode.
         user_ref = self._users.document(user_id)
@@ -1347,6 +1616,10 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         for doc in self._billing_events.where("user_id", "==", user_id).stream():
             doc.reference.update({"user_id": None})
             counts["billing_events_anonymized"] += 1
+
+        # Next-episode overrides — wiped silently (no per-collection count
+        # since the spike-era surface doesn't need to expose it).
+        self._batch_delete_where_user(self._next_episode_overrides, user_id)
 
         return counts
 
