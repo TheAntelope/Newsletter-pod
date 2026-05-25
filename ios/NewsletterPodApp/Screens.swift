@@ -159,6 +159,7 @@ struct HomeView: View {
                     AboutPodcastCard()
                     SourcesSummaryCard()
                     TuneYourPodCard(isPresenting: $isShowingSwipeDeck)
+                    NextEpisodeQueueCard()
                     LibraryEntryCard()
                     SetupChecklistCard()
                     FeedbackComposer()
@@ -281,6 +282,47 @@ private struct LibraryEntryCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint("Opens your episode library")
+    }
+}
+
+private struct NextEpisodeQueueCard: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        Group {
+            if viewModel.nextEpisodeQueue?.enabled == false {
+                EmptyView()
+            } else {
+                NavigationLink {
+                    NextEpisodeQueueView()
+                        .environmentObject(viewModel)
+                } label: {
+                    EditorialCard {
+                        HStack {
+                            MetaLabel(text: "Coming in your next pod")
+                            Spacer()
+                            if let env = viewModel.nextEpisodeQueue, env.pinnedCount > 0 {
+                                Text("\(env.pinnedCount) pinned")
+                                    .font(Theme.Typography.callout)
+                                    .foregroundStyle(Theme.Palette.amberDeep)
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Theme.Palette.muted)
+                        }
+                        Text("Peek at what's queued")
+                            .font(Theme.Typography.subtitle)
+                            .foregroundStyle(Theme.Palette.ink)
+                        Text("See the items likely to land in your next episode. Pin the ones you don't want to miss; remove anything you'd rather skip.")
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens the queue of items planned for your next episode")
+            }
+        }
+        .task { await viewModel.loadNextEpisodeQueue() }
     }
 }
 
@@ -2355,38 +2397,36 @@ struct PaywallView: View {
     @EnvironmentObject private var viewModel: AppViewModel
 
     var body: some View {
-        NavigationStack {
-            SubscriptionStoreView(productIDs: AppConfiguration.allProductIDs) {
-                VStack(alignment: .leading, spacing: Theme.Spacing.l) {
-                    headerCard
-                    trialStatusCard
-                    comparisonCard
-                }
-                .padding(.horizontal, Theme.Spacing.l)
-                .padding(.top, Theme.Spacing.s)
-                .padding(.bottom, Theme.Spacing.s)
+        SubscriptionStoreView(productIDs: AppConfiguration.allProductIDs) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                headerCard
+                trialStatusCard
+                comparisonCard
             }
-            .subscriptionStoreControlStyle(.prominentPicker)
-            .subscriptionStoreButtonLabel(.multiline)
-            .storeButton(.visible, for: .restorePurchases)
-            .subscriptionStorePolicyDestination(url: AppConfiguration.termsURL, for: .termsOfService)
-            .subscriptionStorePolicyDestination(url: AppConfiguration.privacyURL, for: .privacyPolicy)
-            // Tag every purchase with our user ID so backend webhook handling
-            // and ASC reporting can match transactions back to the account.
-            .inAppPurchaseOptions { _ in
-                guard let userID = viewModel.user?.id,
-                      let token = PurchaseManager.uuidFromHex(userID) else { return [] }
-                return [.appAccountToken(token)]
-            }
-            // Sandbox ASN delivery is unreliable, so push the verified
-            // transaction JWS to the backend ourselves rather than waiting
-            // for the App Store Server Notification webhook.
-            .onInAppPurchaseCompletion { _, result in
-                await handlePurchaseCompletion(result)
-            }
-            .navigationTitle("Upgrade")
-            .editorialBackground()
+            .padding(.horizontal, Theme.Spacing.l)
+            .padding(.top, Theme.Spacing.s)
+            .padding(.bottom, Theme.Spacing.s)
         }
+        .subscriptionStoreControlStyle(.prominentPicker)
+        .subscriptionStoreButtonLabel(.multiline)
+        .storeButton(.visible, for: .restorePurchases)
+        .subscriptionStorePolicyDestination(url: AppConfiguration.termsURL, for: .termsOfService)
+        .subscriptionStorePolicyDestination(url: AppConfiguration.privacyURL, for: .privacyPolicy)
+        // Tag every purchase with our user ID so backend webhook handling
+        // and ASC reporting can match transactions back to the account.
+        .inAppPurchaseOptions { _ in
+            guard let userID = viewModel.user?.id,
+                  let token = PurchaseManager.uuidFromHex(userID) else { return [] }
+            return [.appAccountToken(token)]
+        }
+        // Sandbox ASN delivery is unreliable, so push the verified
+        // transaction JWS to the backend ourselves rather than waiting
+        // for the App Store Server Notification webhook.
+        .onInAppPurchaseCompletion { _, result in
+            await handlePurchaseCompletion(result)
+        }
+        .navigationTitle("Upgrade")
+        .editorialBackground()
     }
 
     private var currentTierLabel: String {
@@ -4973,4 +5013,186 @@ private struct SwipeDeckErrorState: View {
         }
         .padding(Theme.Spacing.l)
     }
+}
+
+// MARK: - Next-Episode Queue (candidate-queue spike)
+
+struct NextEpisodeQueueView: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        ZStack {
+            Theme.Palette.cream.ignoresSafeArea()
+            content
+        }
+        .navigationTitle("Next pod")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await viewModel.loadNextEpisodeQueue() }
+        .refreshable { await viewModel.loadNextEpisodeQueue() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if viewModel.isLoadingNextEpisodeQueue && viewModel.nextEpisodeQueue == nil {
+            ProgressView()
+        } else if let env = viewModel.nextEpisodeQueue {
+            if !env.enabled {
+                disabledState
+            } else if env.candidates.isEmpty {
+                emptyState
+            } else {
+                queueList(env: env)
+            }
+        } else {
+            emptyState
+        }
+    }
+
+    private var disabledState: some View {
+        VStack(spacing: Theme.Spacing.m) {
+            Image(systemName: "tray")
+                .font(.system(size: 36))
+                .foregroundStyle(Theme.Palette.muted)
+            Text("Coming soon")
+                .font(Theme.Typography.title)
+                .foregroundStyle(Theme.Palette.ink)
+            Text("This preview isn't available on your build yet.")
+                .font(Theme.Typography.callout)
+                .foregroundStyle(Theme.Palette.inkSoft)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, Theme.Spacing.xl)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: Theme.Spacing.m) {
+            Image(systemName: "tray.fill")
+                .font(.system(size: 36))
+                .foregroundStyle(Theme.Palette.muted)
+            Text("Nothing queued yet")
+                .font(Theme.Typography.title)
+                .foregroundStyle(Theme.Palette.ink)
+            Text("New items from your sources show up here as they're published. Check back after your next refresh.")
+                .font(Theme.Typography.callout)
+                .foregroundStyle(Theme.Palette.inkSoft)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, Theme.Spacing.xl)
+        }
+    }
+
+    private func queueList(env: NextEpisodeQueueEnvelope) -> some View {
+        List {
+            Section {
+                ForEach(env.candidates) { candidate in
+                    NextEpisodeCandidateRow(candidate: candidate)
+                        .listRowBackground(Theme.Palette.creamDeep)
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            if candidate.pinned {
+                                Button {
+                                    Task { await viewModel.clearNextEpisodeOverride(candidate) }
+                                } label: {
+                                    Label("Unpin", systemImage: "pin.slash")
+                                }
+                                .tint(.gray)
+                            } else {
+                                Button {
+                                    Task { await viewModel.pinNextEpisodeCandidate(candidate) }
+                                } label: {
+                                    Label("Pin", systemImage: "pin.fill")
+                                }
+                                .tint(Theme.Palette.amberDeep)
+                                .disabled(env.pinsRemaining <= 0 && !candidate.pinned)
+                            }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                Task { await viewModel.excludeNextEpisodeCandidate(candidate) }
+                            } label: {
+                                Label("Remove", systemImage: "trash")
+                            }
+                        }
+                }
+            } header: {
+                queueHeader(env: env)
+                    .textCase(nil)
+                    .padding(.bottom, 4)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+    }
+
+    private func queueHeader(env: NextEpisodeQueueEnvelope) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(env.candidates.count) item\(env.candidates.count == 1 ? "" : "s") in line for your next pod.")
+                .font(Theme.Typography.callout)
+                .foregroundStyle(Theme.Palette.ink)
+            if env.maxPins > 0 {
+                Text("Pinned \(env.pinnedCount) of \(env.maxPins). Swipe right to pin, left to remove.")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Palette.inkSoft)
+            }
+        }
+    }
+}
+
+private struct NextEpisodeCandidateRow: View {
+    let candidate: NextEpisodeCandidateDTO
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                MetaLabel(text: candidate.sourceName)
+                Spacer(minLength: 0)
+                if candidate.pinned {
+                    Label("Pinned", systemImage: "pin.fill")
+                        .labelStyle(.titleAndIcon)
+                        .font(Theme.Typography.calloutStrong)
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                } else if candidate.likelyIncluded {
+                    Text("Likely to be included")
+                        .font(Theme.Typography.calloutStrong)
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                }
+            }
+            Text(candidate.title)
+                .font(Theme.Typography.subtitle)
+                .foregroundStyle(Theme.Palette.ink)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+            if !candidate.summary.isEmpty {
+                Text(candidate.summary)
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Palette.inkSoft)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "calendar")
+                    .font(.system(size: 11, weight: .regular))
+                Text(Self.dateFormatter.string(from: candidate.publishedAt))
+                    .font(Theme.Typography.callout)
+                Spacer(minLength: 0)
+                if let url = URL(string: candidate.link) {
+                    Link(destination: url) {
+                        HStack(spacing: 4) {
+                            Text("Read")
+                            Image(systemName: "arrow.up.right")
+                        }
+                        .font(Theme.Typography.calloutStrong)
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                    }
+                }
+            }
+            .foregroundStyle(Theme.Palette.muted)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
 }
