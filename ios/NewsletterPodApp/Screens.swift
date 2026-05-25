@@ -5170,7 +5170,7 @@ private struct NextEpisodeCandidateRow: View {
             HStack(spacing: 6) {
                 Image(systemName: "calendar")
                     .font(.system(size: 11, weight: .regular))
-                Text(Self.dateFormatter.string(from: candidate.publishedAt))
+                Text(candidate.publishedAt.formatted(date: .abbreviated, time: .shortened))
                     .font(Theme.Typography.callout)
                 Spacer(minLength: 0)
                 if let url = URL(string: candidate.link) {
@@ -5188,11 +5188,4 @@ private struct NextEpisodeCandidateRow: View {
         }
         .padding(.vertical, 4)
     }
-
-    private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .none
-        return f
-    }()
 }
