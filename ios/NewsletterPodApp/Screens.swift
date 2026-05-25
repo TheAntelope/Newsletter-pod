@@ -156,10 +156,10 @@ struct HomeView: View {
                         HomeGenerationBanner()
                     }
                     HeroEpisodeCard()
+                    NextEpisodeQueueCard()
                     AboutPodcastCard()
                     SourcesSummaryCard()
                     TuneYourPodCard(isPresenting: $isShowingSwipeDeck)
-                    NextEpisodeQueueCard()
                     LibraryEntryCard()
                     SetupChecklistCard()
                     FeedbackComposer()
