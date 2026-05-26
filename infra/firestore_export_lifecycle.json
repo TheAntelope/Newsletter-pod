@@ -1,0 +1,7 @@
+{
+  "lifecycle": {
+    "rule": [
+      {"action": {"type": "Delete"}, "condition": {"age": 7}}
+    ]
+  }
+}

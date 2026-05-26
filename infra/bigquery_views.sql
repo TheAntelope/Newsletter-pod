@@ -4,6 +4,11 @@
 -- creation). They read from:
 --   * analytics.events_raw         — Cloud Logging sink, app_event lines
 --                                    partitioned by `timestamp` (== entry time).
+--                                    Defined below as a proxy view over the
+--                                    sink-created `run_googleapis_com_stdout`
+--                                    table — Cloud Logging names BigQuery
+--                                    tables after the source log name
+--                                    (sanitized), not arbitrary aliases.
 --   * analytics.subscriptions_export — daily Firestore snapshot.
 --   * analytics.users_export        — daily Firestore snapshot.
 --
@@ -24,6 +29,16 @@
 --   so a brand-new properties key wouldn't be queryable until the sink
 --   had backfilled. JSON_VALUE never errors on a missing path and
 --   keeps the views forward-compatible as we add event properties.
+
+-- Proxy view: every downstream view reads from `analytics.events_raw`,
+-- but the Cloud Logging sink actually writes to a table named after the
+-- source log (`run.googleapis.com/stdout` → sanitized
+-- `run_googleapis_com_stdout`). Wrapping it in a stable alias lets the
+-- downstream views stay readable and survive any future log-routing
+-- rename without rewriting every CTE.
+CREATE OR REPLACE VIEW `analytics.events_raw` AS
+SELECT * FROM `analytics.run_googleapis_com_stdout`;
+
 
 CREATE OR REPLACE VIEW `analytics.vw_dau_wau_mau` AS
 WITH events AS (
