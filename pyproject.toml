@@ -32,6 +32,13 @@ dev = [
   "pytest-mock>=3.14.0",
   "httpx>=0.28.0",
 ]
+# Optional. Install with `pip install -e .[browser]` then run
+# `playwright install chromium`. Used only by scripts/looker/, kept out
+# of the default dev set so CI doesn't pull a ~150MB Chromium it never
+# needs.
+browser = [
+  "playwright>=1.47.0",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

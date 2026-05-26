@@ -24,6 +24,10 @@ DerivedData/
 *.xcuserstate
 ios/build/
 
+# Browser-automation Chrome profile used by scripts/looker/build_dashboard.py.
+# Holds Google session cookies — never commit.
+.playwright-profile/
+
 # design-tokens/ is a submodule (TheAntelope/clawcast-tokens) — its own
 # .gitignore handles node_modules. Keep ios/NewsletterPodApp/DesignTokens.swift
 # committed so Xcode builds don't need npm; CI refreshes it from the submodule.
