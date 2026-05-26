@@ -41,6 +41,7 @@ def _next_episode_override_doc_id(user_id: str, dedupe_key: str) -> str:
     return f"{user_id}:{hashlib.sha256(dedupe_key.encode('utf-8')).hexdigest()}"
 from .user_models import (
     BillingEventRecord,
+    ChurnRiskRecord,
     CostRecord,
     DeliveryScheduleRecord,
     FeedbackRecord,
@@ -323,6 +324,62 @@ class ControlPlaneRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_all_users(self, limit: int = 1000) -> list[UserRecord]:
+        """Return up to `limit` UserRecords. Backs the admin metrics page
+        (Phase 2 analytics) which iterates the user base for tier and
+        signup-rate tiles. Order is unspecified."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_all_subscriptions(self, limit: int = 1000) -> list[SubscriptionRecord]:
+        """Return up to `limit` SubscriptionRecords across every user.
+        Backs the admin metrics tier-breakdown tile."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_recent_episodes_across_users(
+        self, since: datetime, limit: int = 1000
+    ) -> list[UserEpisodeRecord]:
+        """Episodes published at-or-after `since` across every user,
+        newest-first. Used by admin metrics to compute episodes-per-week.
+        Bounded by `limit`."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_recent_swipes_across_users(
+        self, since: datetime, limit: int = 5000
+    ) -> list[SwipeRecord]:
+        """Swipes recorded at-or-after `since` across every user,
+        newest-first. Used by admin metrics to compute swipes-per-week."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_recent_user_runs(
+        self, user_id: str, limit: int = 50
+    ) -> list[UserRunRecord]:
+        """Recent UserRunRecords for a single user, newest completed first.
+        Used by the admin per-user timeline."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_churn_risk(self, record: ChurnRiskRecord) -> None:
+        """Upsert the latest churn-risk snapshot for a user. Keyed by
+        user_id so re-runs of /jobs/score-churn-risk replace rather than
+        append (Phase 3 stores latest only; history can land later)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_churn_risk(self, user_id: str) -> Optional[ChurnRiskRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_churn_risks(self, *, at_risk_only: bool = False) -> list[ChurnRiskRecord]:
+        """All churn-risk snapshots. When `at_risk_only` is True, returns
+        only records flagged at-risk; otherwise returns every scored
+        user. Sorted by score descending so the worst risks land first."""
+        raise NotImplementedError
+
+    @abstractmethod
     def get_source_polling_state(self, source_id: str) -> Optional[SourcePollingStateRecord]:
         raise NotImplementedError
 
@@ -469,6 +526,8 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         # Keyed by (user_id, dedupe_key) so pin/exclude flip is a single
         # write and we can do per-user listings cheaply.
         self._next_episode_overrides: dict[tuple[str, str], NextEpisodeOverrideRecord] = {}
+        # Phase 3: latest churn-risk snapshot per user, keyed by user_id.
+        self._churn_risks: dict[str, ChurnRiskRecord] = {}
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         return self._users.get(user_id)
@@ -762,6 +821,53 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
             results.extend(records)
         return results
 
+    def list_all_users(self, limit: int = 1000) -> list[UserRecord]:
+        return list(self._users.values())[:limit]
+
+    def list_all_subscriptions(self, limit: int = 1000) -> list[SubscriptionRecord]:
+        return list(self._subscriptions.values())[:limit]
+
+    def list_recent_episodes_across_users(
+        self, since: datetime, limit: int = 1000
+    ) -> list[UserEpisodeRecord]:
+        items = [
+            episode for episode in self._episodes.values()
+            if episode.published_at >= since
+        ]
+        items.sort(key=lambda episode: episode.published_at, reverse=True)
+        return items[:limit]
+
+    def list_recent_swipes_across_users(
+        self, since: datetime, limit: int = 5000
+    ) -> list[SwipeRecord]:
+        items = [
+            swipe for swipe in self._swipes.values()
+            if swipe.swiped_at >= since
+        ]
+        items.sort(key=lambda swipe: swipe.swiped_at, reverse=True)
+        return items[:limit]
+
+    def list_recent_user_runs(
+        self, user_id: str, limit: int = 50
+    ) -> list[UserRunRecord]:
+        runs = [run for run in self._runs.values() if run.user_id == user_id]
+        runs.sort(key=lambda run: run.completed_at, reverse=True)
+        return runs[:limit]
+
+    def save_churn_risk(self, record: ChurnRiskRecord) -> None:
+        self._churn_risks[record.user_id] = record.model_copy()
+
+    def get_churn_risk(self, user_id: str) -> Optional[ChurnRiskRecord]:
+        existing = self._churn_risks.get(user_id)
+        return existing.model_copy() if existing else None
+
+    def list_churn_risks(self, *, at_risk_only: bool = False) -> list[ChurnRiskRecord]:
+        records = list(self._churn_risks.values())
+        if at_risk_only:
+            records = [record for record in records if record.at_risk]
+        records.sort(key=lambda record: record.score, reverse=True)
+        return [record.model_copy() for record in records]
+
     def get_source_polling_state(self, source_id: str) -> Optional[SourcePollingStateRecord]:
         existing = self._source_polling_state.get(source_id)
         return existing.model_copy() if existing else None
@@ -968,6 +1074,11 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         self._next_episode_overrides = self._db.collection(
             f"{collection_prefix}_next_episode_overrides"
         )
+        # Phase 3: latest churn-risk snapshot per user. Keyed by user_id so
+        # the daily scoring job is idempotent (set() overwrites).
+        self._churn_risks = self._db.collection(
+            f"{collection_prefix}_churn_risks"
+        )
 
     def get_user(self, user_id: str) -> Optional[UserRecord]:
         doc = self._users.document(user_id).get()
@@ -1005,6 +1116,76 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
             UserSourceRecord.model_validate(doc.to_dict())
             for doc in self._sources.stream()
         ]
+
+    def list_all_users(self, limit: int = 1000) -> list[UserRecord]:
+        # Admin metrics only. Bounded by `limit` so the scan never goes
+        # unbounded if the user base grows; if/when it does, paginate.
+        docs = list(self._users.limit(limit).stream())
+        return [UserRecord.model_validate(doc.to_dict()) for doc in docs]
+
+    def list_all_subscriptions(self, limit: int = 1000) -> list[SubscriptionRecord]:
+        docs = list(self._subscriptions.limit(limit).stream())
+        return [SubscriptionRecord.model_validate(doc.to_dict()) for doc in docs]
+
+    def list_recent_episodes_across_users(
+        self, since: datetime, limit: int = 1000
+    ) -> list[UserEpisodeRecord]:
+        docs = list(
+            self._episodes
+                .where("published_at", ">=", since)
+                .order_by("published_at", direction=firestore.Query.DESCENDING)
+                .limit(limit)
+                .stream()
+        )
+        return [UserEpisodeRecord.model_validate(doc.to_dict()) for doc in docs]
+
+    def list_recent_swipes_across_users(
+        self, since: datetime, limit: int = 5000
+    ) -> list[SwipeRecord]:
+        docs = list(
+            self._swipes
+                .where("swiped_at", ">=", since)
+                .order_by("swiped_at", direction=firestore.Query.DESCENDING)
+                .limit(limit)
+                .stream()
+        )
+        return [SwipeRecord.model_validate(doc.to_dict()) for doc in docs]
+
+    def list_recent_user_runs(
+        self, user_id: str, limit: int = 50
+    ) -> list[UserRunRecord]:
+        # Pull the user's runs and sort app-side to avoid needing a
+        # composite (user_id, completed_at) index. Per-user run count is
+        # bounded by their account age × daily delivery cadence.
+        docs = list(self._runs.where("user_id", "==", user_id).stream())
+        runs = [UserRunRecord.model_validate(doc.to_dict()) for doc in docs]
+        runs.sort(key=lambda run: run.completed_at, reverse=True)
+        return runs[:limit]
+
+    def save_churn_risk(self, record: ChurnRiskRecord) -> None:
+        self._churn_risks.document(record.user_id).set(
+            record.model_dump(mode="python")
+        )
+
+    def get_churn_risk(self, user_id: str) -> Optional[ChurnRiskRecord]:
+        doc = self._churn_risks.document(user_id).get()
+        if not doc.exists:
+            return None
+        return ChurnRiskRecord.model_validate(doc.to_dict())
+
+    def list_churn_risks(self, *, at_risk_only: bool = False) -> list[ChurnRiskRecord]:
+        # Sort app-side: combining where(at_risk) with order_by(score)
+        # would require a composite index, and at current user-base size
+        # the full collection scan is bounded by paid-tier count anyway.
+        query = self._churn_risks
+        if at_risk_only:
+            query = query.where("at_risk", "==", True)
+        records = [
+            ChurnRiskRecord.model_validate(doc.to_dict())
+            for doc in query.stream()
+        ]
+        records.sort(key=lambda record: record.score, reverse=True)
+        return records
 
     def get_source_polling_state(
         self, source_id: str

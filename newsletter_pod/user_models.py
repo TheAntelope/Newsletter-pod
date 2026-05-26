@@ -270,6 +270,26 @@ class UserEntitlements(BaseModel):
     first_month_ends_at: Optional[datetime] = None
 
 
+class ChurnRiskRecord(BaseModel):
+    """Latest churn-risk score for a single paid user. Phase 3 scoring is
+    Firestore-derived; play data lives only in Cloud Logging until the
+    BigQuery sink is wired up, so `signals['days_since_last_episode']`
+    is the engagement-recency proxy (true `days_since_last_play` will
+    land when the events_raw view becomes queryable).
+
+    Re-running the score job overwrites the prior record (keyed by
+    user_id), so this table is always "latest snapshot", not history.
+    A future change can append rather than overwrite if we want a
+    score-over-time view.
+    """
+
+    user_id: str
+    score: float                    # 0.0 (no risk) to 1.0 (high risk)
+    at_risk: bool                   # score >= settings.churn_risk_threshold
+    signals: dict[str, float] = Field(default_factory=dict)
+    scored_at: datetime
+
+
 class AuthenticatedSession(BaseModel):
     user_id: str
     issued_at: datetime

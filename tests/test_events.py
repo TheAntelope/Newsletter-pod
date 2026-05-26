@@ -1,0 +1,213 @@
+from __future__ import annotations
+
+import json
+import logging
+
+import pytest
+from fastapi.testclient import TestClient
+
+from newsletter_pod import events as events_module
+from newsletter_pod.events import (
+    EventName,
+    EventPIIError,
+    bucket_play_position_seconds,
+    log_event,
+)
+from newsletter_pod.main import _build_container, create_app
+
+
+class FakeAppleVerifier:
+    """Mirror of the one in test_control_plane_api.py so this file stays
+    self-contained — no cross-test-module imports."""
+
+    def __init__(self, subject: str, email: str) -> None:
+        self.subject = subject
+        self.email = email
+
+    def verify(self, identity_token: str):
+        return type(
+            "Identity",
+            (),
+            {"subject": self.subject, "email": self.email},
+        )()
+
+
+def _build_app():
+    from newsletter_pod.config import Settings
+
+    settings = Settings.from_env()
+    settings.use_inmemory_adapters = True
+    settings.apple_client_id = "com.example.newsletterpod"
+    settings.session_signing_secret = "test-session-secret-32-bytes-long"
+    settings.podcast_api_enabled = False
+    settings.job_trigger_token = None
+    settings.app_base_url = "http://testserver"
+    settings.publish_summary_email_enabled = False
+    settings.free_max_delivery_days = 1
+    settings.pro_max_delivery_days = 3
+    settings.max_max_delivery_days = 3
+    container = _build_container(settings)
+    return container, TestClient(create_app(container=container))
+
+
+def _auth_headers(client: TestClient, verifier: FakeAppleVerifier) -> tuple[str, dict[str, str]]:
+    app = client.app
+    app.state.container.control_plane.apple_identity_verifier = verifier
+    response = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    assert response.status_code == 200
+    token = response.json()["session_token"]
+    return token, {"Authorization": f"Bearer {token}"}
+
+
+def _parse_event_record(record: logging.LogRecord) -> dict | None:
+    """Decode an `app_event` JSON log message. Returns None for any record
+    that isn't a JSON object with our `event` marker — so this also serves
+    as a filter for other logger.info noise inside the same logger."""
+    try:
+        payload = json.loads(record.getMessage())
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("event") != "app_event":
+        return None
+    return payload
+
+
+def _captured_events(caplog: pytest.LogCaptureFixture) -> list[dict]:
+    out = []
+    for record in caplog.records:
+        if record.name != events_module.__name__:
+            continue
+        decoded = _parse_event_record(record)
+        if decoded is not None:
+            out.append(decoded)
+    return out
+
+
+def test_log_event_emits_expected_shape(caplog):
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    log_event(EventName.SIGN_IN, "user-123", is_new_user=True)
+
+    events = _captured_events(caplog)
+    assert len(events) == 1
+    event = events[0]
+    assert set(event.keys()) == {"event", "event_name", "user_id", "ts", "properties"}
+    assert event["event"] == "app_event"
+    assert event["event_name"] == "sign_in"
+    assert event["user_id"] == "user-123"
+    assert event["properties"] == {"is_new_user": True}
+    # ts is ISO 8601, parseable
+    from datetime import datetime
+
+    parsed = datetime.fromisoformat(event["ts"])
+    assert parsed.tzinfo is not None
+
+
+def test_log_event_accepts_none_user_id(caplog):
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    log_event(EventName.PAYWALL_VIEWED, None, surface="onboarding")
+    events = _captured_events(caplog)
+    assert len(events) == 1
+    assert events[0]["user_id"] is None
+    assert events[0]["event_name"] == "paywall_viewed"
+
+
+def test_log_event_requires_event_name_enum():
+    with pytest.raises(TypeError):
+        log_event("sign_in", "user-1", is_new_user=True)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["email", "raw_text", "subject", "body_text", "transcript", "display_name"],
+)
+def test_log_event_refuses_pii_property_keys(key):
+    with pytest.raises(EventPIIError) as excinfo:
+        log_event(EventName.FEEDBACK_SUBMITTED, "user-1", **{key: "anything"})
+    assert key in str(excinfo.value)
+
+
+def test_log_event_pii_check_runs_before_log_is_emitted(caplog):
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    with pytest.raises(EventPIIError):
+        log_event(EventName.FEEDBACK_SUBMITTED, "user-1", email="user@example.com")
+    assert _captured_events(caplog) == []
+
+
+def test_bucket_play_position_seconds():
+    assert bucket_play_position_seconds(0) == "0-30"
+    assert bucket_play_position_seconds(29) == "0-30"
+    assert bucket_play_position_seconds(30) == "30-120"
+    assert bucket_play_position_seconds(119) == "30-120"
+    assert bucket_play_position_seconds(120) == "120-600"
+    assert bucket_play_position_seconds(599) == "120-600"
+    assert bucket_play_position_seconds(600) == "600+"
+    assert bucket_play_position_seconds(99_999) == "600+"
+
+
+def test_play_pulse_endpoint_requires_auth():
+    _, client = _build_app()
+    resp = client.post(
+        "/v1/me/episodes/ep-abc/play-pulse",
+        json={"position_seconds": 45},
+    )
+    assert resp.status_code == 401
+
+
+def test_play_pulse_endpoint_logs_event_with_bucket(caplog):
+    _, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("pulse-user", "pulse@example.com")
+    )
+
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    resp = client.post(
+        "/v1/me/episodes/ep-abc/play-pulse",
+        json={"position_seconds": 150},
+        headers=headers,
+    )
+    assert resp.status_code == 202
+    assert resp.json() == {"accepted": True}
+
+    pulses = [
+        e for e in _captured_events(caplog)
+        if e["event_name"] == EventName.EPISODE_PLAY_PULSE.value
+    ]
+    assert len(pulses) == 1
+    pulse = pulses[0]
+    assert pulse["properties"]["episode_id"] == "ep-abc"
+    assert pulse["properties"]["position_bucket"] == "120-600"
+    assert pulse["user_id"], "play-pulse must be tied to the authenticated user"
+
+
+def test_play_pulse_endpoint_clamps_negative_positions(caplog):
+    """A misbehaving client that posts a negative position should land
+    in the 0-30 bucket rather than crashing the request."""
+    _, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("pulse-neg-user", "pn@example.com")
+    )
+
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    resp = client.post(
+        "/v1/me/episodes/ep-neg/play-pulse",
+        json={"position_seconds": -42},
+        headers=headers,
+    )
+    assert resp.status_code == 202
+    pulses = [
+        e for e in _captured_events(caplog)
+        if e["event_name"] == EventName.EPISODE_PLAY_PULSE.value
+    ]
+    assert pulses and pulses[0]["properties"]["position_bucket"] == "0-30"
+
+
+def test_sign_in_emits_event_via_auth_flow(caplog):
+    _, client = _build_app()
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    _, _ = _auth_headers(client, FakeAppleVerifier("evt-user", "evt@example.com"))
+
+    sign_ins = [
+        e for e in _captured_events(caplog) if e["event_name"] == EventName.SIGN_IN.value
+    ]
+    assert len(sign_ins) == 1
+    assert sign_ins[0]["properties"] == {"is_new_user": True}

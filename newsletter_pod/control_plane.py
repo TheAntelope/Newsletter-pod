@@ -21,6 +21,7 @@ from .app_store_verifier import (
 from .config import Settings, load_sources, load_voices
 from .costing import estimate_generation_cost
 from .embeddings import EmbeddingProvider
+from .events import EventName, log_event
 from .feedback_digest import (
     JOB_STATE_NAME as FEEDBACK_DIGEST_JOB_STATE_NAME,
     format_digest_email,
@@ -274,6 +275,7 @@ class ControlPlaneService:
 
         ensure_user_inbound_alias(self.repository, user)
         token, session = self.session_manager.issue(user.id)
+        log_event(EventName.SIGN_IN, user.id, is_new_user=is_new)
         return {
             "session_token": token,
             "session": session.model_dump(mode="json"),
@@ -522,6 +524,16 @@ class ControlPlaneService:
         if extracted.vibe_notes:
             self._append_to_custom_guidance(user.id, extracted.vibe_notes)
 
+        log_event(
+            EventName.ONBOARDING_STEP,
+            user.id,
+            step="voice_intake",
+            seeded_count=seeded,
+            topic_count=len(extracted.topics),
+            entity_count=len(extracted.named_entities),
+            anchor_count=len(extracted.anchor_phrases),
+            vibe_notes_present=bool(extracted.vibe_notes),
+        )
         return {
             "seeded_count": seeded,
             "topics": extracted.topics,
@@ -646,6 +658,15 @@ class ControlPlaneService:
             created_at=utc_now(),
         )
         self.repository.save_feedback(record)
+        log_event(
+            EventName.FEEDBACK_SUBMITTED,
+            user_id,
+            feedback_id=record.id,
+            source=source,
+            char_count=len(cleaned),
+            locale_hint=locale_hint,
+            english_present=english is not None,
+        )
         return record.model_dump(mode="json")
 
     def send_feedback_weekly_digest(self) -> dict[str, Any]:
@@ -872,10 +893,18 @@ class ControlPlaneService:
         )
         self.repository.save_swipe(swipe)
         result = swipe.model_dump(mode="json")
+        attached_source_id: Optional[str] = None
         if direction > 0:
             attached_source_id = self._maybe_auto_attach_source(user_id, record.source_id)
             if attached_source_id:
                 result["auto_attached_source_id"] = attached_source_id
+        log_event(
+            EventName.SWIPE_RECORDED,
+            user_id,
+            direction=direction,
+            source_id=record.source_id,
+            auto_attached=bool(attached_source_id),
+        )
         return result
 
     def _maybe_auto_attach_source(self, user_id: str, source_id: str) -> Optional[str]:
@@ -1045,6 +1074,14 @@ class ControlPlaneService:
             )
 
         self.repository.replace_user_sources(user_id, resolved)
+        custom_count = sum(1 for source in resolved if source.is_custom)
+        log_event(
+            EventName.SOURCES_SAVED,
+            user_id,
+            source_count=len(resolved),
+            custom_count=custom_count,
+            catalog_count=len(resolved) - custom_count,
+        )
         return self.list_user_sources(user_id)
 
     def get_podcast_config(self, user_id: str) -> dict[str, Any]:
@@ -1170,6 +1207,13 @@ class ControlPlaneService:
 
         schedule.updated_at = utc_now()
         self.repository.save_schedule(schedule)
+        log_event(
+            EventName.SCHEDULE_CHANGED,
+            user_id,
+            weekday_count=len(schedule.weekdays),
+            local_time=schedule.local_time,
+            timezone=schedule.timezone,
+        )
         return self.get_schedule_config(user_id)
 
     def get_feed_details(self, user_id: str) -> dict[str, Any]:
@@ -1349,6 +1393,8 @@ class ControlPlaneService:
             return {"accepted": True, "event_id": event.id, "warning": "user not found"}
 
         subscription = self._get_subscription(event.user_id)
+        previous_tier = subscription.tier
+        previous_status = subscription.status
         self._mutate_subscription_from_notification(
             subscription,
             notification_type=decoded.notification_type,
@@ -1358,6 +1404,14 @@ class ControlPlaneService:
         )
         subscription.updated_at = utc_now()
         self.repository.save_subscription(subscription)
+        self._log_subscription_mutation(
+            user_id=event.user_id,
+            subscription=subscription,
+            previous_tier=previous_tier,
+            previous_status=previous_status,
+            notification_type=decoded.notification_type or "unknown",
+            via="app_store_notification",
+        )
         return {"accepted": True, "event_id": event.id}
 
     def apply_client_verified_transaction(
@@ -1417,6 +1471,8 @@ class ControlPlaneService:
         self.repository.save_billing_event(event)
 
         subscription = self._get_subscription(user_id)
+        previous_tier = subscription.tier
+        previous_status = subscription.status
         self._mutate_subscription_from_notification(
             subscription,
             notification_type="SUBSCRIBED",
@@ -1426,6 +1482,14 @@ class ControlPlaneService:
         )
         subscription.updated_at = utc_now()
         self.repository.save_subscription(subscription)
+        self._log_subscription_mutation(
+            user_id=user_id,
+            subscription=subscription,
+            previous_tier=previous_tier,
+            previous_status=previous_status,
+            notification_type="CLIENT_VERIFIED",
+            via="client_verified",
+        )
         return {
             "accepted": True,
             "event_id": event.id,
@@ -1456,6 +1520,8 @@ class ControlPlaneService:
 
         if event.user_id:
             subscription = self._get_subscription(event.user_id)
+            previous_tier = subscription.tier
+            previous_status = subscription.status
             pro_ids = {
                 self.settings.app_store_pro_monthly_product_id,
                 self.settings.app_store_pro_annual_product_id,
@@ -1481,6 +1547,14 @@ class ControlPlaneService:
                 subscription.expires_at = _parse_client_datetime(expires_at)
             subscription.updated_at = utc_now()
             self.repository.save_subscription(subscription)
+            self._log_subscription_mutation(
+                user_id=event.user_id,
+                subscription=subscription,
+                previous_tier=previous_tier,
+                previous_status=previous_status,
+                notification_type=event.notification_type,
+                via="app_store_notification_legacy",
+            )
 
         return {
             "accepted": True,
@@ -1537,6 +1611,42 @@ class ControlPlaneService:
             subscription.expires_at = datetime.fromtimestamp(
                 expires_date_ms / 1000, tz=timezone.utc
             )
+
+    def _log_subscription_mutation(
+        self,
+        *,
+        user_id: str,
+        subscription: SubscriptionRecord,
+        previous_tier: str,
+        previous_status: str,
+        notification_type: str,
+        via: str,
+    ) -> None:
+        """Emit SUBSCRIPTION_STARTED on a paid activation and
+        SUBSCRIPTION_CHANGED on any other tier/status mutation.
+
+        Both can fire (a brand-new paid activation is also a "change");
+        the receiver differentiates by event_name. Skips logging when
+        nothing actually moved so retries don't double-count.
+        """
+        tier_moved = subscription.tier != previous_tier
+        status_moved = subscription.status != previous_status
+        if not tier_moved and not status_moved:
+            return
+        common = {
+            "tier": subscription.tier,
+            "previous_tier": previous_tier,
+            "status": subscription.status,
+            "previous_status": previous_status,
+            "product_id": subscription.product_id,
+            "notification_type": notification_type,
+            "via": via,
+        }
+        paid_now = subscription.tier in {"pro", "max"} and subscription.status == "active"
+        was_paid = previous_tier in {"pro", "max"} and previous_status == "active"
+        if paid_now and not was_paid:
+            log_event(EventName.SUBSCRIPTION_STARTED, user_id, **common)
+        log_event(EventName.SUBSCRIPTION_CHANGED, user_id, **common)
 
     def dispatch_due_users(self, now_utc: Optional[datetime] = None) -> dict[str, Any]:
         now_utc = now_utc or utc_now()
@@ -2005,6 +2115,22 @@ class ControlPlaneService:
         )
         self.repository.save_user_run(run)
 
+        log_event(
+            EventName.EPISODE_GENERATED,
+            user_id,
+            run_id=run.id,
+            episode_id=episode.id,
+            voice_tier=voice_tier_for_episode,
+            candidate_count=candidate_count,
+            processed_item_count=len(items),
+            dropped_item_count=dropped_count,
+            cap_hit=cap_hit,
+            duration_seconds=generated.duration_seconds,
+            weekly_update_included=weekly_update_due,
+            inbound_item_count=len(consumed_inbound_ids),
+            pinned_item_count=len(consumed_pin_keys),
+        )
+
         return {
             "run": run.model_dump(mode="json"),
             "episode": episode.model_dump(mode="json"),
@@ -2017,6 +2143,13 @@ class ControlPlaneService:
         self._require_user(user_id)
         existing = self.repository.find_in_progress_user_run(user_id)
         if existing is not None:
+            log_event(
+                EventName.EPISODE_REQUESTED,
+                user_id,
+                run_id=existing.id,
+                force=force,
+                started=False,
+            )
             return {"run": existing.model_dump(mode="json"), "started": False}
 
         schedule = self._get_schedule(user_id)
@@ -2032,6 +2165,13 @@ class ControlPlaneService:
             message="Generation in progress",
         )
         self.repository.save_user_run(run)
+        log_event(
+            EventName.EPISODE_REQUESTED,
+            user_id,
+            run_id=run.id,
+            force=force,
+            started=True,
+        )
         return {"run": run.model_dump(mode="json"), "started": True}
 
     def run_user_generation_in_background(
@@ -2060,6 +2200,12 @@ class ControlPlaneService:
                 run.message = (str(exc)[:500] or "Generation failed")
                 run.completed_at = now
             self.repository.save_user_run(run)
+            log_event(
+                EventName.EPISODE_FAILED,
+                user_id,
+                run_id=run_id,
+                error_class=type(exc).__name__,
+            )
 
     def get_user_run_status(self, user_id: str, run_id: str) -> dict[str, Any]:
         run = self.repository.get_user_run(run_id)

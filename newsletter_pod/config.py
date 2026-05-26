@@ -292,6 +292,24 @@ class Settings(BaseSettings):
         default=False, alias="APP_STORE_NOTIFICATIONS_REQUIRE_SIGNED"
     )
 
+    # Comma-separated list of UserRecord.id values allowed to hit /admin/*.
+    # Empty string = endpoint is effectively closed (everyone gets 403).
+    admin_user_ids: str = Field(default="", alias="ADMIN_USER_IDS")
+
+    # Phase 3 churn-risk scoring threshold (0.0 - 1.0). Scores at or above
+    # this value flip the record's `at_risk` flag and emit a
+    # CHURN_RISK_SCORED event. 0.6 was the brief's default; tune in
+    # response to the first weeks of operator triage.
+    churn_risk_threshold: float = Field(default=0.6, alias="CHURN_RISK_THRESHOLD")
+
+    # Phase 3 weekly cohort report (Mondays). When False the job
+    # endpoint short-circuits returning {"status": "disabled"}; matches
+    # the feedback_digest_email_enabled pattern so an operator can flip
+    # either job independently.
+    cohort_report_email_enabled: bool = Field(
+        default=True, alias="COHORT_REPORT_EMAIL_ENABLED"
+    )
+
     inbound_email_domain: str = Field(default="theclawcast.com", alias="INBOUND_EMAIL_DOMAIN")
     mailgun_webhook_signing_key: Optional[str] = Field(default=None, alias="MAILGUN_WEBHOOK_SIGNING_KEY")
     mailgun_api_key: Optional[str] = Field(default=None, alias="MAILGUN_API_KEY")

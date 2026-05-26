@@ -12,8 +12,18 @@ from pydantic import BaseModel
 
 from .auth import AppleIdentityVerifier, AuthError, SessionManager
 from .config import Settings, load_voices
+from .admin_metrics import (
+    AdminMetricsService,
+    is_admin,
+    render_summary_html,
+    render_user_not_found_html,
+    render_user_timeline_html,
+)
+from .churn_risk import ChurnRiskScoringService
+from .cohort_report import CohortReportService
 from .control_plane import ControlPlaneError, ControlPlaneService, build_task_enqueuer
 from .embeddings import EmbeddingProvider, OpenAIEmbeddingProvider
+from .events import EventName, bucket_play_position_seconds, log_event
 from .feed import build_feed_xml
 from .inbound import (
     InboundConfigError,
@@ -123,6 +133,10 @@ class NextEpisodeOverrideRequest(BaseModel):
     source_item_dedupe_key: str
 
 
+class PlayPulseRequest(BaseModel):
+    position_seconds: int
+
+
 class CreateSubstackIntentRequest(BaseModel):
     pub_url: str
 
@@ -219,6 +233,44 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         _validate_job_auth(container.settings, authorization, x_job_trigger_token)
         assert container.control_plane is not None
         return container.control_plane.refresh_cold_start_deck()
+
+    @app.post("/jobs/score-churn-risk")
+    def score_churn_risk(
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Phase 3 daily job. Scores every active paid user against the
+        churn-risk heuristic in newsletter_pod/churn_risk.py and persists
+        the latest snapshot per user. Idempotent: re-running on the same
+        data overwrites (it doesn't append) and produces a deterministic
+        score."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.control_repository is not None
+        service = ChurnRiskScoringService(
+            repository=container.control_repository,
+            settings=container.settings,
+        )
+        return service.score_all_active_paid_users()
+
+    @app.post("/jobs/weekly-cohort-report")
+    def weekly_cohort_report(
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Phase 3 Monday job. Emails last week's signup cohort
+        activation + paid-conversion stats and the global top-3
+        churn-risk users to the operator. Short-circuits when
+        COHORT_REPORT_EMAIL_ENABLED is False so the job can be paused
+        from the Cloud Run env without touching the scheduler."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.control_repository is not None
+        assert container.control_plane is not None
+        service = CohortReportService(
+            repository=container.control_repository,
+            mailer=container.control_plane.mailer,
+            settings=container.settings,
+        )
+        return service.send_weekly_cohort_report()
 
     @app.post("/jobs/poll-sources")
     def poll_sources(
@@ -591,6 +643,68 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         user = _require_session_user(container, authorization)
         assert container.control_plane is not None
         return container.control_plane.list_user_episodes(user.id)
+
+    @app.post(
+        "/v1/me/episodes/{episode_id}/play-pulse",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def post_play_pulse(
+        episode_id: str,
+        request_payload: PlayPulseRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        """Heartbeat from any in-app player while an episode plays.
+        Logs-only — no DB write. Position is bucketed so the event
+        stream never carries an exact playhead timestamp."""
+        user = _require_session_user(container, authorization)
+        position = max(0, int(request_payload.position_seconds))
+        log_event(
+            EventName.EPISODE_PLAY_PULSE,
+            user.id,
+            episode_id=episode_id,
+            position_bucket=bucket_play_position_seconds(position),
+        )
+        return {"accepted": True}
+
+    @app.get("/admin/metrics", response_class=Response)
+    def admin_metrics(
+        user_id: str | None = None,
+        authorization: str | None = Header(default=None),
+    ) -> Response:
+        """Admin-only metrics page. Without `?user_id=` renders a global
+        summary; with one, renders that user's timeline. Gated by
+        ADMIN_USER_IDS; returns 403 (not 404) when an authenticated
+        non-admin tries to access it so the operator gets a clear
+        signal in logs."""
+        session_user = _require_session_user(container, authorization)
+        if not is_admin(session_user.id, container.settings):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+        assert container.control_repository is not None
+        service = AdminMetricsService(
+            repository=container.control_repository,
+            settings=container.settings,
+        )
+        if user_id:
+            timeline = service.get_user_timeline(user_id)
+            if timeline is None:
+                html_body = render_user_not_found_html(user_id)
+                return Response(
+                    content=html_body,
+                    media_type="text/html; charset=utf-8",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+            return Response(
+                content=render_user_timeline_html(timeline),
+                media_type="text/html; charset=utf-8",
+            )
+        summary = service.get_summary()
+        return Response(
+            content=render_summary_html(summary),
+            media_type="text/html; charset=utf-8",
+        )
 
     @app.post("/v1/me/generate", status_code=status.HTTP_202_ACCEPTED)
     def generate_episode_now(

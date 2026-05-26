@@ -110,6 +110,65 @@ Status: **shipped** (2026-05-18). End-to-end backend + iOS. Driver: user feedbac
 - Negative-swipe weighting: today every left-swipe drags the centroid in proportion to its magnitude. Strong negatives could pull the vector into meaningless territory once we have power users. Revisit if we see vector quality drop with deep swipe histories.
 - Inbound-email items currently compete with everything else in the ranker. Decide whether to force-include them as a separate slot.
 
+### Analytics stack (events, BigQuery views, admin metrics, churn + cohort jobs)
+
+Status: **shipped** (2026-05-26). End-to-end first-party telemetry from
+the iOS/backend → Cloud Logging → BigQuery → operator dashboards.
+Replaces the "no analytics SDK" hole that meant we had no way to
+answer DAU / activation / retention / churn questions without
+hand-querying Firestore.
+
+**Shipped in three phases:**
+
+1. **Phase 1 — Events.** `newsletter_pod/events.py` (`EventName` enum
+   + `log_event` helper) emits structured `app_event` JSON log lines
+   wired at every meaningful boundary: sign-in, onboarding step,
+   swipe, sources saved, schedule change, episode requested,
+   episode generated, episode failed, episode play pulse (via new
+   `POST /v1/me/episodes/{id}/play-pulse`), subscription started/
+   changed, feedback submitted, churn-risk scored. PII rule enforced
+   in code (`EventPIIError` rejects forbidden property keys at call
+   time so a regression can't leak email/text/subject/etc into the
+   stream).
+2. **Phase 2 — Reporting infra.** `infra/bigquery_setup.md` (gcloud
+   commands to create `analytics` dataset + Cloud Logging sink +
+   daily Firestore→GCS→BigQuery export of 5 collections);
+   `infra/bigquery_views.sql` (six BigQuery views — DAU/WAU/MAU,
+   activation funnel, cohort retention, tier+MRR breakdown, episode
+   completion, churn-risk users — all partition-pruned via the
+   sink's `timestamp` column). `GET /admin/metrics` renders a
+   Firestore-derived summary HTML page + per-user timeline at
+   `?user_id=`, gated by `ADMIN_USER_IDS` env var. Tiles that
+   *require* the BigQuery sink render as placeholders pointing at
+   their view name (so the page is honest about what's live).
+   `docs/looker_studio_setup.md` walks through the 6-tile dashboard
+   build with Monday email delivery.
+3. **Phase 3 — Scheduled jobs.** `POST /jobs/score-churn-risk`
+   (daily 04:00 Europe/Amsterdam) walks active paid users, computes
+   a weighted score from `days_since_last_episode`, `swipes_14d`,
+   `schedule_underuse_fraction`, `feedback_negative_30d`, persists
+   `ChurnRiskRecord`, and emits `CHURN_RISK_SCORED` per at-risk
+   user. `POST /jobs/weekly-cohort-report` (Mondays 07:00) emails
+   the operator: last-week signups, activation %, paid conversion,
+   top 3 churn-risk users. `scripts/schedule_analytics_jobs.sh`
+   provisions both Cloud Scheduler jobs (`--dry-run` supported).
+
+**Phase 3 data-source caveat:** churn scoring uses
+`days_since_last_episode` as the proxy for "play recency" — actual
+play data lives only in Cloud Logging until the BigQuery sink lands.
+Same story for `schedule_underuse_fraction` standing in for
+`schedule_day_count_delta_30d`. Both signals upgrade automatically
+once `vw_churn_risk_users` flows.
+
+**Recovery action on churn-risk users — deliberately deferred.** See
+"Deferred" section below.
+
+**Cloud Scheduler wiring (operational TODO):** run
+`./scripts/schedule_analytics_jobs.sh` once Phase 1+2+3 are deployed.
+Requires `GCP_PROJECT`, `SERVICE_URL`, `JOB_TRIGGER_TOKEN` env vars.
+Also: set `ADMIN_USER_IDS` on the Cloud Run service (cloudbuild.yaml
+doesn't propagate it) or `/admin/metrics` 403s for everyone.
+
 ### Per-item sub-topic tags via emergent clustering (option C — layering on D)
 
 Status: not started. Logged 2026-05-18. Driver: D handles per-user selection well, but cards (and show-notes attribution) still lack a visible category, and users have no manual lever like "less AI, more finance this week."
@@ -165,6 +224,34 @@ Context: stacked recommendation 1+2+3a+3b+4a+5 was shipped (voice intake, swipe 
 **Why deferred:** low signal-to-noise. Location can already drive RSS catalog selection at a coarser level (locale-specific feeds). Calendar is invasive and rarely accurate — meeting titles are noisy proxies for interest.
 
 **Revisit trigger:** if we ever ship a "local news" pod variant where locality is the primary lens.
+
+#### Recovery action on churn-risk users (logged 2026-05-26)
+
+**The idea:** Phase 3 scoring (`/jobs/score-churn-risk`) flags
+at-risk paid users daily and emits a `CHURN_RISK_SCORED` event per
+user. The natural next move is an automated intervention — push
+notification, "you might like this" re-engagement email, or
+auto-generating a tighter / shorter / off-cadence episode tuned to
+their recent swipe vector.
+
+**Why deferred:**
+
+- The expensive option (re-generating an episode) costs ~$0.10-0.30
+  per pod in OpenAI + ElevenLabs spend. Firing it on the wrong
+  user is real money and adds load to the daily generation pipeline.
+- The cheap options (push, email) require a re-engagement copy
+  surface that doesn't exist yet — and "you haven't played in a
+  week" is a deeply annoying message if the heuristic mislabels.
+- The Phase 3 scoring heuristic itself is *unvalidated* against
+  actual churn outcomes. Need at least one cohort cycle of
+  CHURN_RISK_SCORED → cancellation-or-not data before designing the
+  recovery action — otherwise we'd be acting on a score that may
+  not predict anything.
+
+**Revisit trigger:** when we have ≥10 cohort weeks of churn-risk
+scoring + subscription-cancellation outcome data and the score
+correlates ≥0.6 with 14-day cancel rate. Until then, the operator
+triages from `/admin/metrics?user_id=...` manually.
 
 #### Personalized welcome-episode opener
 
