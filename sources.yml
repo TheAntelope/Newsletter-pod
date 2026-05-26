@@ -463,6 +463,47 @@ sources:
     ingest_mode: full
     jurisdiction_sensitive: false
 
+  # --- Space ---
+  - id: sci-nasa
+    name: NASA Breaking News
+    rss_url: https://www.nasa.gov/news-release/feed/
+    topic: Science
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: sci-spacenews
+    name: SpaceNews
+    rss_url: https://spacenews.com/feed/
+    topic: Science
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: sci-space-com
+    name: Space.com
+    rss_url: https://www.space.com/feeds/all
+    topic: Science
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: sci-sky-and-telescope
+    name: Sky & Telescope
+    rss_url: https://skyandtelescope.org/astronomy-news/feed/
+    topic: Science
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: sci-universe-today
+    name: Universe Today
+    rss_url: https://www.universetoday.com/feed/
+    topic: Science
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
   # =====================================================================
   # Sports
   # =====================================================================
@@ -589,6 +630,49 @@ sources:
     topic: Health & Wellness
     enabled: true
     ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  # =====================================================================
+  # Fitness
+  # =====================================================================
+  - id: fitness-stronger-by-science
+    name: Stronger by Science
+    rss_url: https://www.strongerbyscience.com/feed/
+    topic: Fitness
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: fitness-barbell-medicine
+    name: Barbell Medicine
+    rss_url: https://www.barbellmedicine.com/feed/
+    topic: Fitness
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: fitness-runners-world
+    name: Runner's World
+    rss_url: https://www.runnersworld.com/rss/all.xml/
+    topic: Fitness
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: fitness-bicycling
+    name: Bicycling
+    rss_url: https://www.bicycling.com/rss/all.xml/
+    topic: Fitness
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: fitness-triathlete
+    name: Triathlete
+    rss_url: https://www.triathlete.com/feed/
+    topic: Fitness
+    enabled: true
+    ingest_mode: full
     jurisdiction_sensitive: false
 
   # =====================================================================

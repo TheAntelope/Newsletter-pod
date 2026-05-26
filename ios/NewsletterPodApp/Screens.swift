@@ -2590,6 +2590,7 @@ struct OnboardingStarterPack: Identifiable {
         "Sports": "sportscourt.fill",
         "Culture": "theatermasks.fill",
         "Health & Wellness": "heart.fill",
+        "Fitness": "figure.run",
         "Food & Travel": "airplane",
         "Romantasy": "heart.text.square.fill",
     ]
