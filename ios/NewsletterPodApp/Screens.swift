@@ -3985,9 +3985,9 @@ private struct OnboardingVoicesStep: View {
 
     private var subtitle: String {
         if requiresCommentator {
-            return "Your Anchor leads, your Commenter reacts. Tap a voice to make them Commenter, or tap your Commenter to swap roles. Change either later on the Podcast tab."
+            return "Your Anchor leads, your Commenter reacts. Use each voice's role menu to pick who anchors and who comments. Change either later on the Podcast tab."
         }
-        return "Tap a voice to set them as Anchor. A different guest voice cycles in each episode. Change the anchor anytime on the Podcast tab."
+        return "Pick the voice you want as your Anchor from the role menu on each card. A different guest voice cycles in each episode. Change the anchor anytime on the Podcast tab."
     }
 
     var body: some View {
@@ -4005,7 +4005,8 @@ private struct OnboardingVoicesStep: View {
                         voice: voice,
                         role: role(for: voice.id),
                         isPlaying: samplePlayer.playingVoiceID == voice.id,
-                        onCycle: { cycleRole(for: voice) },
+                        requiresCommentator: requiresCommentator,
+                        onAssignRole: { assignRole($0, to: voice) },
                         onPreview: { samplePlayer.play(voice) }
                     )
                 }
@@ -4025,25 +4026,33 @@ private struct OnboardingVoicesStep: View {
         return .unassigned
     }
 
-    /// Tap-to-assign logic. Anchor is always pre-filled by `applyDefaultsIfEmpty`,
-    /// so tapping the anchor is a no-op (use the explicit play button to preview).
-    /// - two_hosts:      tap unassigned → becomes Commenter (replacing the current one);
-    ///                   tap Commenter  → swaps roles with Anchor.
-    /// - rotating_guest: tap any non-anchor voice → becomes Anchor.
-    private func cycleRole(for voice: CatalogVoiceDTO) {
+    /// Assign a role to a voice via the dropdown menu. Keeps the anchor/commentator
+    /// pair coherent by swapping when the picked voice already held the other role.
+    /// - two_hosts:      picking Anchor on the current Commenter swaps the two;
+    ///                   picking Commenter on the current Anchor swaps the two;
+    ///                   picking either on an unassigned voice replaces the previous holder of that role.
+    /// - rotating_guest: only Anchor is offered; picking it reassigns the anchor.
+    private func assignRole(_ newRole: VoiceCardRole, to voice: CatalogVoiceDTO) {
         let id = voice.id
         let currentRole = role(for: id)
-        guard currentRole != .anchor else { return }
+        guard newRole != currentRole, newRole != .unassigned else { return }
 
-        if requiresCommentator {
-            if currentRole == .commentator {
-                commentatorVoiceID = anchorVoiceID
-                anchorVoiceID = id
-            } else {
-                commentatorVoiceID = id
-            }
-        } else {
+        switch newRole {
+        case .anchor:
+            let previousAnchor = anchorVoiceID
             anchorVoiceID = id
+            if requiresCommentator, currentRole == .commentator {
+                commentatorVoiceID = previousAnchor
+            }
+        case .commentator:
+            guard requiresCommentator else { return }
+            let previousCommentator = commentatorVoiceID
+            commentatorVoiceID = id
+            if currentRole == .anchor {
+                anchorVoiceID = previousCommentator
+            }
+        case .unassigned:
+            break
         }
     }
 
@@ -4065,7 +4074,8 @@ private struct VoiceChoiceCard: View {
     let voice: CatalogVoiceDTO
     let role: VoiceCardRole
     let isPlaying: Bool
-    let onCycle: () -> Void
+    let requiresCommentator: Bool
+    let onAssignRole: (VoiceCardRole) -> Void
     let onPreview: () -> Void
 
     private var isSelected: Bool { role != .unassigned }
@@ -4075,14 +4085,9 @@ private struct VoiceChoiceCard: View {
         EditorialCard {
             HStack(alignment: .top, spacing: Theme.Spacing.m) {
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Text(voice.name)
-                            .font(Theme.Typography.subtitle)
-                            .foregroundStyle(Theme.Palette.ink)
-                        if let badge = roleBadgeText {
-                            VoiceRoleBadge(text: badge)
-                        }
-                    }
+                    Text(voice.name)
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.Palette.ink)
                     if !voice.description.isEmpty {
                         Text(voice.description)
                             .font(Theme.Typography.callout)
@@ -4104,38 +4109,66 @@ private struct VoiceChoiceCard: View {
                     }
                 }
                 Spacer(minLength: 0)
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22))
-                    .foregroundStyle(isSelected ? Theme.Palette.amber : Theme.Palette.rule)
+                roleMenu
             }
         }
         .overlay(
             RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
                 .stroke(isSelected ? Theme.Palette.amber : Color.clear, lineWidth: 2)
         )
-        .contentShape(Rectangle())
-        .onTapGesture { onCycle() }
     }
 
-    private var roleBadgeText: String? {
+    private var roleMenu: some View {
+        Menu {
+            Button {
+                onAssignRole(.anchor)
+            } label: {
+                if role == .anchor {
+                    Label("Anchor", systemImage: "checkmark")
+                } else {
+                    Text("Anchor")
+                }
+            }
+            if requiresCommentator {
+                Button {
+                    onAssignRole(.commentator)
+                } label: {
+                    if role == .commentator {
+                        Label("Commentator", systemImage: "checkmark")
+                    } else {
+                        Text("Commentator")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(menuLabel)
+                    .font(Theme.Typography.calloutStrong)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(isSelected ? Color.white : Theme.Palette.amberDeep)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(isSelected ? Theme.Palette.amber : Color.clear)
+            )
+            .overlay(
+                Capsule()
+                    .stroke(isSelected ? Color.clear : Theme.Palette.amberDeep.opacity(0.4), lineWidth: 1)
+            )
+        }
+        .accessibilityLabel("\(voice.name) role")
+        .accessibilityValue(menuLabel)
+    }
+
+    private var menuLabel: String {
         switch role {
         case .anchor: return "Anchor"
         case .commentator: return "Commentator"
-        case .unassigned: return nil
+        case .unassigned: return "Set role"
         }
-    }
-}
-
-private struct VoiceRoleBadge: View {
-    let text: String
-    var body: some View {
-        Text(text)
-            .font(Theme.Typography.meta)
-            .tracking(1.2)
-            .foregroundStyle(Color.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Theme.Palette.amber, in: Capsule())
     }
 }
 
