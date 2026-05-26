@@ -2591,6 +2591,7 @@ struct OnboardingStarterPack: Identifiable {
         "Culture": "theatermasks.fill",
         "Health & Wellness": "heart.fill",
         "Fitness": "figure.run",
+        "Family Life": "figure.2.and.child.holdinghands",
         "Food & Travel": "airplane",
         "Romantasy": "heart.text.square.fill",
     ]

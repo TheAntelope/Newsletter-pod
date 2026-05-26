@@ -676,6 +676,49 @@ sources:
     jurisdiction_sensitive: false
 
   # =====================================================================
+  # Family Life
+  # =====================================================================
+  - id: family-fatherly
+    name: Fatherly
+    rss_url: https://www.fatherly.com/feed/
+    topic: Family Life
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: family-motherly
+    name: Motherly
+    rss_url: https://www.mother.ly/feed
+    topic: Family Life
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: family-cup-of-jo
+    name: Cup of Jo
+    rss_url: https://cupofjo.com/feed/
+    topic: Family Life
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: family-atlantic-family
+    name: The Atlantic — Family
+    rss_url: https://www.theatlantic.com/feed/channel/family/
+    topic: Family Life
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: family-janet-lansbury
+    name: Janet Lansbury
+    rss_url: https://www.janetlansbury.com/feed/
+    topic: Family Life
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  # =====================================================================
   # Food & Travel
   # =====================================================================
   - id: ft-eater
