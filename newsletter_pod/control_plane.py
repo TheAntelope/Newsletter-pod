@@ -1831,6 +1831,26 @@ class ControlPlaneService:
         dropped_count = 0
         cap_hit = False
 
+        # Hard-exclude items the user explicitly swiped left on. The ranker
+        # only soft-downweights via vector similarity, and below
+        # swipe_ranker_min_swipes it's bypassed entirely — so without this
+        # filter an item the user just declined in the swipe deck can
+        # immediately resurface in the first briefing.
+        left_swipe_keys = {
+            swipe.source_item_dedupe_key
+            for swipe in self.repository.list_user_swipes(user_id)
+            if swipe.direction < 0 and swipe.source_item_dedupe_key
+        }
+        if left_swipe_keys:
+            before = len(items)
+            items = [item for item in items if item.dedupe_key not in left_swipe_keys]
+            removed = before - len(items)
+            if removed:
+                logger.info(
+                    "left_swipe_exclusion user=%s removed=%d remaining=%d",
+                    user_id, removed, len(items),
+                )
+
         # Next-episode queue overrides (flag-gated spike). Excludes drop from
         # the candidate pool entirely; pins force-include up to the per-tier
         # item cap, with the ranker (or chronological fallback) filling

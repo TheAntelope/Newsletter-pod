@@ -8,7 +8,12 @@ from fastapi.testclient import TestClient
 from newsletter_pod.ingestion import IngestionResult, RSSIngestionService
 from newsletter_pod.main import _build_container, create_app
 from newsletter_pod.models import AudioSegment, GeneratedEpisode, SourceItem
-from newsletter_pod.user_models import InboundEmailItem, UserEpisodeRecord, UserSubstackIntent
+from newsletter_pod.user_models import (
+    InboundEmailItem,
+    SwipeRecord,
+    UserEpisodeRecord,
+    UserSubstackIntent,
+)
 
 
 class FakeAppleVerifier:
@@ -1469,6 +1474,79 @@ def test_process_user_generation_records_visible_cap(monkeypatch):
     assert "**Sources**" in description
     assert "- **Source A** — [Story Two](https://example.com/2)" in description
     assert "https://example.com/1" not in description
+
+
+def test_left_swiped_items_are_excluded_from_episode(monkeypatch):
+    """First-time user feedback (2026-05-26): a user swiped left on two items
+    in the cold-start deck and they immediately resurfaced in the first
+    briefing. The ranker only soft-downweights via cosine similarity, and
+    below swipe_ranker_min_swipes it's bypassed entirely — so an explicit
+    "no" from the deck must hard-exclude the item.
+    """
+    container, client = _build_app()
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier(
+        "apple-leftswipe", "leftswipe@example.com"
+    )
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    user_id = auth.json()["user"]["id"]
+
+    catalog = client.get("/v1/sources/catalog").json()["sources"]
+    headers = {"Authorization": f"Bearer {auth.json()['session_token']}"}
+    client.put(
+        "/v1/me/sources",
+        json={"sources": [{"source_id": catalog[0]["source_id"]}]},
+        headers=headers,
+    )
+    container.control_plane.podcast_client = FakePodcastClient()
+
+    now = datetime(2026, 5, 26, 12, 0, tzinfo=timezone.utc)
+    container.control_repository.save_swipe(
+        SwipeRecord(
+            id="declined-1",
+            user_id=user_id,
+            source_item_dedupe_key="2",
+            direction=-1,
+            title="Story Two",
+            link="https://example.com/2",
+            source_id="source-a",
+            source_name="Source A",
+            embedding=[0.0, 1.0],
+            embedding_model="test",
+            swiped_at=now,
+        )
+    )
+
+    def fake_fetch(self, sources):
+        return IngestionResult(
+            items=[
+                SourceItem(
+                    source_id="source-a", source_name="Source A", guid="1",
+                    link="https://example.com/1", title="Story One",
+                    summary="Summary one",
+                    published_at=datetime(2026, 5, 26, 8, 0, tzinfo=timezone.utc),
+                    dedupe_key="1",
+                ),
+                SourceItem(
+                    source_id="source-a", source_name="Source A", guid="2",
+                    link="https://example.com/2", title="Story Two",
+                    summary="Summary two",
+                    published_at=datetime(2026, 5, 26, 9, 0, tzinfo=timezone.utc),
+                    dedupe_key="2",
+                ),
+            ],
+            cursor_updates={"source-a": datetime(2026, 5, 26, 9, 0, tzinfo=timezone.utc)},
+        )
+
+    monkeypatch.setattr(RSSIngestionService, "fetch_new_items", fake_fetch)
+
+    result = client.post(
+        "/jobs/process-user-podcast",
+        json={"user_id": user_id, "force": True},
+    )
+    assert result.status_code == 200, result.text
+    payload = result.json()
+    refs = payload["episode"]["source_item_refs"]
+    assert [ref["link"] for ref in refs] == ["https://example.com/1"]
 
 
 def _seed_user_for_inbound_run(client, container, monkeypatch, *, email, subject):
