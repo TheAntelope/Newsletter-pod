@@ -30,6 +30,8 @@ targets:
     resources:
       - path: NewsletterPodApp/Assets.xcassets
       - path: NewsletterPodApp/Configuration.storekit
+    dependencies:
+      - target: NewsletterPodShareExtension
     settings:
       base:
         PRODUCT_MODULE_NAME: NewsletterPod
@@ -40,6 +42,28 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.news
         ENABLE_PREVIEWS: YES
+  NewsletterPodShareExtension:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: NewsletterPodShareExtension
+      # SharedSession.swift is compiled into BOTH the main app and the
+      # extension so they hit the same keychain helper. Keeping it as a
+      # single file rather than a framework avoids the extra build target.
+      - path: NewsletterPodApp/SharedSession.swift
+    settings:
+      base:
+        PRODUCT_NAME: NewsletterPodShareExtension
+        PRODUCT_MODULE_NAME: NewsletterPodShareExtension
+        PRODUCT_BUNDLE_IDENTIFIER: com.newsletterpod.app.share
+        SWIFT_VERSION: "5.10"
+        DEVELOPMENT_TEAM: "R7HS2T53Z8"
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_FILE: NewsletterPodShareExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: NewsletterPodShareExtension/NewsletterPodShareExtension.entitlements
+        SKIP_INSTALL: YES
   NewsletterPodUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -65,6 +89,7 @@ schemes:
     build:
       targets:
         NewsletterPod: all
+        NewsletterPodShareExtension: all
         NewsletterPodUITests: [test]
     run:
       config: Debug

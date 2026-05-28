@@ -15,6 +15,13 @@ workflows:
     environment:
       ios_signing:
         distribution_type: app_store
+        # Main app bundle id. The Share extension (com.newsletterpod.app.share)
+        # is auto-discovered by `xcode-project use-profiles` when its bundle
+        # id is registered in App Store Connect. BEFORE the first build with
+        # the share extension target: register the new bundle id in App Store
+        # Connect → Identifiers; the integration provisions matching profiles
+        # automatically. If a build fails with "no matching profile for
+        # com.newsletterpod.app.share", that registration is missing.
         bundle_identifier: com.newsletterpod.app
       vars:
         XCODE_PROJECT: "ios/NewsletterPod.xcodeproj"

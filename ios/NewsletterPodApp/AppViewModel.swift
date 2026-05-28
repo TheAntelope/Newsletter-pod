@@ -59,6 +59,12 @@ final class AppViewModel: ObservableObject {
         self.isUITestSkipOnboarding = ProcessInfo.processInfo.arguments.contains("-uiTestSkipOnboarding")
         if isUITestMode {
             applyUITestSeed()
+        } else if let storedToken = SharedSession.loadToken() {
+            // Restore the previous session on cold launch so users don't have
+            // to sign in again every time the app is killed. Also makes the
+            // token available to the Share extension, which reads from the
+            // same shared-keychain access group.
+            self.sessionToken = storedToken
         }
     }
 
@@ -145,6 +151,7 @@ final class AppViewModel: ObservableObject {
             sessionToken = session.sessionToken
             user = session.user
             subscription = session.subscription
+            SharedSession.saveToken(session.sessionToken, userID: session.user.id)
             try await refresh()
         }
         evaluateOnboardingTrigger()
@@ -546,6 +553,7 @@ final class AppViewModel: ObservableObject {
         showOnboarding = false
         selectedTab = .home
         UserDefaults.standard.removeObject(forKey: Self.onboardingCompleteKey)
+        SharedSession.clear()
         flashSaved("Account deleted")
         return true
     }

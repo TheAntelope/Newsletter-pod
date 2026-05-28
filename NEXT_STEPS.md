@@ -169,6 +169,39 @@ Requires `GCP_PROJECT`, `SERVICE_URL`, `JOB_TRIGGER_TOKEN` env vars.
 Also: set `ADMIN_USER_IDS` on the Cloud Run service (cloudbuild.yaml
 doesn't propagate it) or `/admin/metrics` 403s for everyone.
 
+### Share-to-ClawCast (iOS Share extension + backend pinning)
+
+Status: **code-complete** (2026-05-28). Backend live and tested. iOS share extension target wired into XcodeGen + Codemagic. App Store Connect bundle-id registration is the only manual step left before TestFlight. Driver: users want the "Send to Kindle"-style affordance — any document they're reading should be able to land in their next pod.
+
+**Shipped backend:**
+
+- `POST /v1/items/shared` (multipart). Accepts `kind` ∈ {`url`, `pdf`, `epub`, `docx`, `text`} plus either `url` form-field or `file` upload, with optional `title` override. 25 MB upload cap (`SHARED_MAX_UPLOAD_BYTES`); 50k-char body cap after extraction (`MAX_EXTRACTED_CHARS`). 413 on oversize uploads.
+- `newsletter_pod/shared_items.py` extractors: `pypdf` for PDF, `ebooklib` for EPUB, `python-docx` for DOCX, stdlib `HTMLParser` for URLs (skips `<script>`/`<style>`/`<nav>`/`<footer>`/etc., prefers `<article>` > `<main>` > `<body>`, falls back to `og:description`).
+- Persistence: shared items are stored as `InboundEmailItem(kind="share")` with `from_email="share@theclawcast.com"`. Deterministic id from `(user_id, article_url, title, body[:1000])` so re-sharing the same content is idempotent (returns `duplicate: true`).
+- Generation hook (`control_plane.py` `process_user_generation`): `kind="share"` items split off from the candidate pool early, skip swipe-filtering and the ranker, and are appended unconditionally — they **bypass the per-tier `max_items_per_episode` cap**. A free user (cap=1) who shares 3 things gets 1 RSS + 3 shares = 4 items in the next pod. The existing `mark_inbound_items_consumed` path drops them off after the episode publishes.
+- Observability: `SHARED_ITEM_RECEIVED` event (`events.py`) with `share_kind`, `body_len_bucket` (coarse), `has_article_url`. No PII in the event stream — the body and title are deliberately not logged.
+
+**Shipped iOS:**
+
+- `ios/NewsletterPodShareExtension/` (new target, type `app-extension`, bundle id `com.newsletterpod.app.share`) wired into `ios/project.yml` as a dependency of the main app and into the `NewsletterPod` build scheme.
+- `ShareViewController.swift` (UIKit; `Social` framework) reads the first `NSExtensionItem.attachments` entry, dispatches on UTI (`public.url`, `com.adobe.pdf`, `public.plain-text`, `org.idpf.epub-container`, `org.openxmlformats.wordprocessingml.document`), and POSTs multipart to `/v1/items/shared` directly via `URLSession`. Shows "Pinning to your next pod…" then dismisses; 401/413 surface inline.
+- `NSExtensionActivationRule` configured for URL + text + 1 attachment + 1 file (Safari, Mail, Files, Reeder, Apple News, Substack iOS, etc.).
+- `SharedSession.swift` keychain helper compiled into BOTH targets. Stores token in access group `$(AppIdentifierPrefix)com.newsletterpod.shared` so the extension can read what the main app wrote at sign-in. App Group `group.com.newsletterpod.shared` declared in both `.entitlements` files. `AppViewModel.signIn` now persists the token and `init` restores it on cold launch — *side effect: fixes the existing "users get signed out on every cold launch" UX gap.*
+- `codemagic.yaml` documented for the new bundle id; signing is auto-discovered by `xcode-project use-profiles` once the bundle id is registered in App Store Connect.
+
+**Before the first TestFlight build with the extension:**
+
+1. Register bundle id `com.newsletterpod.app.share` in App Store Connect → Certificates, Identifiers & Profiles → Identifiers. Use the same team id (`R7HS2T53Z8`).
+2. Register App Group `group.com.newsletterpod.shared` in Identifiers → App Groups.
+3. Add the App Group to both bundle ids' capability list.
+4. The Codemagic `app_store_connect` integration provisions matching profiles automatically; no profile-creation needed.
+
+**Known limitations of the v1 backend:**
+
+- Paywalled URLs return whatever the unauthenticated fetch sees (often nothing, sometimes a paywall page). The endpoint stores it anyway so the user sees their share land; the LLM segment will be brief. **Future:** plumb a "reader-mode HTML" body field into the request so the iOS share sheet can paste the *rendered* Safari Reader content when the URL is unauthenticated.
+- URL extractor is regex-based, not `readability-lxml`. Good enough for most blog/article pages; loses on JS-heavy SPAs that render content client-side. Upgrade path is one `pip install` away.
+- Scanned PDFs (no text layer) raise `SharedItemError` with a clear message rather than silently storing the filename. No OCR fallback.
+
 ### Per-item sub-topic tags via emergent clustering (option C — layering on D)
 
 Status: not started. Logged 2026-05-18. Driver: D handles per-user selection well, but cards (and show-notes attribution) still lack a visible category, and users have no manual lever like "less AI, more finance this week."
@@ -204,18 +237,6 @@ Context: stacked recommendation 1+2+3a+3b+4a+5 was shipped (voice intake, swipe 
 - The active-paste (3a) + forwarded-mail (3b) flows already get ~70% of the same signal at <5% of the cost.
 
 **Revisit trigger:** when paid retention numbers justify the audit cost (probably >5000 paying users, or when the per-user value of "I never have to manage subscriptions" becomes the dominant retention lever).
-
-#### 4b — iOS Share Sheet extension
-
-**The idea:** New iOS Share target. User reads an article anywhere (Twitter, Safari, Apple News, Reeder, etc.) → taps Share → ClawCast. Backend `POST /v1/items/from-share` fetches/extracts/embeds the URL and writes a synthetic positive swipe.
-
-**Why deferred:** high value but it lifts episode #2-N, not the first-episode "wow" moment we were optimizing for. The first wave was specifically about making episode #1 jaw-dropping; the share extension shines on day 7+ when the system reacts to the user's reading week.
-
-**Implementation sketch when we pick it up:**
-- New iOS extension target (`NewsletterPodShareExtension`) bundled with the main app.
-- Extension reads the shared URL via `NSExtensionItem.attachments[].loadItem(forTypeIdentifier: "public.url")`.
-- POSTs to a new backend endpoint that fetches the URL, runs through the existing source-item pipeline (extract title + summary, embed), creates a `SourceItemRecord` if new, and writes a `SwipeRecord` with direction=+1 + a `source: "share_extension"` tag (new field on SwipeRecord; weight in the interest vector unchanged).
-- iOS Share extensions use the parent app's keychain for the session token — no re-auth.
 
 #### 4c — Calendar / location nudges
 
