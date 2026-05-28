@@ -24,6 +24,11 @@ dependencies = [
   "google-cloud-secret-manager>=2.20.0",
   "google-cloud-tasks>=2.16.0",
   "app-store-server-library>=1.7.0",
+  # Share-to-ClawCast: extract text from files users upload via the iOS
+  # Share extension. All three are pure-Python (or near-pure) and stable.
+  "pypdf>=4.0",
+  "ebooklib>=0.18",
+  "python-docx>=1.1",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +36,9 @@ dev = [
   "pytest>=8.3.0",
   "pytest-mock>=3.14.0",
   "httpx>=0.28.0",
+  # reportlab is used only by tests/test_shared_items.py to mint a one-page
+  # PDF fixture; runtime PDF reads use pypdf.
+  "reportlab>=4.0",
 ]
 # Optional. Install with `pip install -e .[browser]` then run
 # `playwright install chromium`. Used only by scripts/looker/, kept out

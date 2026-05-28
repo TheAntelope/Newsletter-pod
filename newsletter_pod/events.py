@@ -40,6 +40,7 @@ class EventName(str, Enum):
     FEEDBACK_SUBMITTED = "feedback_submitted"
     SCHEDULE_CHANGED = "schedule_changed"
     CHURN_RISK_SCORED = "churn_risk_scored"
+    SHARED_ITEM_RECEIVED = "shared_item_received"
 
 
 # Property keys we refuse to log. These are the fields most likely to
@@ -127,3 +128,19 @@ def bucket_play_position_seconds(position_seconds: int) -> str:
     if position_seconds < 600:
         return "120-600"
     return "600+"
+
+
+def bucket_body_length(char_count: int) -> str:
+    """Coarse buckets for SHARED_ITEM_RECEIVED body sizes — answers "are
+    users sharing tweet-sized snippets or full PDFs" without logging the
+    exact length (which could be a weak fingerprint when combined with
+    timestamps)."""
+    if char_count < 500:
+        return "0-500"
+    if char_count < 2_000:
+        return "500-2k"
+    if char_count < 10_000:
+        return "2k-10k"
+    if char_count < 50_000:
+        return "10k-50k"
+    return "50k+"

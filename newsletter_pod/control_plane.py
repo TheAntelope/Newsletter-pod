@@ -21,7 +21,7 @@ from .app_store_verifier import (
 from .config import Settings, load_sources, load_voices
 from .costing import estimate_generation_cost
 from .embeddings import EmbeddingProvider
-from .events import EventName, log_event
+from .events import EventName, bucket_body_length as _bucket_body_length, log_event
 from .feedback_digest import (
     JOB_STATE_NAME as FEEDBACK_DIGEST_JOB_STATE_NAME,
     format_digest_email,
@@ -51,6 +51,16 @@ from .podcast_api import PodcastApiClient
 from .prompting import build_digest_prompt
 from .card_summary import CardSummarizer, CardSummaryService
 from .ranker import rank_items
+from .shared_items import (
+    SUPPORTED_KINDS as SHARED_SUPPORTED_KINDS,
+    SharedItemError,
+    build_shared_item,
+    extract_from_docx,
+    extract_from_epub,
+    extract_from_pdf,
+    extract_from_plain_text,
+    extract_from_url,
+)
 from .source_persistence import SourceItemPersistenceService
 from .substack_discovery import (
     DiscoveredPublication,
@@ -311,6 +321,91 @@ class ControlPlaneService:
         return {
             "inbound_address": self._inbound_address_for(user),
             "items": [item.model_dump(mode="json") for item in items],
+        }
+
+    def share_item(
+        self,
+        user_id: str,
+        *,
+        kind: str,
+        url: Optional[str] = None,
+        file_bytes: Optional[bytes] = None,
+        user_title: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Persist a user-shared URL or file as a kind=share InboundEmailItem
+        so generation force-includes it in the next pod.
+
+        Idempotent against the deterministic item id: re-sharing the same
+        URL or pasting an identical blob returns the existing item_id with
+        duplicate=True. The endpoint layer is expected to map SharedItemError /
+        ControlPlaneError back to HTTP 400.
+        """
+        self._require_user(user_id)
+        if kind not in SHARED_SUPPORTED_KINDS:
+            raise ControlPlaneError(f"Unsupported share kind: {kind!r}")
+
+        extracted_title: Optional[str] = None
+        body_text: str = ""
+        article_url: Optional[str] = None
+
+        try:
+            if kind == "url":
+                if not url:
+                    raise ControlPlaneError("url is required when kind=url")
+                extracted_title, body_text = extract_from_url(url)
+                article_url = url
+            else:
+                if file_bytes is None:
+                    raise ControlPlaneError(f"file is required when kind={kind!r}")
+                if kind == "pdf":
+                    extracted_title, body_text = extract_from_pdf(file_bytes)
+                elif kind == "epub":
+                    extracted_title, body_text = extract_from_epub(file_bytes)
+                elif kind == "docx":
+                    extracted_title, body_text = extract_from_docx(file_bytes)
+                elif kind == "text":
+                    extracted_title, body_text = extract_from_plain_text(file_bytes)
+                else:  # defensive — SHARED_SUPPORTED_KINDS guards above
+                    raise ControlPlaneError(f"Unsupported share kind: {kind!r}")
+        except SharedItemError as exc:
+            raise ControlPlaneError(str(exc)) from exc
+
+        title = (user_title or extracted_title or "Shared item").strip()[:200] or "Shared item"
+        item = build_shared_item(
+            user_id=user_id,
+            title=title,
+            body_text=body_text,
+            article_url=article_url,
+        )
+
+        existing = self.repository.get_inbound_item(item.id)
+        if existing is not None:
+            return {
+                "item_id": existing.id,
+                "dedupe_key": f"inbound:{existing.id}",
+                "title": existing.subject,
+                "share_kind": kind,
+                "duplicate": True,
+            }
+
+        self.repository.save_inbound_item(item)
+        log_event(
+            EventName.SHARED_ITEM_RECEIVED,
+            user_id,
+            share_kind=kind,
+            body_len_bucket=_bucket_body_length(len(body_text)),
+            has_article_url=bool(article_url),
+        )
+        logger.info(
+            "Shared item stored: user=%s kind=%s item_id=%s body_len=%d",
+            user_id, kind, item.id, len(body_text),
+        )
+        return {
+            "item_id": item.id,
+            "dedupe_key": f"inbound:{item.id}",
+            "title": title,
+            "share_kind": kind,
+            "duplicate": False,
         }
 
     def probe_substack_publication(self, raw_url: str) -> dict[str, Any]:
@@ -1793,13 +1888,21 @@ class ControlPlaneService:
         inbound_items: list[InboundEmailItem] = []
         inbound_source_items: list[SourceItem] = []
         inbound_dedupe_to_item_id: dict[str, str] = {}
+        # Share-extension uploads bypass the per-tier item cap, swipe filtering,
+        # and the ranker — the user actively pushed these into the queue so
+        # they're guaranteed inclusion in the next pod. Kept on a separate list
+        # and unioned in after cap/ranker resolves the rest of the cut.
+        shared_source_items: list[SourceItem] = []
         for inbound_item in raw_inbound:
             if _is_substack_confirmation_email(inbound_item):
                 continue
             source_item = _inbound_item_to_source_item(inbound_item, intent_by_host)
             inbound_items.append(inbound_item)
-            inbound_source_items.append(source_item)
             inbound_dedupe_to_item_id[source_item.dedupe_key] = inbound_item.id
+            if inbound_item.kind == "share":
+                shared_source_items.append(source_item)
+            else:
+                inbound_source_items.append(source_item)
         if inbound_source_items:
             logger.info(
                 "Inbound items merged into candidate pool: user=%s count=%d "
@@ -1808,10 +1911,20 @@ class ControlPlaneService:
                 len(inbound_source_items),
                 len(intent_by_host),
             )
+        if shared_source_items:
+            logger.info(
+                "Shared items force-included (bypass per-tier item cap): "
+                "user=%s count=%d",
+                user_id,
+                len(shared_source_items),
+            )
 
         combined_candidates = ingestion.items + inbound_source_items
         combined_candidates.sort(key=lambda item: item.published_at)
-        candidate_count = len(combined_candidates)
+        # Shared items count toward the no-content check (one share is enough
+        # to publish a pod) but stay out of the candidate pool the cap/ranker
+        # sees. They're appended unconditionally further down.
+        candidate_count = len(combined_candidates) + len(shared_source_items)
         if candidate_count == 0:
             self.repository.update_user_source_cursors(user_id, ingestion.cursor_updates)
             run = UserRunRecord(
@@ -1935,6 +2048,15 @@ class ControlPlaneService:
                 cap_hit = True
                 dropped_count = len(items) - entitlements.max_items_per_episode
                 items = items[-entitlements.max_items_per_episode :]
+
+        # Shared items (kind="share") bypass the per-tier item cap entirely —
+        # the user explicitly uploaded these via the share extension so they
+        # are guaranteed inclusion. Appended after cap/ranker resolves the
+        # rest of the cut and re-sorted chronologically so the prompt builder
+        # sees a consistent published_at ordering.
+        if shared_source_items:
+            items = items + shared_source_items
+            items.sort(key=lambda item: item.published_at)
 
         # Legacy profiles may store a duration outside the user's current
         # entitlements (e.g. saved before a tier cap tightened). Clamp at

@@ -6,7 +6,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -33,6 +44,7 @@ from .inbound import (
 from .legal import PRIVACY_HTML, TERMS_HTML
 from .mailer import NoopMailer, SMTPMailer
 from .podcast_api import PodcastApiClient
+from .shared_items import MAX_UPLOAD_BYTES as SHARED_MAX_UPLOAD_BYTES, SUPPORTED_KINDS as SHARED_SUPPORTED_KINDS
 from .storage import AudioStorage, GCSAudioStorage, InMemoryAudioStorage
 from .user_repository import ControlPlaneRepository, FirestoreControlPlaneRepository, InMemoryControlPlaneRepository
 
@@ -453,6 +465,66 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         user = _require_session_user(container, authorization)
         assert container.control_plane is not None
         return container.control_plane.list_inbound_items(user.id)
+
+    @app.post("/v1/items/shared", status_code=status.HTTP_201_CREATED)
+    async def share_item(
+        kind: str = Form(...),
+        url: Optional[str] = Form(default=None),
+        title: Optional[str] = Form(default=None),
+        file: Optional[UploadFile] = File(default=None),
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        """Accept a URL or file shared from the iOS Share extension and pin it
+        to the user's next pod. `kind` is one of: url | pdf | epub | docx | text.
+        For kind=url, set `url`. For all other kinds, set `file` (multipart).
+        `title` is an optional user override; otherwise extracted from content."""
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+
+        if kind not in SHARED_SUPPORTED_KINDS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported kind {kind!r}; expected one of {sorted(SHARED_SUPPORTED_KINDS)}",
+            )
+
+        file_bytes: Optional[bytes] = None
+        if kind != "url":
+            if file is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"file is required when kind={kind!r}",
+                )
+            # Stream the upload but cap it at SHARED_MAX_UPLOAD_BYTES so a
+            # client uploading a 5GB blob doesn't OOM the worker. FastAPI's
+            # UploadFile is backed by a SpooledTemporaryFile, so .read() is safe
+            # but unbounded — we read in chunks and bail on overflow.
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = await file.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > SHARED_MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"Upload exceeds {SHARED_MAX_UPLOAD_BYTES} bytes",
+                    )
+                chunks.append(chunk)
+            file_bytes = b"".join(chunks)
+
+        try:
+            return container.control_plane.share_item(
+                user.id,
+                kind=kind,
+                url=url,
+                file_bytes=file_bytes,
+                user_title=title,
+            )
+        except ControlPlaneError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
 
     @app.get("/v1/me/next-episode/candidates")
     def get_next_episode_candidates(

@@ -1758,6 +1758,257 @@ def test_inbound_items_dropped_by_cap_stay_unconsumed(monkeypatch):
     assert stored_older.consumed_at is None
 
 
+# ----------------------------------------------------------------------------
+# Share-to-ClawCast endpoint + generation integration
+# ----------------------------------------------------------------------------
+
+
+def _signin_share_user(client, container, *, subject="share-user", email="share@example.com"):
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier(subject, email)
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    assert auth.status_code == 200
+    user_id = auth.json()["user"]["id"]
+    headers = {"Authorization": f"Bearer {auth.json()['session_token']}"}
+    return user_id, headers
+
+
+def test_share_endpoint_url_creates_kind_share_item(monkeypatch):
+    from newsletter_pod import control_plane as cp_module
+
+    container, client = _build_app()
+    user_id, headers = _signin_share_user(client, container, subject="share-url-user")
+
+    def fake_extract_url(url):
+        assert url == "https://example.com/article"
+        return ("Article Headline", "Article body text.")
+
+    monkeypatch.setattr(cp_module, "extract_from_url", fake_extract_url)
+
+    resp = client.post(
+        "/v1/items/shared",
+        data={"kind": "url", "url": "https://example.com/article"},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["share_kind"] == "url"
+    assert body["title"] == "Article Headline"
+    assert body["duplicate"] is False
+    assert body["dedupe_key"].startswith("inbound:")
+
+    stored = container.control_plane.repository.get_inbound_item(body["item_id"])
+    assert stored is not None
+    assert stored.kind == "share"
+    assert stored.article_url == "https://example.com/article"
+    assert stored.from_email == "share@theclawcast.com"
+
+
+def test_share_endpoint_plain_text_creates_item():
+    container, client = _build_app()
+    user_id, headers = _signin_share_user(client, container, subject="share-text-user")
+
+    resp = client.post(
+        "/v1/items/shared",
+        data={"kind": "text"},
+        files={"file": ("note.txt", b"Headline line\n\nBody paragraph here.", "text/plain")},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["share_kind"] == "text"
+    assert body["title"] == "Headline line"
+
+    stored = container.control_plane.repository.get_inbound_item(body["item_id"])
+    assert stored.kind == "share"
+    assert "Body paragraph here" in stored.body_text
+
+
+def test_share_endpoint_is_idempotent_for_identical_url(monkeypatch):
+    from newsletter_pod import control_plane as cp_module
+
+    container, client = _build_app()
+    user_id, headers = _signin_share_user(client, container, subject="share-dup-user")
+
+    monkeypatch.setattr(
+        cp_module,
+        "extract_from_url",
+        lambda url: ("Same title", "Same body."),
+    )
+
+    first = client.post(
+        "/v1/items/shared",
+        data={"kind": "url", "url": "https://example.com/x"},
+        headers=headers,
+    )
+    second = client.post(
+        "/v1/items/shared",
+        data={"kind": "url", "url": "https://example.com/x"},
+        headers=headers,
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["item_id"] == second.json()["item_id"]
+    assert first.json()["duplicate"] is False
+    assert second.json()["duplicate"] is True
+
+
+def test_share_endpoint_rejects_unsupported_kind():
+    container, client = _build_app()
+    user_id, headers = _signin_share_user(client, container, subject="share-bad-kind")
+
+    resp = client.post(
+        "/v1/items/shared",
+        data={"kind": "video"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+    assert "Unsupported kind" in resp.json()["detail"]
+
+
+def test_share_endpoint_requires_url_for_url_kind():
+    container, client = _build_app()
+    user_id, headers = _signin_share_user(client, container, subject="share-missing-url")
+
+    resp = client.post(
+        "/v1/items/shared",
+        data={"kind": "url"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+    assert "url is required" in resp.json()["detail"]
+
+
+def test_share_endpoint_requires_file_for_file_kind():
+    container, client = _build_app()
+    user_id, headers = _signin_share_user(client, container, subject="share-missing-file")
+
+    resp = client.post(
+        "/v1/items/shared",
+        data={"kind": "text"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_share_endpoint_requires_auth():
+    container, client = _build_app()
+    resp = client.post(
+        "/v1/items/shared",
+        data={"kind": "url", "url": "https://example.com"},
+    )
+    assert resp.status_code == 401
+
+
+def test_shared_items_force_included_bypass_per_tier_item_cap(monkeypatch):
+    """Free tier with max_items_per_episode=1: one RSS item + two shares
+    should produce a 3-item episode (1 RSS + 2 shares), proving shares
+    are *additive* to the per-tier cap rather than competing with it."""
+    from newsletter_pod import control_plane as cp_module
+
+    container, client = _build_app()
+    container.settings.free_max_items_per_episode = 1
+
+    user_id, headers = _seed_user_for_inbound_run(
+        client, container, monkeypatch,
+        email="share-cap@example.com", subject="share-cap-user",
+    )
+
+    # One real inbound (email) item — should be subject to the per-tier cap.
+    repo = container.control_plane.repository
+    repo.save_inbound_item(
+        InboundEmailItem(
+            id="inbound-email-1",
+            user_id=user_id,
+            kind="email",
+            message_id="<email-1@example.com>",
+            from_email="news@example.com",
+            from_name="Example Daily",
+            sender_domain="example.com",
+            subject="Email-delivered story",
+            body_text="Email body.",
+            article_url="https://example.com/email-story",
+            received_at=datetime(2026, 4, 15, 8, 0, tzinfo=timezone.utc),
+        )
+    )
+
+    # Two share items — should both be included, bypassing the cap.
+    monkeypatch.setattr(
+        cp_module,
+        "extract_from_url",
+        lambda url: (f"Shared title {url[-1]}", f"Shared body for {url}"),
+    )
+    for suffix in ("a", "b"):
+        resp = client.post(
+            "/v1/items/shared",
+            data={"kind": "url", "url": f"https://example.com/shared-{suffix}"},
+            headers=headers,
+        )
+        assert resp.status_code == 201
+
+    result = client.post(
+        "/jobs/process-user-podcast",
+        json={"user_id": user_id, "force": True},
+    )
+    assert result.status_code == 200, result.text
+    payload = result.json()
+
+    refs = payload["episode"]["source_item_refs"]
+    # 1 email-kind inbound (under the cap=1) + 2 shared items (cap-bypassing).
+    assert len(refs) == 3, f"expected 3 refs (1 email + 2 shared), got {len(refs)}: {refs}"
+
+    ref_links = {r["link"] for r in refs}
+    assert "https://example.com/email-story" in ref_links
+    assert "https://example.com/shared-a" in ref_links
+    assert "https://example.com/shared-b" in ref_links
+
+    # All inbound items (email + share) should be marked consumed.
+    for item_id in ["inbound-email-1"]:
+        assert repo.get_inbound_item(item_id).consumed_at is not None
+    for shared_item in repo.list_recent_inbound_items(user_id, limit=10):
+        if shared_item.kind == "share":
+            assert shared_item.consumed_at is not None, (
+                f"shared item {shared_item.id} should be consumed after episode publishes"
+            )
+
+
+def test_only_shared_items_can_publish_an_episode(monkeypatch):
+    """A user with zero RSS items and zero email-kind inbound items but one
+    shared item should still produce an episode — the no-content short-circuit
+    must consider shared items."""
+    from newsletter_pod import control_plane as cp_module
+
+    container, client = _build_app()
+    user_id, headers = _seed_user_for_inbound_run(
+        client, container, monkeypatch,
+        email="only-share@example.com", subject="only-share-user",
+    )
+
+    monkeypatch.setattr(
+        cp_module,
+        "extract_from_url",
+        lambda url: ("Only thing", "Only body."),
+    )
+    resp = client.post(
+        "/v1/items/shared",
+        data={"kind": "url", "url": "https://example.com/only"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+
+    result = client.post(
+        "/jobs/process-user-podcast",
+        json={"user_id": user_id, "force": True},
+    )
+    assert result.status_code == 200, result.text
+    payload = result.json()
+    # The "no content" branch returns the run record bare; "has content"
+    # wraps it in {"run": ..., "episode": ...}. We want the wrapped form.
+    assert "episode" in payload, f"expected an episode, got {payload}"
+    refs = payload["episode"]["source_item_refs"]
+    assert len(refs) == 1
+    assert refs[0]["link"] == "https://example.com/only"
+
+
 def test_weekly_update_segment_stamps_user_once_per_iso_week(monkeypatch):
     from newsletter_pod import control_plane as cp_module
 

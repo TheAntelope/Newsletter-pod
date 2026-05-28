@@ -137,14 +137,25 @@ class UserRunRecord(BaseModel):
 
 
 class InboundEmailItem(BaseModel):
-    """A single newsletter email captured via the Mailgun inbound webhook."""
+    """A single piece of user-originated content arriving outside the RSS path.
 
-    id: str  # deterministic: hash(message_id || user_id)
+    Despite the name (kept for backwards compatibility with the inbound-email
+    collection), this model carries three kinds of items, discriminated by
+    `kind`:
+      - "email": delivered to the user's Mailgun alias (forwarded newsletter,
+        Substack delivery, or a prefetched latest-post stub).
+      - "share": uploaded via the iOS Share extension or POST /v1/items/shared.
+        Force-included in the next generation run, bypassing the per-tier
+        item cap (see control_plane._select_candidates).
+    """
+
+    id: str  # deterministic: hash(message_id || user_id) for email; hash(content || user_id) for share
     user_id: str
-    message_id: Optional[str] = None  # RFC 822 Message-Id, for dedupe
-    from_email: str  # canonical sender address
+    kind: str = "email"  # "email" | "share"
+    message_id: Optional[str] = None  # RFC 822 Message-Id, for dedupe (email only)
+    from_email: str  # canonical sender address; sentinel "share@theclawcast.com" for shares
     from_name: Optional[str] = None
-    sender_domain: str  # parsed from from_email, e.g. "stratechery.com"
+    sender_domain: str  # parsed from from_email, e.g. "stratechery.com"; "share" for shares
     subject: str
     body_text: str  # cleaned plaintext body
     article_url: Optional[str] = None  # extracted "read on web" link if found
