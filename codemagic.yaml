@@ -69,15 +69,29 @@ workflows:
 
           EXT_BUNDLE=com.newsletterpod.app.share
 
-          # Find the existing IOS_DISTRIBUTION cert that the main app's
-          # signing already chose (ios_signing block established it).
-          CERT_ID=$(app-store-connect certificates list \
-            --type IOS_DISTRIBUTION --json \
-            | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0]['id'] if data else '')")
+          # Find a distribution-flavored cert. App Store Connect cert types
+          # vary by app age — the modern unified "Apple Distribution" cert
+          # is type DISTRIBUTION; legacy iOS-only certs are IOS_DISTRIBUTION.
+          # ios_signing already picked one for the main app, so any
+          # DISTRIBUTION-flavored cert in the list is fair game (the same
+          # cert signs both the app and its extensions).
+          CERT_ID=$(app-store-connect certificates list --json \
+            | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          for c in data:
+              t = (c.get('attributes', {}).get('certificateType') or '').upper()
+              if 'DISTRIBUTION' in t:
+                  print(c['id'])
+                  break
+          ")
           if [ -z "$CERT_ID" ]; then
-            echo "ERROR: no IOS_DISTRIBUTION certificate in App Store Connect"
+            echo "ERROR: no distribution certificate found in App Store Connect"
+            app-store-connect certificates list --json \
+              | python3 -c "import sys,json; [print(c['attributes'].get('certificateType')) for c in json.load(sys.stdin)]"
             exit 1
           fi
+          echo "Using cert $CERT_ID"
 
           # Find the bundle id record (App Store Connect uses an opaque
           # internal id, separate from the human-readable identifier).
