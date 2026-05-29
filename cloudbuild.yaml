@@ -44,7 +44,7 @@ steps:
       # developer.apple.com → Membership). APNS_ENABLED gates the whole
       # push path so this revision can ship before the Portal+secret setup
       # lands without ELOG spam.
-      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true,CANDIDATE_QUEUE_ENABLED=true,APNS_ENABLED=true,APNS_TEAM_ID=REPLACE_WITH_TEAM_ID,APNS_BUNDLE_ID=com.newsletterpod.app,APNS_ENVIRONMENT=production
+      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true,CANDIDATE_QUEUE_ENABLED=true,APNS_ENABLED=true,APNS_TEAM_ID=R7HS2T53Z8,APNS_BUNDLE_ID=com.newsletterpod.app,APNS_ENVIRONMENT=production
       # Pin every critical secret on every deploy so that if a future config
       # edit strips a binding (as happened on revision 00045 on 2026-05-01,
       # and again with MAILGUN_WEBHOOK_SIGNING_KEY in 2026-05), the next deploy
