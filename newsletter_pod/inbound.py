@@ -19,7 +19,7 @@ import logging
 import re
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from .embeddings import EmbeddingProvider
@@ -32,6 +32,7 @@ from .substack import (
     extract_confirm_url,
     fetch_confirm_url,
     is_substack_sender,
+    is_substack_verification_code,
     match_intent_host,
 )
 from .user_models import InboundEmailItem, UserRecord, UserSubstackIntent
@@ -51,6 +52,11 @@ _CONFIRMATION_SUBJECT_PATTERN = re.compile(
     r"\b(confirm(ation)?|verify|verification|please\s+confirm|activate|subscription)\b",
     re.IGNORECASE,
 )
+
+# Substack-issued one-time codes are valid for ~15 min in practice. We stamp
+# this TTL on the intent so the iOS surface can hide the row once it's stale
+# rather than tempting the user to paste a dead code.
+_SUBSTACK_VERIFICATION_CODE_TTL_MINUTES = 15
 _CONFIRMATION_BODY_PATTERN = re.compile(
     r"\b(confirm\s+your\s+(subscription|email)|verify\s+your\s+email|click\s+(here|the\s+link)\s+to\s+(confirm|verify|subscribe|activate))\b",
     re.IGNORECASE,
@@ -251,6 +257,33 @@ class InboundEmailHandler:
             else (from_email or "").lower()
         )
 
+        verification_code = (
+            is_substack_verification_code(subject)
+            if is_substack_sender(from_email)
+            else None
+        )
+        if verification_code is not None:
+            received_at = parse_received_at(payload.get("Date"))
+            stamped_intent_id = self._maybe_stamp_substack_verification(
+                user=user,
+                sender_domain=sender_domain,
+                body_text=body_text,
+                body_html=body_html,
+                code=verification_code,
+                received_at=received_at,
+            )
+            logger.info(
+                "Substack verification-code email handled: user=%s intent_id=%s subject=%r",
+                user.id,
+                stamped_intent_id,
+                subject[:80],
+            )
+            return {
+                "status": "verification_code",
+                "code": verification_code,
+                "intent_id": stamped_intent_id,
+            }
+
         if looks_like_confirmation(subject, body_text):
             self._maybe_auto_confirm_substack(
                 user=user,
@@ -350,6 +383,70 @@ class InboundEmailHandler:
                 user.id,
                 title[:60],
             )
+
+    def _maybe_stamp_substack_verification(
+        self,
+        *,
+        user: UserRecord,
+        sender_domain: str,
+        body_text: str,
+        body_html: str,
+        code: str,
+        received_at: datetime,
+    ) -> Optional[str]:
+        """Stamp a Substack one-time verification code onto the matching
+        UserSubstackIntent so the iOS Sources screen can surface it.
+
+        Returns the intent_id stamped, or None if no plausible pending intent
+        was found (in which case the code is silently dropped — there's no
+        useful action we can take with it).
+        """
+        intents = self.repository.list_user_substack_intents(user.id)
+        # A code only makes sense for an intent the user hasn't fully
+        # confirmed yet. Stamp on auto_confirmed intents too, in case
+        # Substack issued a code for a re-subscribe attempt.
+        pending = [intent for intent in intents if intent.confirmed_at is None]
+        if not pending:
+            logger.warning(
+                "Substack verification code received but no pending intents: user=%s code_len=%d",
+                user.id,
+                len(code),
+            )
+            return None
+        match_host = match_intent_host(
+            [intent.pub_host for intent in pending],
+            sender_domain,
+            body_text,
+            body_html,
+        )
+        if match_host is None and len(pending) == 1:
+            # Solo pending intent: a code arriving for a Substack-domain
+            # sender is almost certainly for it. (The match_intent_host
+            # body-text fallback fails when the email is HTML-only and we
+            # didn't get the rendered text from Mailgun.)
+            match_host = pending[0].pub_host
+        if match_host is None:
+            logger.warning(
+                "Substack verification code did not match any pending intent: user=%s pending=%d",
+                user.id,
+                len(pending),
+            )
+            return None
+        intent = next(intent for intent in pending if intent.pub_host == match_host)
+        expires_at = received_at + timedelta(minutes=_SUBSTACK_VERIFICATION_CODE_TTL_MINUTES)
+        updated = intent.model_copy(
+            update={
+                "pending_verification_code": code,
+                "pending_verification_expires_at": expires_at,
+            }
+        )
+        self.repository.save_substack_intent(updated)
+        logger.info(
+            "Substack verification code stamped on intent: user=%s pub_host=%s",
+            user.id,
+            intent.pub_host,
+        )
+        return intent.id
 
     def _maybe_auto_confirm_substack(
         self,

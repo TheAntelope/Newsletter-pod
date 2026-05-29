@@ -440,6 +440,107 @@ def test_first_post_from_substack_flips_intent_confirmed_at():
     assert updated.confirmed_at is not None
 
 
+def test_substack_verification_code_stamps_intent_when_body_matches_host():
+    container, repo, user, _ = _build_app_with_user()
+    intent = _make_substack_intent(user.id, "noahpinion.substack.com")
+    repo.save_substack_intent(intent)
+
+    handler = InboundEmailHandler(
+        repository=repo,
+        inbound_email_domain="theclawcast.com",
+        mailgun_signing_key=SIGNING_KEY,
+    )
+    payload = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender="no-reply@substack.com",
+        subject="812807 is your Substack verification code",
+        body="Your code is 812807. Enter it at noahpinion.substack.com to confirm.",
+        message_id="<verify-1@substack.com>",
+    )
+    result = handler.handle(payload)
+    assert result["status"] == "verification_code"
+    assert result["code"] == "812807"
+    assert result["intent_id"] == intent.id
+
+    # Intent stamped with code + TTL; no InboundEmailItem persisted for it.
+    updated = repo.get_substack_intent(intent.id)
+    assert updated is not None
+    assert updated.pending_verification_code == "812807"
+    assert updated.pending_verification_expires_at is not None
+    # Don't leak verification codes into podcast content.
+    items = repo.list_recent_inbound_items(user.id, limit=50)
+    assert all(item.subject != "812807 is your Substack verification code" for item in items)
+
+
+def test_substack_verification_code_stamps_solo_pending_intent_without_body_match():
+    container, repo, user, _ = _build_app_with_user()
+    intent = _make_substack_intent(user.id, "noahpinion.substack.com")
+    repo.save_substack_intent(intent)
+
+    handler = InboundEmailHandler(
+        repository=repo,
+        inbound_email_domain="theclawcast.com",
+        mailgun_signing_key=SIGNING_KEY,
+    )
+    # Body deliberately omits any pub_host reference — falls back to solo-intent rule.
+    payload = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender="no-reply@substack.com",
+        subject="606763 is your Substack verification code",
+        body="Your verification code is 606763.",
+    )
+    result = handler.handle(payload)
+    assert result["status"] == "verification_code"
+    assert result["intent_id"] == intent.id
+    updated = repo.get_substack_intent(intent.id)
+    assert updated is not None
+    assert updated.pending_verification_code == "606763"
+
+
+def test_substack_verification_code_without_pending_intent_is_dropped():
+    container, repo, user, _ = _build_app_with_user()
+    handler = InboundEmailHandler(
+        repository=repo,
+        inbound_email_domain="theclawcast.com",
+        mailgun_signing_key=SIGNING_KEY,
+    )
+    payload = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender="no-reply@substack.com",
+        subject="448869 is your Substack verification code",
+        body="Your code is 448869.",
+    )
+    result = handler.handle(payload)
+    assert result["status"] == "verification_code"
+    assert result["intent_id"] is None
+
+
+def test_substack_verification_code_ignored_from_non_substack_sender():
+    container, repo, user, _ = _build_app_with_user()
+    intent = _make_substack_intent(user.id, "noahpinion.substack.com")
+    repo.save_substack_intent(intent)
+
+    handler = InboundEmailHandler(
+        repository=repo,
+        inbound_email_domain="theclawcast.com",
+        mailgun_signing_key=SIGNING_KEY,
+    )
+    # Same subject shape but sender is NOT substack.com — treat as a regular
+    # newsletter (gets stored or skipped via the normal heuristics, no code stamp).
+    payload = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender="news@phishy.example.com",
+        subject="812807 is your Substack verification code",
+        body="Click here to confirm your subscription: https://phishy.example.com/x",
+        message_id="<phish-1@phishy.example.com>",
+    )
+    result = handler.handle(payload)
+    assert result["status"] != "verification_code"
+    updated = repo.get_substack_intent(intent.id)
+    assert updated is not None
+    assert updated.pending_verification_code is None
+
+
 def test_post_not_matching_any_intent_does_not_flip_confirmed_at():
     container, repo, user, _ = _build_app_with_user()
     intent = _make_substack_intent(user.id, "lenny.substack.com")

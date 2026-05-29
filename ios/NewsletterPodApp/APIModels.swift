@@ -452,6 +452,12 @@ struct SubstackIntentDTO: Codable, Identifiable, Hashable {
     let autoConfirmedAt: Date?
     let confirmedAt: Date?
     let status: SubstackIntentStatus
+    /// Substack's newer signup flow sends a 6-digit verification code instead
+    /// of a clickable confirm link. The backend extracts the code from the
+    /// inbound email and stamps it here so the Sources screen can surface it
+    /// before it expires.
+    let pendingVerificationCode: String?
+    let pendingVerificationExpiresAt: Date?
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -467,6 +473,17 @@ struct SubstackIntentDTO: Codable, Identifiable, Hashable {
         case autoConfirmedAt = "auto_confirmed_at"
         case confirmedAt = "confirmed_at"
         case status
+        case pendingVerificationCode = "pending_verification_code"
+        case pendingVerificationExpiresAt = "pending_verification_expires_at"
+    }
+
+    /// True if a verification code is stamped and not yet expired.
+    var hasLiveVerificationCode: Bool {
+        guard let code = pendingVerificationCode, !code.isEmpty,
+              let expires = pendingVerificationExpiresAt else {
+            return false
+        }
+        return expires > Date()
     }
 
     /// Display title: the publication title if we have it, otherwise the host.

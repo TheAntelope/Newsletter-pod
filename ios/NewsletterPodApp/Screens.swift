@@ -939,6 +939,7 @@ private struct SetupChecklistCard: View {
 
 struct SourcesView: View {
     @EnvironmentObject private var viewModel: AppViewModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedCatalogIDs: Set<String> = []
     @State private var customURLs: [String] = [""]
     @State private var isShowingAddSubstack = false
@@ -1058,6 +1059,13 @@ struct SourcesView: View {
                 async let inbound: Void = viewModel.loadInboundItems()
                 async let intents: Void = viewModel.loadSubstackIntents()
                 _ = await (inbound, intents)
+            }
+            // Substack verification codes show up here ~seconds after the
+            // user pastes their alias on a publication page. Refresh on
+            // foreground so the code appears without a pull-to-refresh.
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task { await viewModel.loadSubstackIntents() }
             }
             .sheet(isPresented: $isShowingAddSubstack) {
                 AddSubstackSheet()
@@ -1251,6 +1259,12 @@ private struct SubstackSubscriptionRow: View {
             statusDetail
                 .font(Theme.Typography.callout)
                 .foregroundStyle(.secondary)
+            if intent.hasLiveVerificationCode,
+               let code = intent.pendingVerificationCode,
+               let expiresAt = intent.pendingVerificationExpiresAt {
+                VerificationCodeBanner(code: code, expiresAt: expiresAt, pubURL: intent.subscribeURL)
+                    .padding(.top, 6)
+            }
         }
         .padding(.vertical, 4)
     }
@@ -1287,6 +1301,88 @@ private struct SubstackSubscriptionRow: View {
             // for low-volume publications.
             Text("Pending — waiting for the first post. Low-volume Substacks can take a few days.")
         }
+    }
+}
+
+private struct VerificationCodeBanner: View {
+    let code: String
+    let expiresAt: Date
+    let pubURL: URL?
+
+    @State private var now: Date = Date()
+    @State private var copied: Bool = false
+
+    private static let countdownFormatter: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.minute, .second]
+        formatter.unitsStyle = .abbreviated
+        formatter.zeroFormattingBehavior = .dropLeading
+        return formatter
+    }()
+
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 10) {
+                Text(code)
+                    .font(.system(.title2, design: .monospaced).weight(.semibold))
+                    .tracking(2)
+                    .foregroundStyle(.primary)
+                    .accessibilityLabel("Verification code \(code.map(String.init).joined(separator: " "))")
+                Spacer(minLength: Theme.Spacing.s)
+                Button {
+                    UIPasteboard.general.string = code
+                    copied = true
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        copied = false
+                    }
+                } label: {
+                    Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .font(Theme.Typography.calloutStrong)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.Palette.amberDeep)
+                .controlSize(.small)
+            }
+
+            Text(captionText)
+                .font(Theme.Typography.callout)
+                .foregroundStyle(.secondary)
+
+            if let pubURL {
+                Button {
+                    openURL(pubURL)
+                } label: {
+                    Label("Open Substack", systemImage: "arrow.up.right.square")
+                        .font(Theme.Typography.callout)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(Theme.Spacing.s)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Theme.Palette.amberDeep.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Theme.Palette.amberDeep.opacity(0.35), lineWidth: 1)
+        )
+        .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { tick in
+            now = tick
+        }
+    }
+
+    private var captionText: String {
+        let remaining = expiresAt.timeIntervalSince(now)
+        if remaining <= 0 {
+            return "Code has expired — request a new one from Substack."
+        }
+        let formatted = Self.countdownFormatter.string(from: remaining) ?? "soon"
+        return "Paste into Substack to confirm. Expires in \(formatted)."
     }
 }
 

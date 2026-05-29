@@ -54,6 +54,15 @@ _SUBSTACK_CONFIRM_LINK_PATTERN = re.compile(
     r"https?://(?:[a-z0-9-]+\.)?substack\.com/(?:redeem|confirm|subscribe/confirm)[^\s\"'>]+",
     re.IGNORECASE,
 )
+# Substack's newer signup flow sends a one-time numeric code instead of a
+# clickable confirm link — the user has to type the code back into the
+# publication's subscribe page. The code is always carried in the subject
+# line ("812807 is your Substack verification code"), which is the only
+# reliable surface across HTML / plaintext renderings.
+_SUBSTACK_VERIFICATION_CODE_SUBJECT = re.compile(
+    r"^\s*(?P<code>\d{4,8})\s+is\s+your\s+substack\s+verification\s+code\b",
+    re.IGNORECASE,
+)
 
 _TITLE_PATTERN = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _OG_TITLE_PATTERN = re.compile(
@@ -200,6 +209,25 @@ def is_substack_sender(from_email: str) -> bool:
         return False
     domain = from_email.rsplit("@", 1)[-1].strip().lower()
     return bool(_SUBSTACK_SENDER_PATTERN.search(domain))
+
+
+def is_substack_verification_code(subject: str) -> Optional[str]:
+    """Return the numeric verification code if the subject matches Substack's
+    one-time-code email shape, else None.
+
+    Substack changed their signup flow to require typing a 6-digit code back
+    into the publication's subscribe page instead of clicking a confirm link.
+    These emails can't be auto-confirmed server-side — the code has to surface
+    to the human within ~15 minutes — so the inbound handler diverts them
+    out of the normal storage/auto-confirm path and stamps the code on the
+    matching UserSubstackIntent instead.
+    """
+    if not subject:
+        return None
+    match = _SUBSTACK_VERIFICATION_CODE_SUBJECT.match(subject)
+    if not match:
+        return None
+    return match.group("code")
 
 
 def extract_confirm_url(body_text: str, body_html: str = "") -> Optional[str]:

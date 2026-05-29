@@ -15,6 +15,7 @@ from newsletter_pod.substack import (
     extract_confirm_url,
     fetch_latest_post,
     is_substack_sender,
+    is_substack_verification_code,
     match_intent_host,
     probe_publication,
 )
@@ -118,6 +119,27 @@ def test_extract_confirm_url_finds_subdomain_confirm_link():
 def test_extract_confirm_url_returns_none_when_no_substack_link():
     assert extract_confirm_url("Just text", "<p>nothing relevant</p>") is None
     assert extract_confirm_url("", "") is None
+
+
+def test_is_substack_verification_code_extracts_code_from_subject():
+    assert is_substack_verification_code("812807 is your Substack verification code") == "812807"
+    assert is_substack_verification_code("210395 is your substack verification code") == "210395"
+    # Tolerate trailing punctuation / extra trailing text.
+    assert (
+        is_substack_verification_code("606763 is your Substack verification code (action required)")
+        == "606763"
+    )
+    # Leading whitespace is OK.
+    assert is_substack_verification_code("  448869 is your Substack verification code") == "448869"
+
+
+def test_is_substack_verification_code_rejects_non_matching_subjects():
+    assert is_substack_verification_code("Today's Stratechery: Apple Earnings") is None
+    assert is_substack_verification_code("Please confirm your subscription") is None
+    # Don't grab arbitrary 6-digit numbers from unrelated subjects.
+    assert is_substack_verification_code("Issue 812807 of our newsletter") is None
+    assert is_substack_verification_code("") is None
+    assert is_substack_verification_code(None) is None  # type: ignore[arg-type]
 
 
 def test_match_intent_host_direct_sender_match():

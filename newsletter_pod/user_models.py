@@ -189,6 +189,13 @@ class UserSubstackIntent(BaseModel):
     created_at: datetime
     auto_confirmed_at: Optional[datetime] = None
     confirmed_at: Optional[datetime] = None
+    # Substack's newer signup flow delivers a one-time numeric code (e.g.
+    # "812807") that the user has to paste back into the publication's
+    # subscribe page. We can't auto-confirm those server-side, so the inbound
+    # handler stamps the code here so the iOS Sources screen can surface it
+    # before it expires (~15 min).
+    pending_verification_code: Optional[str] = None
+    pending_verification_expires_at: Optional[datetime] = None
 
 
 class CostRecord(BaseModel):
