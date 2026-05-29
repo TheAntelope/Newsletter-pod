@@ -159,7 +159,11 @@ workflows:
           if raw_key.startswith('-----BEGIN'):
               private_key = raw_key
           else:
-              with open(raw_key) as f:
+              # Codemagic's integration sets the env var to e.g.
+              # "@file:/Users/builder/.appstoreconnect/private_keys/AuthKey_XYZ.p8"
+              # Strip the @file: prefix and read the actual file.
+              path = raw_key.removeprefix('@file:') if raw_key.startswith('@file:') else raw_key
+              with open(path) as f:
                   private_key = f.read()
 
           now = int(time.time())
