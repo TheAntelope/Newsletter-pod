@@ -28,6 +28,7 @@ from .interest_seeds import (
     is_user_forwarded_mail,
     seed_user_interest,
 )
+from .push import PushSender, send_substack_verification_push
 from .substack import (
     extract_confirm_url,
     fetch_confirm_url,
@@ -206,6 +207,10 @@ class InboundEmailHandler:
     # None, forwarded-mail signaling is skipped silently (the item still gets
     # stored as a normal inbound item).
     embeddings: Optional[EmbeddingProvider] = None
+    # APNs sender used to push Substack verification codes to the user's
+    # device(s). Optional: when None, push is silently skipped — the code
+    # still surfaces via the Sources screen as Phase A.
+    push_sender: Optional[PushSender] = None
 
     def handle(self, payload: dict[str, str]) -> dict[str, str]:
         """Process one Mailgun multipart-form payload.
@@ -446,6 +451,25 @@ class InboundEmailHandler:
             user.id,
             intent.pub_host,
         )
+        # Best-effort push to the user's registered device(s). Failures don't
+        # block storage / iOS surfacing — the code already lives on the
+        # intent and the Sources screen will show it.
+        try:
+            send_substack_verification_push(
+                sender=self.push_sender,
+                repository=self.repository,
+                user_id=user.id,
+                code=code,
+                pub_title=intent.pub_title or intent.pub_host,
+                pub_url=intent.pub_url,
+            )
+        except Exception:  # pragma: no cover — push is non-critical
+            logger.warning(
+                "Substack verification-code push failed: user=%s pub_host=%s",
+                user.id,
+                intent.pub_host,
+                exc_info=True,
+            )
         return intent.id
 
     def _maybe_auto_confirm_substack(

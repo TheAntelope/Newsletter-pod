@@ -449,6 +449,7 @@ def test_substack_verification_code_stamps_intent_when_body_matches_host():
         repository=repo,
         inbound_email_domain="theclawcast.com",
         mailgun_signing_key=SIGNING_KEY,
+        push_sender=None,
     )
     payload = _payload(
         recipient="a7f2bk9q@theclawcast.com",
@@ -470,6 +471,94 @@ def test_substack_verification_code_stamps_intent_when_body_matches_host():
     # Don't leak verification codes into podcast content.
     items = repo.list_recent_inbound_items(user.id, limit=50)
     assert all(item.subject != "812807 is your Substack verification code" for item in items)
+
+
+def test_substack_verification_code_fires_push_when_sender_configured():
+    """When APNs is wired up, stamping a code also pushes it to the device.
+
+    Uses a fake PushSender that intercepts the underlying HTTP client so the
+    test doesn't reach api.push.apple.com.
+    """
+    import json as _json
+    from datetime import datetime as _datetime, timezone as _timezone
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    from newsletter_pod.push import PushSender
+    from newsletter_pod.user_models import DeviceTokenRecord
+
+    container, repo, user, _ = _build_app_with_user()
+    intent = _make_substack_intent(user.id, "noahpinion.substack.com")
+    repo.save_substack_intent(intent)
+
+    # Register a device token for the user.
+    now = _datetime(2026, 5, 29, 12, 0, tzinfo=_timezone.utc)
+    repo.save_device_token(
+        DeviceTokenRecord(
+            id="dev-1",
+            user_id=user.id,
+            token="a" * 64,
+            platform="ios",
+            environment="production",
+            bundle_id="com.newsletterpod.app",
+            created_at=now,
+            last_seen_at=now,
+        )
+    )
+
+    # Throwaway ES256 key for the JWT.
+    pem = (
+        ec.generate_private_key(ec.SECP256R1())
+        .private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        .decode("utf-8")
+    )
+
+    class _StubResp:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {}
+
+    class _StubClient:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def post(self, url, *, json, headers):
+            self.calls.append({"url": url, "json": json, "headers": headers})
+            return _StubResp()
+
+    client = _StubClient()
+    sender = PushSender(
+        team_id="T",
+        key_id="K",
+        auth_key_pem=pem,
+        bundle_id="com.newsletterpod.app",
+    )
+    sender._http_client = client  # type: ignore[assignment]
+
+    handler = InboundEmailHandler(
+        repository=repo,
+        inbound_email_domain="theclawcast.com",
+        mailgun_signing_key=SIGNING_KEY,
+        push_sender=sender,
+    )
+    payload = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender="no-reply@substack.com",
+        subject="812807 is your Substack verification code",
+        body="Your code is 812807. Enter it at noahpinion.substack.com to confirm.",
+    )
+    result = handler.handle(payload)
+    assert result["status"] == "verification_code"
+    assert len(client.calls) == 1
+    push_body = client.calls[0]["json"]
+    assert push_body["code"] == "812807"
+    assert push_body["type"] == "substack_verification"
 
 
 def test_substack_verification_code_stamps_solo_pending_intent_without_body_match():
@@ -539,6 +628,74 @@ def test_substack_verification_code_ignored_from_non_substack_sender():
     updated = repo.get_substack_intent(intent.id)
     assert updated is not None
     assert updated.pending_verification_code is None
+
+
+def test_device_token_register_and_delete_roundtrip():
+    container, repo, user, client = _build_app_with_user()
+
+    class _FakeVerifier:
+        def verify(self, identity_token: str):
+            return type(
+                "Identity",
+                (),
+                {"subject": user.apple_subject, "email": user.email},
+            )()
+
+    container.control_plane.apple_identity_verifier = _FakeVerifier()
+    auth = client.post("/v1/auth/apple", json={"identity_token": "tok"}).json()
+    headers = {"Authorization": f"Bearer {auth['session_token']}"}
+
+    register = client.post(
+        "/v1/me/device-tokens",
+        json={"token": "f" * 64, "environment": "production"},
+        headers=headers,
+    )
+    assert register.status_code == 201
+    body = register.json()
+    assert body["status"] == "registered"
+    token_id = body["token_id"]
+
+    # Re-register same token: refreshes instead of duplicating.
+    refresh = client.post(
+        "/v1/me/device-tokens",
+        json={"token": "f" * 64, "environment": "production"},
+        headers=headers,
+    )
+    assert refresh.status_code == 201
+    assert refresh.json()["status"] == "refreshed"
+    assert refresh.json()["token_id"] == token_id
+
+    # Invalid (too-short) token rejected.
+    bad = client.post(
+        "/v1/me/device-tokens",
+        json={"token": "short"},
+        headers=headers,
+    )
+    assert bad.status_code == 400
+
+    # Delete returns 204.
+    deleted = client.delete(
+        f"/v1/me/device-tokens/{token_id}",
+        headers=headers,
+    )
+    assert deleted.status_code == 204
+    assert repo.get_device_token(token_id) is None
+
+    # Deleting a non-existent / foreign token still returns 204 (no leak).
+    nofound = client.delete(
+        "/v1/me/device-tokens/does-not-exist",
+        headers=headers,
+    )
+    assert nofound.status_code == 204
+
+
+def test_device_token_register_requires_auth():
+    _, _, _, client = _build_app_with_user()
+    response = client.post(
+        "/v1/me/device-tokens",
+        json={"token": "f" * 64},
+    )
+    assert response.status_code == 401
 
 
 def test_post_not_matching_any_intent_does_not_flip_confirmed_at():

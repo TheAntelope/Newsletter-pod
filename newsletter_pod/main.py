@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import secrets
 from dataclasses import dataclass
@@ -46,9 +47,12 @@ from .inbound import (
 from .legal import PRIVACY_HTML, TERMS_HTML
 from .mailer import NoopMailer, SMTPMailer
 from .podcast_api import PodcastApiClient
+from .push import PushSender, build_push_sender_from_settings
 from .shared_items import MAX_UPLOAD_BYTES as SHARED_MAX_UPLOAD_BYTES, SUPPORTED_KINDS as SHARED_SUPPORTED_KINDS
 from .storage import AudioStorage, GCSAudioStorage, InMemoryAudioStorage
+from .user_models import DeviceTokenRecord
 from .user_repository import ControlPlaneRepository, FirestoreControlPlaneRepository, InMemoryControlPlaneRepository
+from .utils import utc_now
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -163,12 +167,22 @@ class DiscoverSubstacksRequest(BaseModel):
     query: str
 
 
+class RegisterDeviceTokenRequest(BaseModel):
+    token: str
+    environment: Optional[str] = "production"
+    bundle_id: Optional[str] = None
+
+
 @dataclass
 class ServiceContainer:
     settings: Settings
     storage: AudioStorage
     control_repository: ControlPlaneRepository | None = None
     control_plane: ControlPlaneService | None = None
+    # APNs push sender; None when APNs is disabled or unconfigured. Lazily
+    # built once per process so the JWT cache + HTTP/2 client are reused
+    # across every push attempt.
+    push_sender: PushSender | None = None
 
 
 def create_app(container: ServiceContainer | None = None) -> FastAPI:
@@ -467,6 +481,73 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         user = _require_session_user(container, authorization)
         assert container.control_plane is not None
         return container.control_plane.list_inbound_items(user.id)
+
+    @app.post("/v1/me/device-tokens", status_code=status.HTTP_201_CREATED)
+    def register_device_token(
+        request_payload: RegisterDeviceTokenRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        user = _require_session_user(container, authorization)
+        assert container.control_repository is not None
+        token = (request_payload.token or "").strip().lower()
+        if not token or len(token) < 32:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid APNs device token",
+            )
+        environment = (request_payload.environment or "production").strip().lower()
+        if environment not in {"production", "sandbox"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="environment must be 'production' or 'sandbox'",
+            )
+        bundle_id = (
+            (request_payload.bundle_id or "").strip()
+            or container.settings.apns_bundle_id
+        )
+        # Idempotent on (user_id, token): re-registering the same device
+        # refreshes last_seen_at and clears any prior invalidated_at marker.
+        token_id = hashlib.sha256(f"{user.id}:{token}".encode("utf-8")).hexdigest()[:32]
+        now = utc_now()
+        existing = container.control_repository.get_device_token(token_id)
+        if existing is not None:
+            updated = existing.model_copy(
+                update={
+                    "last_seen_at": now,
+                    "environment": environment,
+                    "bundle_id": bundle_id,
+                    "invalidated_at": None,
+                }
+            )
+            container.control_repository.save_device_token(updated)
+            return {"token_id": token_id, "status": "refreshed"}
+        record = DeviceTokenRecord(
+            id=token_id,
+            user_id=user.id,
+            token=token,
+            platform="ios",
+            environment=environment,
+            bundle_id=bundle_id,
+            created_at=now,
+            last_seen_at=now,
+        )
+        container.control_repository.save_device_token(record)
+        return {"token_id": token_id, "status": "registered"}
+
+    @app.delete("/v1/me/device-tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_device_token(
+        token_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> Response:
+        user = _require_session_user(container, authorization)
+        assert container.control_repository is not None
+        existing = container.control_repository.get_device_token(token_id)
+        if existing is None or existing.user_id != user.id:
+            # Same response shape either way — don't leak whether a token id
+            # belongs to a different user.
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        container.control_repository.delete_device_token(token_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post("/v1/items/shared", status_code=status.HTTP_201_CREATED)
     async def share_item(
@@ -863,6 +944,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             inbound_email_domain=container.settings.inbound_email_domain,
             mailgun_signing_key=container.settings.mailgun_webhook_signing_key,
             embeddings=_build_embedding_provider(container.settings),
+            push_sender=container.push_sender,
         )
         try:
             return handler.handle(payload)
@@ -1008,11 +1090,21 @@ def _build_container(settings: Settings) -> ServiceContainer:
         mailer=mailer,
     )
 
+    push_sender = build_push_sender_from_settings(
+        enabled=settings.apns_enabled,
+        team_id=settings.apns_team_id,
+        key_id=settings.apns_key_id,
+        auth_key_pem=settings.apns_auth_key,
+        bundle_id=settings.apns_bundle_id,
+        environment=settings.apns_environment,
+    )
+
     return ServiceContainer(
         settings=settings,
         storage=storage,
         control_repository=control_repository,
         control_plane=control_plane,
+        push_sender=push_sender,
     )
 
 

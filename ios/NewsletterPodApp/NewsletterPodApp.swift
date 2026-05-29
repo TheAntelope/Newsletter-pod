@@ -3,6 +3,7 @@ import UIKit
 
 @main
 struct NewsletterPodApp: App {
+    @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     @StateObject private var viewModel = AppViewModel()
 
     init() {
