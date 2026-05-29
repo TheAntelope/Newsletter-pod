@@ -129,88 +129,23 @@ workflows:
             app-store-connect bundle-ids capabilities $BID 2>&1 | head -80 || true
           done
 
-          # codemagic-cli-tools' bundle-ids enable-capabilities turns the
-          # capability ON but has no way to ASSIGN a specific App Group to
-          # it (Apple's portal does this with the "Configure → tick group
-          # → Save" flow). When the assignment is missing, the new profile
-          # has App Groups capability but no actual group id, and
-          # xcodebuild rejects it with "doesn't support the
-          # group.com.newsletterpod.shared App Group".
+          # The Apple App Store Connect API does NOT expose /v1/appGroups
+          # in any usable form, so the "assign group X to bundle id Y"
+          # step has to be done by hand in the developer portal:
           #
-          # Fix: hit Apple's relationships API directly to attach the App
-          # Group to both bundle ids. Uses the same App Store Connect API
-          # key the codemagic integration provides.
-          python3 <<'PYEOF'
-          import json, os, sys, time, urllib.request
-
-          # PyJWT ships with codemagic-cli-tools so it's already installed.
-          try:
-              import jwt
-          except ImportError:
-              import subprocess
-              subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--quiet', 'pyjwt[crypto]'])
-              import jwt
-
-          key_id = os.environ['APP_STORE_CONNECT_KEY_IDENTIFIER']
-          issuer = os.environ['APP_STORE_CONNECT_ISSUER_ID']
-          # The integration mounts the private key either inline (PEM string)
-          # or as a file path. Handle both.
-          raw_key = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '')
-          if raw_key.startswith('-----BEGIN'):
-              private_key = raw_key
-          else:
-              # Codemagic's integration sets the env var to e.g.
-              # "@file:/Users/builder/.appstoreconnect/private_keys/AuthKey_XYZ.p8"
-              # Strip the @file: prefix and read the actual file.
-              path = raw_key.removeprefix('@file:') if raw_key.startswith('@file:') else raw_key
-              with open(path) as f:
-                  private_key = f.read()
-
-          now = int(time.time())
-          token = jwt.encode(
-              {'iss': issuer, 'iat': now, 'exp': now + 20 * 60, 'aud': 'appstoreconnect-v1'},
-              private_key,
-              algorithm='ES256',
-              headers={'kid': key_id, 'typ': 'JWT'},
-          )
-
-          def api(method, path, body=None):
-              req = urllib.request.Request(
-                  f'https://api.appstoreconnect.apple.com{path}',
-                  method=method,
-                  headers={
-                      'Authorization': f'Bearer {token}',
-                      'Content-Type': 'application/json',
-                  },
-                  data=json.dumps(body).encode() if body else None,
-              )
-              try:
-                  with urllib.request.urlopen(req) as r:
-                      raw = r.read()
-                      return json.loads(raw) if raw else {}
-              except urllib.error.HTTPError as e:
-                  body = e.read().decode(errors='replace')
-                  print(f'HTTP {e.code} on {method} {path}: {body}', file=sys.stderr)
-                  raise
-
-          # Find the App Group resource id for our identifier.
-          app_groups = api('GET', '/v1/appGroups?filter[identifier]=group.com.newsletterpod.shared')
-          ag_records = app_groups.get('data', [])
-          if not ag_records:
-              print('ERROR: App Group group.com.newsletterpod.shared not found', file=sys.stderr)
-              sys.exit(1)
-          ag_id = ag_records[0]['id']
-          print(f'App Group internal id: {ag_id}')
-
-          for bundle_id in (os.environ['MAIN_DB_ID'], os.environ['EXT_DB_ID']):
-              print(f'Assigning {ag_id} to bundle {bundle_id}...')
-              api(
-                  'PATCH',
-                  f'/v1/bundleIds/{bundle_id}/relationships/appGroups',
-                  {'data': [{'type': 'appGroups', 'id': ag_id}]},
-              )
-              print(f'  done')
-          PYEOF
+          #   developer.apple.com → Identifiers → click the bundle id →
+          #   App Groups capability row → Configure (not Edit) → tick
+          #   group.com.newsletterpod.shared → Continue → Save.
+          #
+          # The capability dump above tells you whether the assignment
+          # actually persisted: a bundle id with the group assigned will
+          # show its App Groups capability with a non-empty Settings field
+          # similar to how Sign In with Apple appears. An assigned-but-
+          # not-saved attempt looks identical to no assignment at all.
+          #
+          # When this build runs after a proper assignment, the profiles
+          # created below inherit the group automatically and xcodebuild
+          # archives cleanly.
 
           # Clear local provisioning-profile cache (where ios_signing put
           # the stale main app profile) so the fresh downloads aren't
