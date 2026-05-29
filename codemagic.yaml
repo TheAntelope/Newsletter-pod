@@ -13,16 +13,15 @@ workflows:
           include: true
           source: true
     environment:
-      ios_signing:
-        distribution_type: app_store
-        # Main app bundle id. The Share extension (com.newsletterpod.app.share)
-        # is auto-discovered by `xcode-project use-profiles` when its bundle
-        # id is registered in App Store Connect. BEFORE the first build with
-        # the share extension target: register the new bundle id in App Store
-        # Connect → Identifiers; the integration provisions matching profiles
-        # automatically. If a build fails with "no matching profile for
-        # com.newsletterpod.app.share", that registration is missing.
-        bundle_identifier: com.newsletterpod.app
+      # NOTE: we deliberately do NOT use the `ios_signing` block here.
+      # That block only handles ONE bundle id and runs BEFORE xcodegen
+      # has produced the .xcodeproj, so it can't auto-discover the share
+      # extension's bundle id (com.newsletterpod.app.share). We do
+      # keychain + signing-files setup explicitly in the script steps
+      # below using the App Store Connect integration's API key (the
+      # workflow-level `integrations.app_store_connect: codemagic` above
+      # injects APP_STORE_CONNECT_KEY_IDENTIFIER/ISSUER_ID/PRIVATE_KEY
+      # env vars that codemagic-cli-tools reads automatically).
       vars:
         XCODE_PROJECT: "ios/NewsletterPod.xcodeproj"
         XCODE_SCHEME: "NewsletterPod"
@@ -53,19 +52,23 @@ workflows:
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
           cd "$CM_BUILD_DIR/ios"
           xcodegen generate --spec project.yml
-      - name: Set up provisioning profiles
+      - name: Set up keychain and fetch signing files for all bundle ids
         script: |
-          # The Codemagic `ios_signing.bundle_identifier` block only auto-
-          # fetches a profile for the main app (com.newsletterpod.app). The
-          # share extension's bundle id (com.newsletterpod.app.share) needs
-          # its own fetch, and we want --create so the App Groups capability
-          # (added to the bundle id in App Store Connect on 2026-05-29) is
-          # baked into a fresh profile rather than using a stale cached one
-          # without it. The integration's APP_STORE_CONNECT_* env vars
-          # authenticate this call automatically.
+          # Multi-bundle-id signing setup. Codemagic's `ios_signing` block
+          # only handles one bundle id; this explicit flow handles both
+          # com.newsletterpod.app (main app) and com.newsletterpod.app.share
+          # (Share extension). The `--create` flag provisions profiles on
+          # the fly if missing, which is what picks up the App Groups
+          # capability assigned to each bundle id in App Store Connect.
+          set -e
+          keychain initialize
+          app-store-connect fetch-signing-files com.newsletterpod.app \
+            --type IOS_APP_STORE \
+            --create
           app-store-connect fetch-signing-files com.newsletterpod.app.share \
             --type IOS_APP_STORE \
             --create
+          keychain add-certificates
           xcode-project use-profiles \
             --project "$CM_BUILD_DIR/$XCODE_PROJECT"
       - name: Increment build number
