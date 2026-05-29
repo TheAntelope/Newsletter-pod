@@ -642,7 +642,8 @@ final class AppViewModel: ObservableObject {
                     link: current.link,
                     publishedAt: current.publishedAt,
                     pinned: true,
-                    likelyIncluded: true
+                    likelyIncluded: true,
+                    shared: current.shared
                 )
             },
             api: { token in
@@ -685,7 +686,8 @@ final class AppViewModel: ObservableObject {
                     link: current.link,
                     publishedAt: current.publishedAt,
                     pinned: false,
-                    likelyIncluded: current.likelyIncluded
+                    likelyIncluded: current.likelyIncluded,
+                    shared: current.shared
                 )
             },
             api: { token in

@@ -619,6 +619,30 @@ struct NextEpisodeCandidateDTO: Codable, Identifiable, Equatable {
 
     var id: String { dedupeKey }
 
+    init(
+        dedupeKey: String,
+        sourceID: String,
+        sourceName: String,
+        title: String,
+        summary: String,
+        link: String,
+        publishedAt: Date,
+        pinned: Bool,
+        likelyIncluded: Bool,
+        shared: Bool = false
+    ) {
+        self.dedupeKey = dedupeKey
+        self.sourceID = sourceID
+        self.sourceName = sourceName
+        self.title = title
+        self.summary = summary
+        self.link = link
+        self.publishedAt = publishedAt
+        self.pinned = pinned
+        self.likelyIncluded = likelyIncluded
+        self.shared = shared
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         dedupeKey = try c.decode(String.self, forKey: .dedupeKey)
