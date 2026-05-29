@@ -122,13 +122,16 @@ workflows:
           fi
           echo "Bundle ids: main=$MAIN_DB_ID ext=$EXT_DB_ID"
 
-          # Diagnostic: dump capability state for both bundle ids so a
-          # missed "Edit → select App Group → save" step surfaces in the
-          # build log instead of as a cryptic "doesn't support the
-          # group.com.newsletterpod.shared App Group" error at archive time.
+          # Diagnostic: dump capability state for both bundle ids. The
+          # plain `bundle-ids get` doesn't return the bundleIdCapabilities
+          # relationship data; use `list-capabilities` (or similar) to
+          # actually see which capabilities + App Group assignments are
+          # configured on each bundle id.
           for BID in $MAIN_DB_ID $EXT_DB_ID; do
-            echo "--- capabilities for $BID ---"
-            app-store-connect bundle-ids get $BID --json 2>&1 | head -100 || true
+            echo "--- capabilities for $BID (list-capabilities) ---"
+            app-store-connect bundle-ids list-capabilities $BID 2>&1 | head -50 || true
+            echo "--- capabilities for $BID (--json) ---"
+            app-store-connect bundle-ids list-capabilities $BID --json 2>&1 | head -50 || true
           done
 
           # Clear local provisioning-profile cache (where ios_signing put
