@@ -17,11 +17,14 @@ import Security
 ///  `NewsletterPodShareExtension/NewsletterPodShareExtension.entitlements`)
 /// or `SecItemAdd` returns `errSecMissingEntitlement` (-34018).
 enum SharedSession {
-    /// Access group string. `$(AppIdentifierPrefix)` is filled in at runtime
-    /// from the app's keychain-access-groups entitlement, so we use the
-    /// literal trailing portion here; the entitlements declarations are
-    /// authoritative for the prefix.
-    static let accessGroup = "com.newsletterpod.shared"
+    /// Access group string. At RUNTIME the keychain access group is the team
+    /// id + period + the group name from entitlements — the
+    /// `$(AppIdentifierPrefix)` token only resolves at build time inside the
+    /// entitlements plist. Code that calls SecItemAdd/SecItemCopyMatching has
+    /// to pass the full prefixed value or iOS returns errSecMissingEntitlement
+    /// (-34018) silently and the keychain write/read is a no-op.
+    /// Team id `R7HS2T53Z8` matches `DEVELOPMENT_TEAM` in `ios/project.yml`.
+    static let accessGroup = "R7HS2T53Z8.com.newsletterpod.shared"
     static let tokenAccount = "session_token"
     static let userIDAccount = "user_id"
     private static let service = "com.newsletterpod.app"
@@ -67,12 +70,11 @@ enum SharedSession {
         query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         let status = SecItemAdd(query as CFDictionary, nil)
         if status != errSecSuccess {
-            // The extension is the only consumer that fails loudly here in
-            // dev — if the access group string doesn't match the entitlement,
-            // SecItemAdd returns -34018 and the share endpoint always 401s.
-            #if DEBUG
-            print("[SharedSession] SecItemAdd failed for \(account): status=\(status)")
-            #endif
+            // -34018 (errSecMissingEntitlement): access group doesn't match
+            // entitlement. Logged in release too — the failure path is
+            // otherwise silent and surfaces only as the Share extension
+            // showing "Sign in to ClawCast first."
+            NSLog("[SharedSession] SecItemAdd failed for %@: status=%d", account, status)
         }
     }
 
