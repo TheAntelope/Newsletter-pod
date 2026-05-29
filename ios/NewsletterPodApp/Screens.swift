@@ -5179,7 +5179,12 @@ private struct NextEpisodeCandidateRow: View {
             HStack(spacing: 6) {
                 MetaLabel(text: candidate.sourceName)
                 Spacer(minLength: 0)
-                if candidate.pinned {
+                if candidate.shared {
+                    Label("Shared by you", systemImage: "square.and.arrow.up.fill")
+                        .labelStyle(.titleAndIcon)
+                        .font(Theme.Typography.calloutStrong)
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                } else if candidate.pinned {
                     Label("Pinned", systemImage: "pin.fill")
                         .labelStyle(.titleAndIcon)
                         .font(Theme.Typography.calloutStrong)

@@ -612,8 +612,26 @@ struct NextEpisodeCandidateDTO: Codable, Identifiable, Equatable {
     let publishedAt: Date
     let pinned: Bool
     let likelyIncluded: Bool
+    /// True for items shared via the iOS Share extension / POST /v1/items/shared.
+    /// Backend always sets pinned + likely_included true for these and lists
+    /// them at the top of the candidates array. Old builds default to false.
+    let shared: Bool
 
     var id: String { dedupeKey }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        dedupeKey = try c.decode(String.self, forKey: .dedupeKey)
+        sourceID = try c.decode(String.self, forKey: .sourceID)
+        sourceName = try c.decode(String.self, forKey: .sourceName)
+        title = try c.decode(String.self, forKey: .title)
+        summary = try c.decode(String.self, forKey: .summary)
+        link = try c.decode(String.self, forKey: .link)
+        publishedAt = try c.decode(Date.self, forKey: .publishedAt)
+        pinned = try c.decode(Bool.self, forKey: .pinned)
+        likelyIncluded = try c.decode(Bool.self, forKey: .likelyIncluded)
+        shared = (try? c.decode(Bool.self, forKey: .shared)) ?? false
+    }
 
     private enum CodingKeys: String, CodingKey {
         case dedupeKey = "dedupe_key"
@@ -625,6 +643,7 @@ struct NextEpisodeCandidateDTO: Codable, Identifiable, Equatable {
         case publishedAt = "published_at"
         case pinned
         case likelyIncluded = "likely_included"
+        case shared
     }
 }
 

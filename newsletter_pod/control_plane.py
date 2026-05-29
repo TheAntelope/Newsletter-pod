@@ -2055,8 +2055,42 @@ class ControlPlaneService:
         # rest of the cut and re-sorted chronologically so the prompt builder
         # sees a consistent published_at ordering.
         if shared_source_items:
-            items = items + shared_source_items
-            items.sort(key=lambda item: item.published_at)
+            # Honor next-episode "exclude" overrides on shared items too —
+            # the candidate-queue UI already filters them out of the visible
+            # list; this keeps generation consistent so the user can pull
+            # back a share without having to reset_user. The lookup is best-
+            # effort: if candidate queue isn't enabled, shared items just
+            # pass through unfiltered (existing behavior).
+            if self.settings.candidate_queue_enabled:
+                try:
+                    excluded = self.repository.list_next_episode_overrides(
+                        user_id, kind="exclude", only_unconsumed=True
+                    )
+                    excluded_keys_for_shares = {
+                        e.source_item_dedupe_key for e in excluded
+                    }
+                    if excluded_keys_for_shares:
+                        before = len(shared_source_items)
+                        shared_source_items = [
+                            s for s in shared_source_items
+                            if s.dedupe_key not in excluded_keys_for_shares
+                        ]
+                        if len(shared_source_items) < before:
+                            logger.info(
+                                "Shared items dropped by exclude override: "
+                                "user=%s dropped=%d remaining=%d",
+                                user_id,
+                                before - len(shared_source_items),
+                                len(shared_source_items),
+                            )
+                except Exception:  # pragma: no cover — non-fatal
+                    logger.warning(
+                        "Reading exclude overrides for shared items failed: user=%s",
+                        user_id, exc_info=True,
+                    )
+            if shared_source_items:
+                items = items + shared_source_items
+                items.sort(key=lambda item: item.published_at)
 
         # Legacy profiles may store a duration outside the user's current
         # entitlements (e.g. saved before a tier cap tightened). Clamp at

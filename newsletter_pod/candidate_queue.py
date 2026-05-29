@@ -271,15 +271,25 @@ class CandidateQueueService:
                 for r in unpinned_records[:unpinned_budget]:
                     likely_keys.add(r.dedupe_key)
 
+        source_candidates = [
+            self._candidate_payload(
+                record,
+                pinned=record.dedupe_key in pinned_keys,
+                likely=record.dedupe_key in likely_keys,
+            )
+            for record in records
+        ]
+
+        # Shared items (POST /v1/items/shared) live in the inbound_items
+        # collection, not source_items, so they don't surface via the
+        # source-record query above. Pull unconsumed kind="share" rows and
+        # prepend them — they're always pinned + always likely_included
+        # since generation force-includes them regardless of cap/ranker.
+        # Within the shared block, newest share-time first.
+        shared_candidates = self._shared_item_candidates(user_id, excluded_keys)
+
         return {
-            "candidates": [
-                self._candidate_payload(
-                    record,
-                    pinned=record.dedupe_key in pinned_keys,
-                    likely=record.dedupe_key in likely_keys,
-                )
-                for record in records
-            ],
+            "candidates": shared_candidates + source_candidates,
             "pinned_count": pinned_count,
             "max_pins": max_pins,
             "pins_remaining": pins_remaining,
@@ -384,6 +394,7 @@ class CandidateQueueService:
         *,
         pinned: bool,
         likely: bool,
+        shared: bool = False,
     ) -> dict[str, Any]:
         return {
             "dedupe_key": record.dedupe_key,
@@ -395,7 +406,54 @@ class CandidateQueueService:
             "published_at": record.published_at.isoformat(),
             "pinned": pinned,
             "likely_included": likely,
+            "shared": shared,
         }
+
+    def _shared_item_candidates(
+        self,
+        user_id: str,
+        excluded_keys: set[str],
+    ) -> list[dict[str, Any]]:
+        """Project unconsumed kind="share" InboundEmailItems into the
+        candidate-payload shape so the iOS queue surfaces them.
+
+        Shared items skip the ranker/cap entirely at generation time
+        (control_plane.process_user_generation), so they're always
+        pinned + likely_included here too. Sorted newest share-time
+        first — most recent share appears at the very top of the queue.
+        """
+        try:
+            inbound = self.repository.list_unconsumed_inbound_items(user_id)
+        except Exception:  # pragma: no cover — non-fatal, omit shared block
+            logger.warning(
+                "Listing inbound items for candidate queue failed: user=%s",
+                user_id,
+                exc_info=True,
+            )
+            return []
+
+        shared = [item for item in inbound if getattr(item, "kind", "email") == "share"]
+        shared.sort(key=lambda i: i.received_at, reverse=True)
+
+        payloads: list[dict[str, Any]] = []
+        for item in shared:
+            dedupe_key = f"inbound:{item.id}"
+            if dedupe_key in excluded_keys:
+                continue
+            summary = item.body_text or item.subject or ""
+            payloads.append({
+                "dedupe_key": dedupe_key,
+                "source_id": f"inbound:{item.sender_domain or item.id}",
+                "source_name": item.from_name or "Shared by you",
+                "title": item.subject or "Shared item",
+                "summary": summary[:500],
+                "link": item.article_url or f"clawcast://inbound/{item.id}",
+                "published_at": item.received_at.isoformat(),
+                "pinned": True,
+                "likely_included": True,
+                "shared": True,
+            })
+        return payloads
 
 
 class CandidateQueueError(RuntimeError):
