@@ -122,16 +122,28 @@ workflows:
           fi
           echo "Bundle ids: main=$MAIN_DB_ID ext=$EXT_DB_ID"
 
-          # Diagnostic: dump capability state for both bundle ids. The
-          # plain `bundle-ids get` doesn't return the bundleIdCapabilities
-          # relationship data; use `list-capabilities` (or similar) to
-          # actually see which capabilities + App Group assignments are
-          # configured on each bundle id.
+          # Diagnostic: dump capabilities for both bundle ids.
           for BID in $MAIN_DB_ID $EXT_DB_ID; do
-            echo "--- capabilities for $BID (list-capabilities) ---"
-            app-store-connect bundle-ids list-capabilities $BID 2>&1 | head -50 || true
-            echo "--- capabilities for $BID (--json) ---"
-            app-store-connect bundle-ids list-capabilities $BID --json 2>&1 | head -50 || true
+            echo "--- BEFORE: capabilities for $BID ---"
+            app-store-connect bundle-ids capabilities $BID 2>&1 | head -80 || true
+          done
+
+          # Try to programmatically enable App Groups on both bundle ids.
+          # If the user already configured it in the portal, this is a
+          # no-op; if not, it adds the capability so the new profiles
+          # inherit it. APP_GROUPS is the capability type per Apple's
+          # CapabilityType enum.
+          for BID in $MAIN_DB_ID $EXT_DB_ID; do
+            echo "--- enabling APP_GROUPS on $BID ---"
+            app-store-connect bundle-ids enable-capabilities $BID \
+              --capability-types APP_GROUPS 2>&1 | head -20 || true
+          done
+
+          # After the enable attempt, re-dump capability state so we see
+          # what's actually there.
+          for BID in $MAIN_DB_ID $EXT_DB_ID; do
+            echo "--- AFTER: capabilities for $BID ---"
+            app-store-connect bundle-ids capabilities $BID 2>&1 | head -80 || true
           done
 
           # Clear local provisioning-profile cache (where ios_signing put
