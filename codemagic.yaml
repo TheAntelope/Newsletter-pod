@@ -13,15 +13,16 @@ workflows:
           include: true
           source: true
     environment:
-      # NOTE: we deliberately do NOT use the `ios_signing` block here.
-      # That block only handles ONE bundle id and runs BEFORE xcodegen
-      # has produced the .xcodeproj, so it can't auto-discover the share
-      # extension's bundle id (com.newsletterpod.app.share). We do
-      # keychain + signing-files setup explicitly in the script steps
-      # below using the App Store Connect integration's API key (the
-      # workflow-level `integrations.app_store_connect: codemagic` above
-      # injects APP_STORE_CONNECT_KEY_IDENTIFIER/ISSUER_ID/PRIVATE_KEY
-      # env vars that codemagic-cli-tools reads automatically).
+      ios_signing:
+        # ios_signing handles the main app's cert + profile install into
+        # a managed keychain. The share extension (com.newsletterpod.app.share)
+        # gets its profile downloaded by an extra script step below — we
+        # can't ask fetch-signing-files to handle it because that command
+        # also tries to save the certificate as a local file, and the
+        # `app_store_connect: codemagic` integration's cert only lives in
+        # the managed keychain (no private key file path exposed).
+        distribution_type: app_store
+        bundle_identifier: com.newsletterpod.app
       vars:
         XCODE_PROJECT: "ios/NewsletterPod.xcodeproj"
         XCODE_SCHEME: "NewsletterPod"
@@ -52,23 +53,68 @@ workflows:
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
           cd "$CM_BUILD_DIR/ios"
           xcodegen generate --spec project.yml
-      - name: Set up keychain and fetch signing files for all bundle ids
+      - name: Download share-extension provisioning profile
         script: |
-          # Multi-bundle-id signing setup. Codemagic's `ios_signing` block
-          # only handles one bundle id; this explicit flow handles both
-          # com.newsletterpod.app (main app) and com.newsletterpod.app.share
-          # (Share extension). The `--create` flag provisions profiles on
-          # the fly if missing, which is what picks up the App Groups
-          # capability assigned to each bundle id in App Store Connect.
+          # ios_signing handled the MAIN app's cert + profile. We still
+          # need a profile for the Share extension's bundle id. Going
+          # through `fetch-signing-files` fails ("Cannot save Signing
+          # Certificates without certificate private key") because that
+          # command tries to save the cert as a local file, and the
+          # codemagic-managed integration only exposes the cert through
+          # the keychain. So we hit the App Store Connect API directly to
+          # find or create the profile, then save just the .mobileprovision
+          # blob next to the main app's profile so `use-profiles` finds
+          # both.
           set -e
-          keychain initialize
-          app-store-connect fetch-signing-files com.newsletterpod.app \
-            --type IOS_APP_STORE \
-            --create
-          app-store-connect fetch-signing-files com.newsletterpod.app.share \
-            --type IOS_APP_STORE \
-            --create
-          keychain add-certificates
+
+          EXT_BUNDLE=com.newsletterpod.app.share
+
+          # Find the existing IOS_DISTRIBUTION cert that the main app's
+          # signing already chose (ios_signing block established it).
+          CERT_ID=$(app-store-connect certificates list \
+            --type IOS_DISTRIBUTION --json \
+            | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0]['id'] if data else '')")
+          if [ -z "$CERT_ID" ]; then
+            echo "ERROR: no IOS_DISTRIBUTION certificate in App Store Connect"
+            exit 1
+          fi
+
+          # Find the bundle id record (App Store Connect uses an opaque
+          # internal id, separate from the human-readable identifier).
+          BUNDLE_DB_ID=$(app-store-connect bundle-ids list \
+            --bundle-id-identifier $EXT_BUNDLE --json \
+            | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0]['id'] if data else '')")
+          if [ -z "$BUNDLE_DB_ID" ]; then
+            echo "ERROR: bundle id $EXT_BUNDLE not registered in App Store Connect"
+            exit 1
+          fi
+
+          # See if an IOS_APP_STORE profile already exists for this bundle.
+          # Codemagic CLI returns relationships.bundleId.data.id matching
+          # the bundle-ids-list output.
+          PROFILE_ID=$(app-store-connect profiles list \
+            --profile-type IOS_APP_STORE --json \
+            | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          for p in data:
+              rel = p.get('relationships', {}).get('bundleId', {}).get('data', {})
+              if rel.get('id') == '$BUNDLE_DB_ID':
+                  print(p['id'])
+                  break
+          ")
+
+          if [ -z "$PROFILE_ID" ]; then
+            echo "No profile for $EXT_BUNDLE — creating one"
+            app-store-connect profiles create \
+              $BUNDLE_DB_ID $CERT_ID IOS_APP_STORE \
+              --name "ClawCast Share Extension App Store" \
+              --save
+          else
+            echo "Profile $PROFILE_ID exists for $EXT_BUNDLE — downloading"
+            app-store-connect profiles get $PROFILE_ID --save
+          fi
+
           xcode-project use-profiles \
             --project "$CM_BUILD_DIR/$XCODE_PROJECT"
       - name: Increment build number
