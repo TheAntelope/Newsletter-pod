@@ -129,23 +129,41 @@ workflows:
             app-store-connect bundle-ids capabilities $BID 2>&1 | head -80 || true
           done
 
-          # The Apple App Store Connect API does NOT expose /v1/appGroups
-          # in any usable form, so the "assign group X to bundle id Y"
-          # step has to be done by hand in the developer portal:
-          #
-          #   developer.apple.com → Identifiers → click the bundle id →
-          #   App Groups capability row → Configure (not Edit) → tick
-          #   group.com.newsletterpod.shared → Continue → Save.
-          #
-          # The capability dump above tells you whether the assignment
-          # actually persisted: a bundle id with the group assigned will
-          # show its App Groups capability with a non-empty Settings field
-          # similar to how Sign In with Apple appears. An assigned-but-
-          # not-saved attempt looks identical to no assignment at all.
-          #
-          # When this build runs after a proper assignment, the profiles
-          # created below inherit the group automatically and xcodebuild
-          # archives cleanly.
+          # App Store Connect API doesn't expose App Groups, but fastlane
+          # has access via the legacy Apple Developer Portal API
+          # (spaceship). Recent fastlane versions can authenticate with
+          # the App Store Connect API key Codemagic provides — try it
+          # before falling back to the manual portal flow. Swallow errors
+          # so the build keeps going even if fastlane spaceship is
+          # incompatible with API-key auth for this operation.
+          if [ -n "$APP_STORE_CONNECT_PRIVATE_KEY" ]; then
+            KEY_PATH="${APP_STORE_CONNECT_PRIVATE_KEY#@file:}"
+            cat > /tmp/assign_app_group.rb <<RBEOF
+          require "spaceship"
+
+          Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
+            key_id: ENV["APP_STORE_CONNECT_KEY_IDENTIFIER"],
+            issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"],
+            filepath: "${KEY_PATH}"
+          )
+
+          group_id = "group.com.newsletterpod.shared"
+          ["com.newsletterpod.app", "com.newsletterpod.app.share"].each do |bid|
+            begin
+              app = Spaceship::ConnectAPI::BundleId.all.find { |b| b.identifier == bid }
+              raise "bundle id #{bid} not found" unless app
+              group = Spaceship::ConnectAPI::AppGroup.find(group_id)
+              raise "app group #{group_id} not found" unless group
+              app.associate_app_groups([group])
+              puts "Associated #{group_id} with #{bid}"
+            rescue => e
+              puts "WARN: could not associate #{group_id} with #{bid}: #{e.message}"
+            end
+          end
+          RBEOF
+            (cd /tmp && bundle exec ruby assign_app_group.rb 2>&1) || true
+            ruby /tmp/assign_app_group.rb 2>&1 || true
+          fi
 
           # Clear local provisioning-profile cache (where ios_signing put
           # the stale main app profile) so the fresh downloads aren't
