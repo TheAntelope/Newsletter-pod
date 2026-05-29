@@ -1365,6 +1365,91 @@ def test_paid_feed_isolation_and_billing_unlock():
     assert wrong_media.status_code == 404
 
 
+def test_media_response_is_resume_safe_after_interruption():
+    """Podcast clients (Apple Podcasts, Overcast, ...) get an audio-session
+    interruption when a notification sound plays. On resume they send a new
+    request with ``Range: bytes=N-`` plus an ``If-Range`` validator. If the
+    server doesn't return ETag/Last-Modified, the client treats the resource
+    as unverifiable and restarts playback from byte 0. This test pins the
+    headers and conditional behaviour that prevent that."""
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("media-resume-user", "resume@example.com"))
+
+    me = client.get("/v1/me", headers=headers).json()["user"]
+    repo = container.control_repository
+    storage = container.storage
+    token = repo.get_feed_token(me["id"])
+    assert token
+
+    audio = b"abcdefghij"
+    object_name, size = storage.upload_audio("ep-resume", audio, "audio/mpeg")
+    published_at = datetime(2026, 5, 1, 9, 30, tzinfo=timezone.utc)
+    repo.save_user_episode(
+        UserEpisodeRecord(
+            id="ep-resume",
+            user_id=me["id"],
+            title="Resume Test",
+            description="Notes",
+            published_at=published_at,
+            audio_object_name=object_name,
+            audio_size_bytes=size,
+        )
+    )
+
+    full = client.get(f"/media/{token.token}/ep-resume.mp3")
+    assert full.status_code == 200
+    assert full.content == audio
+    etag = full.headers["etag"]
+    last_modified = full.headers["last-modified"]
+    assert etag == f'"ep-resume-{len(audio)}"'
+    assert last_modified == "Fri, 01 May 2026 09:30:00 GMT"
+    assert full.headers["accept-ranges"] == "bytes"
+    assert "immutable" in full.headers["cache-control"]
+
+    # Mid-playback resume: Range + matching If-Range -> 206 with the requested
+    # chunk and Content-Range pinned to the original total length.
+    resumed = client.get(
+        f"/media/{token.token}/ep-resume.mp3",
+        headers={"Range": "bytes=3-", "If-Range": etag},
+    )
+    assert resumed.status_code == 206
+    assert resumed.content == audio[3:]
+    assert resumed.headers["content-range"] == f"bytes 3-{len(audio) - 1}/{len(audio)}"
+
+    # If-Range with the original Last-Modified date also satisfies resume.
+    resumed_by_date = client.get(
+        f"/media/{token.token}/ep-resume.mp3",
+        headers={"Range": "bytes=3-", "If-Range": last_modified},
+    )
+    assert resumed_by_date.status_code == 206
+    assert resumed_by_date.content == audio[3:]
+
+    # Stale If-Range -> client must fall back to a full body (not a half file
+    # that would corrupt the stream).
+    stale = client.get(
+        f"/media/{token.token}/ep-resume.mp3",
+        headers={"Range": "bytes=3-", "If-Range": '"something-else"'},
+    )
+    assert stale.status_code == 200
+    assert stale.content == audio
+
+    # Conditional GETs short-circuit to 304, so the client doesn't re-download
+    # the MP3 just to validate the cache.
+    not_modified = client.get(
+        f"/media/{token.token}/ep-resume.mp3",
+        headers={"If-None-Match": etag},
+    )
+    assert not_modified.status_code == 304
+    assert not_modified.content == b""
+
+    not_modified_by_date = client.get(
+        f"/media/{token.token}/ep-resume.mp3",
+        headers={"If-Modified-Since": last_modified},
+    )
+    assert not_modified_by_date.status_code == 304
+    assert not_modified_by_date.content == b""
+
+
 def test_generate_endpoint_starts_async_run_and_run_status_is_queryable(monkeypatch):
     container, client = _build_app()
     container.control_plane.apple_identity_verifier = FakeAppleVerifier("apple-user-async", "async@example.com")

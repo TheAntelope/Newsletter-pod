@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import format_datetime, parsedate_to_datetime
 from pathlib import Path
 from typing import Optional
 
@@ -875,6 +877,9 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         episode_id: str,
         request: Request,
         range_header: str | None = Header(default=None, alias="Range"),
+        if_range_header: str | None = Header(default=None, alias="If-Range"),
+        if_none_match_header: str | None = Header(default=None, alias="If-None-Match"),
+        if_modified_since_header: str | None = Header(default=None, alias="If-Modified-Since"),
     ) -> Response:
         assert container.control_repository is not None
         episode = None
@@ -897,6 +902,11 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             media_type=episode.audio_mime_type,
             request=request,
             range_header=range_header,
+            if_range_header=if_range_header,
+            if_none_match_header=if_none_match_header,
+            if_modified_since_header=if_modified_since_header,
+            etag=_episode_etag(episode.id, len(audio_bytes)),
+            last_modified=episode.published_at,
         )
 
     @app.api_route("/feeds/{feed_token}.xml", methods=["GET", "HEAD"], response_class=Response)
@@ -1216,15 +1226,99 @@ def _build_xml_response(xml_content: str, request: Request) -> Response:
     return Response(content=xml_bytes, media_type="application/rss+xml", headers=headers)
 
 
+def _episode_etag(episode_id: str, size: int) -> str:
+    # Strong validator: episode_id is immutable and size pins the byte stream
+    # the client is currently playing. Quoted per RFC 7232.
+    return f'"{episode_id}-{size}"'
+
+
+def _http_date(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return format_datetime(value.astimezone(timezone.utc), usegmt=True)
+
+
+def _if_none_match_matches(header_value: str | None, etag: str) -> bool:
+    if not header_value:
+        return False
+    for token in header_value.split(","):
+        candidate = token.strip()
+        if candidate == "*" or candidate == etag:
+            return True
+    return False
+
+
+def _if_modified_since_satisfied(header_value: str | None, last_modified: datetime) -> bool:
+    if not header_value:
+        return False
+    try:
+        since = parsedate_to_datetime(header_value)
+    except (TypeError, ValueError):
+        return False
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    # Last-Modified granularity is one second; truncate to compare fairly.
+    last_modified_utc = last_modified.astimezone(timezone.utc).replace(microsecond=0)
+    return last_modified_utc <= since.astimezone(timezone.utc)
+
+
+def _if_range_matches(
+    header_value: str | None,
+    etag: str,
+    last_modified: datetime,
+) -> bool:
+    if not header_value:
+        return True
+    candidate = header_value.strip()
+    if candidate.startswith('"') or candidate.startswith('W/'):
+        return candidate == etag
+    try:
+        when = parsedate_to_datetime(candidate)
+    except (TypeError, ValueError):
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.astimezone(timezone.utc).replace(microsecond=0) == last_modified.astimezone(
+        timezone.utc
+    ).replace(microsecond=0)
+
+
 def _build_media_response(
     audio_bytes: bytes,
     media_type: str,
     request: Request,
     range_header: str | None,
+    if_range_header: str | None = None,
+    if_none_match_header: str | None = None,
+    if_modified_since_header: str | None = None,
+    etag: str | None = None,
+    last_modified: datetime | None = None,
 ) -> Response:
     total_length = len(audio_bytes)
-    headers = {"Accept-Ranges": "bytes"}
-    range_spec = _parse_range_header(range_header, total_length)
+    headers: dict[str, str] = {"Accept-Ranges": "bytes"}
+    if etag is not None:
+        headers["ETag"] = etag
+    if last_modified is not None:
+        headers["Last-Modified"] = _http_date(last_modified)
+    # Episode bytes are immutable once published — let clients cache aggressively
+    # so resumes after interruption don't have to re-download.
+    headers["Cache-Control"] = "private, max-age=31536000, immutable"
+
+    if etag is not None and _if_none_match_matches(if_none_match_header, etag):
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+    if (
+        last_modified is not None
+        and not if_none_match_header
+        and _if_modified_since_satisfied(if_modified_since_header, last_modified)
+    ):
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+
+    effective_range = range_header
+    if effective_range is not None and etag is not None and last_modified is not None:
+        if not _if_range_matches(if_range_header, etag, last_modified):
+            effective_range = None
+
+    range_spec = _parse_range_header(effective_range, total_length)
 
     if range_spec is None:
         headers["Content-Length"] = str(total_length)
