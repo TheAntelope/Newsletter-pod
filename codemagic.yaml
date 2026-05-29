@@ -55,6 +55,17 @@ workflows:
           xcodegen generate --spec project.yml
       - name: Set up provisioning profiles
         script: |
+          # The Codemagic `ios_signing.bundle_identifier` block only auto-
+          # fetches a profile for the main app (com.newsletterpod.app). The
+          # share extension's bundle id (com.newsletterpod.app.share) needs
+          # its own fetch, and we want --create so the App Groups capability
+          # (added to the bundle id in App Store Connect on 2026-05-29) is
+          # baked into a fresh profile rather than using a stale cached one
+          # without it. The integration's APP_STORE_CONNECT_* env vars
+          # authenticate this call automatically.
+          app-store-connect fetch-signing-files com.newsletterpod.app.share \
+            --type IOS_APP_STORE \
+            --create
           xcode-project use-profiles \
             --project "$CM_BUILD_DIR/$XCODE_PROJECT"
       - name: Increment build number
