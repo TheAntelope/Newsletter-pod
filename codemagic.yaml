@@ -129,41 +129,20 @@ workflows:
             app-store-connect bundle-ids capabilities $BID 2>&1 | head -80 || true
           done
 
-          # App Store Connect API doesn't expose App Groups, but fastlane
-          # has access via the legacy Apple Developer Portal API
-          # (spaceship). Recent fastlane versions can authenticate with
-          # the App Store Connect API key Codemagic provides — try it
-          # before falling back to the manual portal flow. Swallow errors
-          # so the build keeps going even if fastlane spaceship is
-          # incompatible with API-key auth for this operation.
-          if [ -n "$APP_STORE_CONNECT_PRIVATE_KEY" ]; then
-            KEY_PATH="${APP_STORE_CONNECT_PRIVATE_KEY#@file:}"
-            cat > /tmp/assign_app_group.rb <<RBEOF
-          require "spaceship"
-
-          Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
-            key_id: ENV["APP_STORE_CONNECT_KEY_IDENTIFIER"],
-            issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"],
-            filepath: "${KEY_PATH}"
-          )
-
-          group_id = "group.com.newsletterpod.shared"
-          ["com.newsletterpod.app", "com.newsletterpod.app.share"].each do |bid|
-            begin
-              app = Spaceship::ConnectAPI::BundleId.all.find { |b| b.identifier == bid }
-              raise "bundle id #{bid} not found" unless app
-              group = Spaceship::ConnectAPI::AppGroup.find(group_id)
-              raise "app group #{group_id} not found" unless group
-              app.associate_app_groups([group])
-              puts "Associated #{group_id} with #{bid}"
-            rescue => e
-              puts "WARN: could not associate #{group_id} with #{bid}: #{e.message}"
-            end
-          end
-          RBEOF
-            (cd /tmp && bundle exec ruby assign_app_group.rb 2>&1) || true
-            ruby /tmp/assign_app_group.rb 2>&1 || true
-          fi
+          # Assigning a specific App Group to a bundle id is the one
+          # part of code-signing we can't automate from CI:
+          # - codemagic-cli-tools `bundle-ids enable-capabilities` only
+          #   toggles the capability ON; no way to bind a group to it.
+          # - App Store Connect API has no /v1/appGroups endpoint at all
+          #   (returns 404).
+          # - fastlane spaceship's ConnectAPI also lacks AppGroup; the
+          #   legacy Portal::AppGroup would work but requires Apple ID +
+          #   2FA auth, which the API-key integration doesn't satisfy.
+          # The portal click is the only path: developer.apple.com →
+          # Identifiers → bundle id → App Groups row → Configure →
+          # tick group.com.newsletterpod.shared → Continue → Save (the
+          # Save at the top right of the bundle id page, not just the
+          # Continue button in the popup — that step is easy to miss).
 
           # Clear local provisioning-profile cache (where ios_signing put
           # the stale main app profile) so the fresh downloads aren't
