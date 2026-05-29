@@ -66,6 +66,34 @@ final class AppViewModel: ObservableObject {
             // same shared-keychain access group.
             self.sessionToken = storedToken
         }
+        // Receive any APNs token the system delivers (cold start after a
+        // previously granted permission, or just-in-time after the Substack
+        // pre-prompt). We register on every delivery so a token rotation
+        // (rare but possible) gets reflected on the backend.
+        PushAppDelegate.deviceTokenHandler = { [weak self] hex in
+            Task { @MainActor [weak self] in
+                self?.registerPushDeviceToken(hex)
+            }
+        }
+    }
+
+    @MainActor
+    private func registerPushDeviceToken(_ deviceToken: String) {
+        guard let token = sessionToken else { return }
+        Task {
+            do {
+                _ = try await apiClient.registerDeviceToken(
+                    token: token,
+                    deviceToken: deviceToken,
+                    environment: AppConfiguration.apnsEnvironment,
+                    bundleID: AppConfiguration.bundleIdentifier
+                )
+            } catch {
+                // Push is non-critical; the Phase A Sources surface still
+                // shows the code if registration fails.
+                NSLog("Device token registration failed: %@", error.localizedDescription)
+            }
+        }
     }
 
     private func applyUITestSeed() {

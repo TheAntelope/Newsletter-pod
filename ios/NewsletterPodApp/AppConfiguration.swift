@@ -23,4 +23,25 @@ enum AppConfiguration {
 
     static var termsURL: URL { baseURL.appendingPathComponent("legal/terms") }
     static var privacyURL: URL { baseURL.appendingPathComponent("legal/privacy") }
+
+    /// Bundle identifier shipped to the backend on device-token registration
+    /// so APNs `apns-topic` matches the build's signing identity.
+    static var bundleIdentifier: String {
+        Bundle.main.bundleIdentifier ?? "com.newsletterpod.app"
+    }
+
+    /// APNs environment for the current build. Matches `aps-environment`
+    /// in the entitlements file:
+    ///   - "production" for App Store / TestFlight builds
+    ///   - "sandbox" for development builds running from Xcode
+    /// We can't read the entitlements at runtime, so this mirrors the
+    /// release configuration. If you switch the entitlement to sandbox for
+    /// local debugging, flip this too or APNs will silently fail.
+    static var apnsEnvironment: String {
+        #if DEBUG
+        return "sandbox"
+        #else
+        return "production"
+        #endif
+    }
 }

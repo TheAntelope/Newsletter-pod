@@ -44,6 +44,7 @@ from .user_models import (
     ChurnRiskRecord,
     CostRecord,
     DeliveryScheduleRecord,
+    DeviceTokenRecord,
     FeedbackRecord,
     FeedTokenRecord,
     InboundEmailItem,
@@ -317,6 +318,25 @@ class ControlPlaneRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def save_device_token(self, record: DeviceTokenRecord) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_device_token(self, token_id: str) -> Optional[DeviceTokenRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_active_device_tokens(self, user_id: str) -> list[DeviceTokenRecord]:
+        """Return active (non-invalidated) APNs device tokens for `user_id`,
+        newest-first so the push sender uses the most recently seen device
+        before older ones."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_device_token(self, token_id: str) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
     def list_all_user_sources(self) -> list[UserSourceRecord]:
         """Return every UserSourceRecord across all users — used by the
         global hourly source-poll job to walk distinct (source_id, rss_url)
@@ -522,6 +542,7 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         self._swipes: dict[str, SwipeRecord] = {}
         self._swipe_decks: dict[str, SwipeDeckRecord] = {}
         self._substack_intents: dict[str, UserSubstackIntent] = {}
+        self._device_tokens: dict[str, DeviceTokenRecord] = {}
         self._source_polling_state: dict[str, SourcePollingStateRecord] = {}
         # Keyed by (user_id, dedupe_key) so pin/exclude flip is a single
         # write and we can do per-user listings cheaply.
@@ -815,6 +836,24 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
     def delete_substack_intent(self, intent_id: str) -> None:
         self._substack_intents.pop(intent_id, None)
 
+    def save_device_token(self, record: DeviceTokenRecord) -> None:
+        self._device_tokens[record.id] = record.model_copy()
+
+    def get_device_token(self, token_id: str) -> Optional[DeviceTokenRecord]:
+        return self._device_tokens.get(token_id)
+
+    def list_active_device_tokens(self, user_id: str) -> list[DeviceTokenRecord]:
+        records = [
+            record
+            for record in self._device_tokens.values()
+            if record.user_id == user_id and record.invalidated_at is None
+        ]
+        records.sort(key=lambda r: r.last_seen_at, reverse=True)
+        return records
+
+    def delete_device_token(self, token_id: str) -> None:
+        self._device_tokens.pop(token_id, None)
+
     def list_all_user_sources(self) -> list[UserSourceRecord]:
         results: list[UserSourceRecord] = []
         for records in self._sources.values():
@@ -954,6 +993,14 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         for key in override_keys:
             self._next_episode_overrides.pop(key, None)
 
+        # Wipe device tokens (no count returned) so a regenerated user_id
+        # doesn't keep pushing through to the old device.
+        device_keys = [
+            key for key, record in self._device_tokens.items() if record.user_id == user_id
+        ]
+        for key in device_keys:
+            self._device_tokens.pop(key, None)
+
         user = self._users.get(user_id)
         if user is not None:
             user.last_weekly_update_iso_week = None
@@ -1044,6 +1091,12 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         for key in override_keys:
             self._next_episode_overrides.pop(key, None)
 
+        device_keys = [
+            key for key, record in self._device_tokens.items() if record.user_id == user_id
+        ]
+        for key in device_keys:
+            self._device_tokens.pop(key, None)
+
         return counts
 
 
@@ -1067,6 +1120,7 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         self._swipes = self._db.collection(f"{collection_prefix}_swipes")
         self._swipe_decks = self._db.collection(f"{collection_prefix}_swipe_decks")
         self._substack_intents = self._db.collection(f"{collection_prefix}_user_substack_intents")
+        self._device_tokens = self._db.collection(f"{collection_prefix}_device_tokens")
         self._job_state_col = self._db.collection(f"{collection_prefix}_job_state")
         self._source_polling_state = self._db.collection(
             f"{collection_prefix}_source_polling_state"
@@ -1690,6 +1744,28 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
     def delete_substack_intent(self, intent_id: str) -> None:
         self._substack_intents.document(intent_id).delete()
 
+    def save_device_token(self, record: DeviceTokenRecord) -> None:
+        self._device_tokens.document(record.id).set(record.model_dump(mode="python"))
+
+    def get_device_token(self, token_id: str) -> Optional[DeviceTokenRecord]:
+        doc = self._device_tokens.document(token_id).get()
+        if not doc.exists:
+            return None
+        return DeviceTokenRecord.model_validate(doc.to_dict())
+
+    def list_active_device_tokens(self, user_id: str) -> list[DeviceTokenRecord]:
+        # Single equality where + app-side filter on invalidated_at avoids
+        # needing a composite index. Per-user device-token counts are tiny
+        # (a user has 1-3 devices) so this is fine.
+        docs = list(self._device_tokens.where("user_id", "==", user_id).stream())
+        records = [DeviceTokenRecord.model_validate(d.to_dict() or {}) for d in docs]
+        records = [r for r in records if r.invalidated_at is None]
+        records.sort(key=lambda r: r.last_seen_at, reverse=True)
+        return records
+
+    def delete_device_token(self, token_id: str) -> None:
+        self._device_tokens.document(token_id).delete()
+
     def reset_user_state(self, user_id: str) -> dict[str, int]:
         counts: dict[str, int] = {
             "user_sources": 0,
@@ -1719,6 +1795,11 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
             (self._cursors, "user_cursors"),
         ):
             counts[key] = self._batch_delete_where_user(collection, user_id)
+
+        # Device tokens are wiped on reset so a regenerated user_id doesn't
+        # keep pushing through to the old device until the user re-opens the
+        # app. Not counted in the returned summary — they're stateless.
+        self._batch_delete_where_user(self._device_tokens, user_id)
 
         # Wipe next-episode overrides so a re-onboarded user doesn't carry
         # forward stale pins/excludes against items in their old source set.
@@ -1778,6 +1859,9 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
             (self._substack_intents, "user_substack_intents"),
         ):
             counts[key] = self._batch_delete_where_user(collection, user_id)
+
+        # Device tokens are wiped on account delete (no count in the summary).
+        self._batch_delete_where_user(self._device_tokens, user_id)
 
         # Feed token: doc id is the token (random string), not user_id, so we
         # have to query by user_id first.

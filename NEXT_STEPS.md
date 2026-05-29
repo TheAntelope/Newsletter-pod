@@ -42,6 +42,29 @@
    - `com.newsletterpod.max.monthly`
    - `com.newsletterpod.max.annual`
 5. Decide whether to keep the placeholder app icon for TestFlight or replace it before external testing.
+6. **APNs / Push Notifications setup (one-time)** — required before Phase B push delivery works. See the runbook section below.
+
+## APNs setup runbook (one-time, before Phase B push lights up)
+
+These steps are gated on Apple Developer Portal access — they can only be done by an account holder on the team. Complete them in order before merging `feature/apns-push` to `main`.
+
+1. **Enable Push Notifications capability**
+   - developer.apple.com → Identifiers → `com.newsletterpod.app` → Capabilities → enable Push Notifications → Save.
+2. **Generate an APNs auth key**
+   - developer.apple.com → Keys → "+" → name "ClawCast APNs", check **Apple Push Notifications service (APNs)** → Continue → Register.
+   - Click **Download** to get `AuthKey_XXXXXXXXXX.p8`. **Do this NOW — Apple only lets you download once.**
+   - Note the **Key ID** (10 chars, visible next to the key name).
+   - Note the **Team ID** (developer.apple.com → Membership, 10 chars).
+3. **Upload to Google Secret Manager**
+   ```bash
+   gcloud secrets create apns-auth-key --data-file=AuthKey_XXXXXXXXXX.p8 --project=$PROJECT_ID
+   gcloud secrets create apns-key-id --replication-policy=automatic --project=$PROJECT_ID
+   echo -n "XXXXXXXXXX" | gcloud secrets versions add apns-key-id --data-file=- --project=$PROJECT_ID
+   ```
+4. **Fill in the Team ID in cloudbuild.yaml** — replace `REPLACE_WITH_TEAM_ID` with the 10-char value.
+5. **Codemagic provisioning profile refresh** — the entitlements file now carries `aps-environment=production`. Codemagic re-syncs profiles on each build via the App Store Connect API, so the next build should pick this up automatically. If signing fails, regenerate the provisioning profile manually in App Store Connect with Push Notifications enabled (see [[codemagic-multi-bundle-id-signing]]).
+6. **Merge + deploy** `feature/apns-push`.
+7. **Verify end-to-end** — Vince signs out and back in on his test device (so the iOS app re-asks for permission), triggers a Substack signup, expects a push to land within seconds of Substack sending the code email.
 
 ## Backend follow-up
 

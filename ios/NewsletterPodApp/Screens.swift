@@ -1399,6 +1399,8 @@ struct AddSubstackSheet: View {
     @State private var probeTask: Task<Void, Never>?
     @State private var copiedNotice: String?
     @State private var copiedNoticeTask: Task<Void, Never>?
+    @State private var isShowingPushPrePrompt = false
+    @State private var pendingPubURL: String?
 
     var body: some View {
         NavigationStack {
@@ -1515,6 +1517,18 @@ struct AddSubstackSheet: View {
                 }
             }
             .animation(.spring(duration: 0.3), value: copiedNotice)
+            .sheet(isPresented: $isShowingPushPrePrompt) {
+                PushPrePromptSheet(
+                    onAllow: {
+                        Task { await continueAfterPushDecision(allow: true) }
+                    },
+                    onSkip: {
+                        Task { await continueAfterPushDecision(allow: false) }
+                    }
+                )
+                .presentationDetents([.medium])
+                .interactiveDismissDisabled(true)
+            }
         }
         .onDisappear {
             probeTask?.cancel()
@@ -1599,6 +1613,20 @@ struct AddSubstackSheet: View {
         // Substack's subscribe form in Safari.
         UIPasteboard.general.string = intent.aliasEmail
         showCopiedNotice("ClawCast email copied")
+        // Just-in-time push permission pre-prompt: only fires when the OS
+        // status is still .notDetermined. If the user already accepted /
+        // denied previously, we skip the pre-prompt and proceed.
+        let status = await PushAuthorization.currentStatus()
+        if status == .notDetermined {
+            pendingPubURL = preview.pubURL
+            isShowingPushPrePrompt = true
+            return
+        }
+        await openSubstackAndFinish(intent: intent)
+    }
+
+    @MainActor
+    private func openSubstackAndFinish(intent: SubstackIntentDTO) async {
         // Brief pause so the toast animates in before Safari takes over the
         // screen — otherwise the user only sees it on their way back.
         try? await Task.sleep(nanoseconds: 350_000_000)
@@ -1606,6 +1634,25 @@ struct AddSubstackSheet: View {
             openURL(url)
         }
         hasContinued = true
+    }
+
+    @MainActor
+    private func continueAfterPushDecision(allow: Bool) async {
+        isShowingPushPrePrompt = false
+        if allow {
+            // Fire the iOS system permission prompt synchronously inline.
+            // If the user grants, the device token comes back via the
+            // PushAppDelegate handler → AppViewModel registers it. If they
+            // deny, the Sources-screen safety net still shows the code.
+            _ = await PushAuthorization.requestAuthorizationAndRegister()
+        }
+        guard let pubURL = pendingPubURL,
+              let intent = viewModel.substackIntents.first(where: { $0.pubURL == pubURL }) else {
+            pendingPubURL = nil
+            return
+        }
+        pendingPubURL = nil
+        await openSubstackAndFinish(intent: intent)
     }
 
     private func showCopiedNotice(_ message: String) {
@@ -1616,6 +1663,55 @@ struct AddSubstackSheet: View {
             if Task.isCancelled { return }
             copiedNotice = nil
         }
+    }
+}
+
+private struct PushPrePromptSheet: View {
+    let onAllow: () -> Void
+    let onSkip: () -> Void
+
+    var body: some View {
+        VStack(spacing: Theme.Spacing.l) {
+            Spacer(minLength: 0)
+            Image(systemName: "bell.badge.fill")
+                .font(.system(size: 44, weight: .medium))
+                .foregroundStyle(Theme.Palette.amberDeep)
+                .padding(.top, Theme.Spacing.l)
+            VStack(spacing: Theme.Spacing.s) {
+                Text("Get the Substack code")
+                    .font(Theme.Typography.title)
+                    .multilineTextAlignment(.center)
+                Text("Substack now sends a 6-digit code instead of a confirm link. We'll push the code to you so you can paste it without losing your place.")
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, Theme.Spacing.l)
+            }
+            Spacer(minLength: 0)
+            VStack(spacing: Theme.Spacing.s) {
+                Button(action: onAllow) {
+                    HStack {
+                        Spacer()
+                        Text("Allow notifications")
+                            .font(Theme.Typography.bodyStrong)
+                        Spacer()
+                    }
+                    .frame(minHeight: 48)
+                }
+                .buttonStyle(.amberFilled)
+
+                Button(action: onSkip) {
+                    Text("Maybe later")
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 6)
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.l)
+            .padding(.bottom, Theme.Spacing.l)
+        }
+        .frame(maxWidth: .infinity)
+        .background(.regularMaterial)
     }
 }
 

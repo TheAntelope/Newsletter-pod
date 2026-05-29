@@ -310,6 +310,27 @@ final class APIClient {
         )
     }
 
+    /// Registers (or refreshes) an APNs device token on the user's account.
+    /// Backend dedupes on (user_id, token) so calling this on every cold
+    /// start is safe — it just bumps `last_seen_at`.
+    func registerDeviceToken(
+        token: String,
+        deviceToken: String,
+        environment: String,
+        bundleID: String
+    ) async throws -> DeviceTokenAck {
+        try await request(
+            path: "/v1/me/device-tokens",
+            method: "POST",
+            body: RegisterDeviceTokenBody(
+                token: deviceToken,
+                environment: environment,
+                bundleID: bundleID
+            ),
+            token: token
+        )
+    }
+
     func deleteAccount(token: String) async throws -> AccountDeletionAck {
         try await request(
             path: "/v1/me",
@@ -552,6 +573,28 @@ private struct CreateSubstackIntentBody: Encodable {
 
     private enum CodingKeys: String, CodingKey {
         case pubURL = "pub_url"
+    }
+}
+
+private struct RegisterDeviceTokenBody: Encodable {
+    let token: String
+    let environment: String
+    let bundleID: String
+
+    private enum CodingKeys: String, CodingKey {
+        case token
+        case environment
+        case bundleID = "bundle_id"
+    }
+}
+
+struct DeviceTokenAck: Decodable {
+    let tokenID: String
+    let status: String
+
+    private enum CodingKeys: String, CodingKey {
+        case tokenID = "token_id"
+        case status
     }
 }
 

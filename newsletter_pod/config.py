@@ -314,6 +314,20 @@ class Settings(BaseSettings):
     mailgun_webhook_signing_key: Optional[str] = Field(default=None, alias="MAILGUN_WEBHOOK_SIGNING_KEY")
     mailgun_api_key: Optional[str] = Field(default=None, alias="MAILGUN_API_KEY")
 
+    # APNs (Apple Push Notifications) — token-based authentication using a
+    # .p8 ES256 key generated in Apple Developer Portal. When apns_enabled
+    # is False (or auth_key is unset), the push sender no-ops with a single
+    # info-log per call so verification-code emails still land but no push
+    # is attempted. environment must match the build's aps-environment
+    # entitlement: "production" for App Store / TestFlight builds,
+    # "sandbox" for development builds running from Xcode.
+    apns_enabled: bool = Field(default=False, alias="APNS_ENABLED")
+    apns_team_id: Optional[str] = Field(default=None, alias="APNS_TEAM_ID")
+    apns_key_id: Optional[str] = Field(default=None, alias="APNS_KEY_ID")
+    apns_auth_key: Optional[str] = Field(default=None, alias="APNS_AUTH_KEY")
+    apns_bundle_id: str = Field(default="com.newsletterpod.app", alias="APNS_BUNDLE_ID")
+    apns_environment: str = Field(default="production", alias="APNS_ENVIRONMENT")
+
     # Welcome episode: pre-recorded MP3 seeded into every new user's feed at signup.
     # Set object_name + size + duration to enable; leave object_name empty to disable.
     welcome_episode_object_name: Optional[str] = Field(default=None, alias="WELCOME_EPISODE_OBJECT_NAME")
@@ -335,6 +349,15 @@ class Settings(BaseSettings):
         )
         settings.mailgun_api_key = _normalize_secret_value(
             _resolve_secret_reference(settings.mailgun_api_key)
+        )
+        # APNs .p8 is multiline PEM; _normalize_secret_value strips outer
+        # whitespace but preserves internal newlines, which is what PyJWT
+        # needs when loading the ES256 key.
+        settings.apns_auth_key = _normalize_secret_value(
+            _resolve_secret_reference(settings.apns_auth_key)
+        )
+        settings.apns_key_id = _normalize_secret_value(
+            _resolve_secret_reference(settings.apns_key_id)
         )
         settings.session_signing_secret = _normalize_secret_value(
             _resolve_secret_reference(settings.session_signing_secret)

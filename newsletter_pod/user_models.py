@@ -198,6 +198,29 @@ class UserSubstackIntent(BaseModel):
     pending_verification_expires_at: Optional[datetime] = None
 
 
+class DeviceTokenRecord(BaseModel):
+    """An APNs device token registered to a user, used for push notifications.
+
+    `token` is the hex-encoded APNs device token (~64 chars). `id` is keyed
+    on (user_id + token) so re-registering the same device is idempotent.
+    `environment` distinguishes sandbox vs production builds; the push
+    sender targets the matching APNs host. `last_seen_at` is bumped on every
+    register call so we can age out stale tokens after long inactivity.
+    """
+
+    id: str
+    user_id: str
+    token: str
+    platform: str = "ios"
+    environment: str = "production"  # "production" | "sandbox"
+    bundle_id: str
+    created_at: datetime
+    last_seen_at: datetime
+    # When APNs returns 410 Gone for this token, we mark it inactive instead
+    # of deleting outright so we keep a paper trail for debugging.
+    invalidated_at: Optional[datetime] = None
+
+
 class CostRecord(BaseModel):
     run_id: str
     user_id: str

@@ -39,13 +39,24 @@ steps:
       # --update-env-vars only touches the listed keys; existing env vars and
       # secret bindings on the service are preserved (unlike --set-env-vars,
       # which would re-create the May 2026 secret-binding regression).
-      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true,CANDIDATE_QUEUE_ENABLED=true
+      # APNS_TEAM_ID / APNS_BUNDLE_ID / APNS_ENVIRONMENT are non-secret. The
+      # Team ID is the 10-char Apple Developer Team Identifier (find it at
+      # developer.apple.com → Membership). APNS_ENABLED gates the whole
+      # push path so this revision can ship before the Portal+secret setup
+      # lands without ELOG spam.
+      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true,CANDIDATE_QUEUE_ENABLED=true,APNS_ENABLED=true,APNS_TEAM_ID=REPLACE_WITH_TEAM_ID,APNS_BUNDLE_ID=com.newsletterpod.app,APNS_ENVIRONMENT=production
       # Pin every critical secret on every deploy so that if a future config
       # edit strips a binding (as happened on revision 00045 on 2026-05-01,
       # and again with MAILGUN_WEBHOOK_SIGNING_KEY in 2026-05), the next deploy
       # self-heals it. --update-secrets only touches the listed keys; other
       # bindings on the service are preserved.
-      - --update-secrets=PODCAST_API_KEY=openai-api-key:latest,ELEVENLABS_API_KEY=elevenlabs-api-key:latest,JOB_TRIGGER_TOKEN=newsletter-pod-job-trigger-token:latest,FEED_TOKEN=newsletter-pod-feed-token:latest,SMTP_PASSWORD=smtp-password:latest,MAILGUN_WEBHOOK_SIGNING_KEY=mailgun-webhook-signing-key:latest
+      #
+      # APNs needs two secrets:
+      #   apns-auth-key  → contents of the .p8 file downloaded from Apple
+      #   apns-key-id    → the 10-char Key ID shown next to the key in Portal
+      # Create both before the first deploy that sets APNS_ENABLED=true;
+      # otherwise the push sender no-ops with an info-log (safe but silent).
+      - --update-secrets=PODCAST_API_KEY=openai-api-key:latest,ELEVENLABS_API_KEY=elevenlabs-api-key:latest,JOB_TRIGGER_TOKEN=newsletter-pod-job-trigger-token:latest,FEED_TOKEN=newsletter-pod-feed-token:latest,SMTP_PASSWORD=smtp-password:latest,MAILGUN_WEBHOOK_SIGNING_KEY=mailgun-webhook-signing-key:latest,APNS_AUTH_KEY=apns-auth-key:latest,APNS_KEY_ID=apns-key-id:latest
       - --quiet
 
 images:
