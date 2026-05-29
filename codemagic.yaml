@@ -122,42 +122,29 @@ workflows:
           fi
           echo "Bundle ids: main=$MAIN_DB_ID ext=$EXT_DB_ID"
 
-          # Delete any existing IOS_APP_STORE profiles for either bundle id.
-          STALE_IDS=$(app-store-connect profiles list --json \
-            | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          ids = []
-          for p in data:
-              rel = p.get('relationships', {}).get('bundleId', {}).get('data', {})
-              attrs = p.get('attributes', {})
-              if rel.get('id') in ('$MAIN_DB_ID', '$EXT_DB_ID') and attrs.get('profileType') == 'IOS_APP_STORE':
-                  ids.append(p['id'])
-          print(' '.join(ids))
-          ")
-          for pid in $STALE_IDS; do
-            echo "Deleting stale profile $pid"
-            app-store-connect profiles delete $pid || true
-          done
-
           # Clear local provisioning-profile cache (where ios_signing put
           # the stale main app profile) so the fresh downloads aren't
           # shadowed by it.
           rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/"*.mobileprovision
 
-          # Create fresh profiles for both bundle ids and save the
-          # downloaded .mobileprovision into the standard location.
+          # Each build creates fresh profiles with a unique timestamped
+          # name so we don't collide with profiles from previous builds.
+          # Old profiles linger in App Store Connect but don't interfere
+          # (xcodebuild matches by UUID-of-current-profile, not by name).
+          # If/when they accumulate enough to clutter the portal, prune
+          # them manually — they're harmless otherwise.
+          TS=$(date +%Y%m%d_%H%M%S)
           app-store-connect profiles create \
             $MAIN_DB_ID \
             --certificate-ids $CERT_ID \
             --type IOS_APP_STORE \
-            --name "ClawCast Main Distribution $(date +%Y%m%d)" \
+            --name "ClawCast Main App $TS" \
             --save
           app-store-connect profiles create \
             $EXT_DB_ID \
             --certificate-ids $CERT_ID \
             --type IOS_APP_STORE \
-            --name "ClawCast Share Extension Distribution $(date +%Y%m%d)" \
+            --name "ClawCast Share Extension $TS" \
             --save
 
           xcode-project use-profiles \
