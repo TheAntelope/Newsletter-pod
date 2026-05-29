@@ -86,16 +86,41 @@ workflows:
           echo "Using cert $CERT_ID"
 
           # Look up bundle id resource IDs (separate from identifier strings).
+          # CRITICAL: --bundle-id-identifier does a PREFIX match, so a query for
+          # "com.newsletterpod.app" returns BOTH com.newsletterpod.app AND
+          # com.newsletterpod.app.share. Filter in Python with an exact match
+          # on attributes.identifier to avoid pointing both profiles at the
+          # share extension's bundle id (which was the bug behind a build
+          # that failed with "main app requires App Groups + Sign In with
+          # Apple" — the "main" profile was actually pointing at the share
+          # extension bundle id and didn't have those capabilities).
           MAIN_DB_ID=$(app-store-connect bundle-ids list \
             --bundle-id-identifier $MAIN_BUNDLE --json \
-            | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0]['id'] if data else '')")
+            | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          for b in data:
+              if b.get('attributes', {}).get('identifier') == '$MAIN_BUNDLE':
+                  print(b['id']); break
+          ")
           EXT_DB_ID=$(app-store-connect bundle-ids list \
             --bundle-id-identifier $EXT_BUNDLE --json \
-            | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0]['id'] if data else '')")
+            | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          for b in data:
+              if b.get('attributes', {}).get('identifier') == '$EXT_BUNDLE':
+                  print(b['id']); break
+          ")
           if [ -z "$MAIN_DB_ID" ] || [ -z "$EXT_DB_ID" ]; then
             echo "ERROR: bundle id lookup failed (main=$MAIN_DB_ID ext=$EXT_DB_ID)"
             exit 1
           fi
+          if [ "$MAIN_DB_ID" = "$EXT_DB_ID" ]; then
+            echo "ERROR: main and ext bundle ids resolved to same record ($MAIN_DB_ID) — exact-match filter is broken"
+            exit 1
+          fi
+          echo "Bundle ids: main=$MAIN_DB_ID ext=$EXT_DB_ID"
 
           # Delete any existing IOS_APP_STORE profiles for either bundle id.
           STALE_IDS=$(app-store-connect profiles list --json \
