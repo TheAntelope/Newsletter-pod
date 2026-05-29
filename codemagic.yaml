@@ -53,85 +53,87 @@ workflows:
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
           cd "$CM_BUILD_DIR/ios"
           xcodegen generate --spec project.yml
-      - name: Download share-extension provisioning profile
+      - name: Regenerate provisioning profiles for both bundle ids
         script: |
-          # ios_signing handled the MAIN app's cert + profile. We still
-          # need a profile for the Share extension's bundle id. Going
-          # through `fetch-signing-files` fails ("Cannot save Signing
-          # Certificates without certificate private key") because that
-          # command tries to save the cert as a local file, and the
-          # codemagic-managed integration only exposes the cert through
-          # the keychain. So we hit the App Store Connect API directly to
-          # find or create the profile, then save just the .mobileprovision
-          # blob next to the main app's profile so `use-profiles` finds
-          # both.
+          # The existing "The Antelope - Newsletter Pod" profile that
+          # ios_signing fetched predates the App Groups capability
+          # assignment, so it can't satisfy the share-extension build's
+          # entitlements. Rather than trying to patch it, we regenerate
+          # BOTH profiles fresh against the newest distribution cert,
+          # nuking the local cache + any stale server-side profiles for
+          # these two bundle ids. Idempotent: every build provisions
+          # clean.
           set -e
 
+          MAIN_BUNDLE=com.newsletterpod.app
           EXT_BUNDLE=com.newsletterpod.app.share
 
-          # Find a distribution-flavored cert. App Store Connect cert types
-          # vary by app age — the modern unified "Apple Distribution" cert
-          # is type DISTRIBUTION; legacy iOS-only certs are IOS_DISTRIBUTION.
-          # ios_signing already picked one for the main app, so any
-          # DISTRIBUTION-flavored cert in the list is fair game (the same
-          # cert signs both the app and its extensions).
+          # Pick the newest distribution cert (sorted by expirationDate
+          # desc, so revoked/expired certs lose to the active one).
           CERT_ID=$(app-store-connect certificates list --json \
             | python3 -c "
           import sys, json
           data = json.load(sys.stdin)
-          for c in data:
-              t = (c.get('attributes', {}).get('certificateType') or '').upper()
-              if 'DISTRIBUTION' in t:
-                  print(c['id'])
-                  break
+          certs = [c for c in data
+                   if 'DISTRIBUTION' in (c.get('attributes', {}).get('certificateType') or '').upper()]
+          certs.sort(key=lambda c: c.get('attributes', {}).get('expirationDate', ''), reverse=True)
+          print(certs[0]['id'] if certs else '')
           ")
           if [ -z "$CERT_ID" ]; then
             echo "ERROR: no distribution certificate found in App Store Connect"
-            app-store-connect certificates list --json \
-              | python3 -c "import sys,json; [print(c['attributes'].get('certificateType')) for c in json.load(sys.stdin)]"
             exit 1
           fi
           echo "Using cert $CERT_ID"
 
-          # Find the bundle id record (App Store Connect uses an opaque
-          # internal id, separate from the human-readable identifier).
-          BUNDLE_DB_ID=$(app-store-connect bundle-ids list \
+          # Look up bundle id resource IDs (separate from identifier strings).
+          MAIN_DB_ID=$(app-store-connect bundle-ids list \
+            --bundle-id-identifier $MAIN_BUNDLE --json \
+            | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0]['id'] if data else '')")
+          EXT_DB_ID=$(app-store-connect bundle-ids list \
             --bundle-id-identifier $EXT_BUNDLE --json \
             | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0]['id'] if data else '')")
-          if [ -z "$BUNDLE_DB_ID" ]; then
-            echo "ERROR: bundle id $EXT_BUNDLE not registered in App Store Connect"
+          if [ -z "$MAIN_DB_ID" ] || [ -z "$EXT_DB_ID" ]; then
+            echo "ERROR: bundle id lookup failed (main=$MAIN_DB_ID ext=$EXT_DB_ID)"
             exit 1
           fi
 
-          # See if a profile already exists for this bundle. Filter on the
-          # Python side: codemagic-cli-tools' `profiles list` doesn't accept
-          # a --profile-type flag in this version (the CLI varies across
-          # versions), so we list all and pick the IOS_APP_STORE one for
-          # our bundle id.
-          PROFILE_ID=$(app-store-connect profiles list --json \
+          # Delete any existing IOS_APP_STORE profiles for either bundle id.
+          STALE_IDS=$(app-store-connect profiles list --json \
             | python3 -c "
           import sys, json
           data = json.load(sys.stdin)
+          ids = []
           for p in data:
               rel = p.get('relationships', {}).get('bundleId', {}).get('data', {})
               attrs = p.get('attributes', {})
-              if rel.get('id') == '$BUNDLE_DB_ID' and attrs.get('profileType') == 'IOS_APP_STORE':
-                  print(p['id'])
-                  break
+              if rel.get('id') in ('$MAIN_DB_ID', '$EXT_DB_ID') and attrs.get('profileType') == 'IOS_APP_STORE':
+                  ids.append(p['id'])
+          print(' '.join(ids))
           ")
+          for pid in $STALE_IDS; do
+            echo "Deleting stale profile $pid"
+            app-store-connect profiles delete $pid || true
+          done
 
-          if [ -z "$PROFILE_ID" ]; then
-            echo "No profile for $EXT_BUNDLE — creating one"
-            app-store-connect profiles create \
-              $BUNDLE_DB_ID \
-              --certificate-ids $CERT_ID \
-              --type IOS_APP_STORE \
-              --name "ClawCast Share Extension App Store" \
-              --save
-          else
-            echo "Profile $PROFILE_ID exists for $EXT_BUNDLE — downloading"
-            app-store-connect profiles get $PROFILE_ID --save
-          fi
+          # Clear local provisioning-profile cache (where ios_signing put
+          # the stale main app profile) so the fresh downloads aren't
+          # shadowed by it.
+          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/"*.mobileprovision
+
+          # Create fresh profiles for both bundle ids and save the
+          # downloaded .mobileprovision into the standard location.
+          app-store-connect profiles create \
+            $MAIN_DB_ID \
+            --certificate-ids $CERT_ID \
+            --type IOS_APP_STORE \
+            --name "ClawCast Main Distribution $(date +%Y%m%d)" \
+            --save
+          app-store-connect profiles create \
+            $EXT_DB_ID \
+            --certificate-ids $CERT_ID \
+            --type IOS_APP_STORE \
+            --name "ClawCast Share Extension Distribution $(date +%Y%m%d)" \
+            --save
 
           xcode-project use-profiles \
             --project "$CM_BUILD_DIR/$XCODE_PROJECT"
