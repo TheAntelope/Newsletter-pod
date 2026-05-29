@@ -123,7 +123,9 @@ workflows:
           if [ -z "$PROFILE_ID" ]; then
             echo "No profile for $EXT_BUNDLE — creating one"
             app-store-connect profiles create \
-              $BUNDLE_DB_ID $CERT_ID IOS_APP_STORE \
+              $BUNDLE_DB_ID \
+              --certificate-ids $CERT_ID \
+              --type IOS_APP_STORE \
               --name "ClawCast Share Extension App Store" \
               --save
           else
