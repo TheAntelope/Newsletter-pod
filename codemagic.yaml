@@ -103,17 +103,19 @@ workflows:
             exit 1
           fi
 
-          # See if an IOS_APP_STORE profile already exists for this bundle.
-          # Codemagic CLI returns relationships.bundleId.data.id matching
-          # the bundle-ids-list output.
-          PROFILE_ID=$(app-store-connect profiles list \
-            --profile-type IOS_APP_STORE --json \
+          # See if a profile already exists for this bundle. Filter on the
+          # Python side: codemagic-cli-tools' `profiles list` doesn't accept
+          # a --profile-type flag in this version (the CLI varies across
+          # versions), so we list all and pick the IOS_APP_STORE one for
+          # our bundle id.
+          PROFILE_ID=$(app-store-connect profiles list --json \
             | python3 -c "
           import sys, json
           data = json.load(sys.stdin)
           for p in data:
               rel = p.get('relationships', {}).get('bundleId', {}).get('data', {})
-              if rel.get('id') == '$BUNDLE_DB_ID':
+              attrs = p.get('attributes', {})
+              if rel.get('id') == '$BUNDLE_DB_ID' and attrs.get('profileType') == 'IOS_APP_STORE':
                   print(p['id'])
                   break
           ")
