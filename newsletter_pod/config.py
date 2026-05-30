@@ -335,6 +335,23 @@ class Settings(BaseSettings):
     welcome_episode_duration_seconds: int = Field(default=0, alias="WELCOME_EPISODE_DURATION_SECONDS")
     welcome_episode_version: str = Field(default="v1", alias="WELCOME_EPISODE_VERSION")
 
+    # X (Twitter) API — OAuth 1.0a user-context credentials for the
+    # broadcast-loop poster. All four are required to publish; any one
+    # missing disables the X client (publish endpoints return 503).
+    x_api_key: Optional[str] = Field(default=None, alias="X_API_KEY")
+    x_api_secret: Optional[str] = Field(default=None, alias="X_API_SECRET")
+    x_access_token: Optional[str] = Field(default=None, alias="X_ACCESS_TOKEN")
+    x_access_token_secret: Optional[str] = Field(default=None, alias="X_ACCESS_TOKEN_SECRET")
+
+    # Phase 2 broadcast-loop LLM model. Used by both the topic picker
+    # (proposes tomorrow's topic from yesterday's feedback summary +
+    # seed topics) and the feedback summarizer (condenses pasted X
+    # replies into a 1-3 sentence brief). One model serves both because
+    # the tasks share shape — small chat completion with a JSON
+    # response format. Falls back to round-robin / raw replies when no
+    # OpenAI key is configured.
+    broadcast_llm_model: str = Field(default="gpt-4o-mini", alias="BROADCAST_LLM_MODEL")
+
     @classmethod
     def from_env(cls) -> "Settings":
         settings = cls()
@@ -365,6 +382,12 @@ class Settings(BaseSettings):
         settings.openai_embedding_api_key = _normalize_secret_value(
             _resolve_secret_reference(settings.openai_embedding_api_key)
         ) or settings.podcast_api_key
+        settings.x_api_key = _normalize_secret_value(_resolve_secret_reference(settings.x_api_key))
+        settings.x_api_secret = _normalize_secret_value(_resolve_secret_reference(settings.x_api_secret))
+        settings.x_access_token = _normalize_secret_value(_resolve_secret_reference(settings.x_access_token))
+        settings.x_access_token_secret = _normalize_secret_value(
+            _resolve_secret_reference(settings.x_access_token_secret)
+        )
         settings.google_cloud_project = settings.google_cloud_project or os.getenv("GCP_PROJECT")
         return settings
 

@@ -26,9 +26,26 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .auth import AppleIdentityVerifier, AuthError, SessionManager
+from .broadcast.feedback import OpenAIFeedbackSummarizer
+from .broadcast.models import BroadcastEpisodeRecord, BroadcastLoopRecord
 from .broadcast.prompting import BroadcastBrief
+from .broadcast.publisher import BroadcastPublisher, DEFAULT_FEEDBACK_PROMPT
+from .broadcast.repository import (
+    BroadcastRepository,
+    EPISODE_ID_RE,
+    FirestoreBroadcastRepository,
+    InMemoryBroadcastRepository,
+    validate_loop_id,
+)
+from .broadcast.runner import (
+    LoopInactive,
+    LoopNotFound,
+    ScheduledBroadcastRunner,
+)
 from .broadcast.service import BroadcastService, BroadcastSettings
+from .broadcast.topic_picker import BroadcastTopicPicker, OpenAITopicProposer
 from .broadcast.video import FfmpegFailed, FfmpegUnavailable
+from .broadcast.x_client import XClient, XClientUnavailable, XPostFailed
 from .config import Settings, load_voices
 from .admin_metrics import (
     AdminMetricsService,
@@ -188,6 +205,45 @@ class BroadcastGenerateOnceRequest(BaseModel):
     desired_minutes: int = 5
 
 
+class BroadcastPublishRequest(BaseModel):
+    episode_id: str
+    tweet_text: str
+    # Set to empty string to suppress the follow-up feedback prompt reply.
+    # Omit to use the bundled default copy.
+    feedback_prompt_text: Optional[str] = None
+
+
+class BroadcastGenerateAndPublishRequest(BaseModel):
+    topic: str
+    tweet_text: str
+    title: Optional[str] = None
+    audience_hint: Optional[str] = None
+    prior_feedback_summary: Optional[str] = None
+    desired_minutes: int = 5
+    feedback_prompt_text: Optional[str] = None
+
+
+class BroadcastLoopUpsertRequest(BaseModel):
+    loop_id: str
+    region: str
+    timezone: str
+    audience_persona: str
+    post_local_time: str = "08:00"
+    seed_topics: list[str] = []
+    active: bool = True
+    feedback_prompt_text: Optional[str] = None
+
+
+class BroadcastScheduledRunRequest(BaseModel):
+    loop_id: str
+    tweet_text_override: Optional[str] = None
+    feedback_prompt_override: Optional[str] = None
+
+
+class BroadcastPasteFeedbackRequest(BaseModel):
+    feedback_text: str
+
+
 @dataclass
 class ServiceContainer:
     settings: Settings
@@ -202,6 +258,13 @@ class ServiceContainer:
     # path (via control_plane) and the broadcast loop, so we configure it
     # once and pass the same instance to both.
     podcast_client: PodcastApiClient | None = None
+    # X (Twitter) client for the broadcast-loop poster. Always non-None
+    # once the container is built; calling .post_*() with missing creds
+    # raises XClientUnavailable, surfaced as 503 by the endpoint.
+    x_client: XClient | None = None
+    # Phase 2 broadcast-loop persistence. In-memory in dev, Firestore in
+    # prod — paralleling AudioStorage.
+    broadcast_repository: BroadcastRepository | None = None
 
 
 def create_app(container: ServiceContainer | None = None) -> FastAPI:
@@ -404,6 +467,396 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             "video_url": result.video_url,
             "video_size_bytes": result.video_size_bytes,
             "duration_seconds": result.duration_seconds,
+        }
+
+    @app.post("/jobs/broadcast/publish")
+    def broadcast_publish(
+        request_payload: BroadcastPublishRequest,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Post a previously-generated broadcast episode to X. Reads the
+        MP4 from `broadcast/<episode_id>.mp4` in storage and posts it as
+        a tweet, then attaches a feedback-prompt reply (suppress by
+        sending `feedback_prompt_text: ""`)."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        if container.x_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="X client not initialized",
+            )
+        episode_id = (request_payload.episode_id or "").strip().lower()
+        if not _BROADCAST_EPISODE_ID_RE.fullmatch(episode_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="episode_id must be 16 hex characters",
+            )
+        tweet_text = (request_payload.tweet_text or "").strip()
+        if not tweet_text:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="tweet_text is required",
+            )
+        feedback_prompt = _resolve_feedback_prompt(request_payload.feedback_prompt_text)
+
+        publisher = BroadcastPublisher(storage=container.storage, x_client=container.x_client)
+        try:
+            post = publisher.publish(
+                episode_id=episode_id,
+                tweet_text=tweet_text,
+                feedback_prompt_text=feedback_prompt,
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No broadcast video found for episode_id={episode_id}",
+            )
+        except XClientUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            )
+        except XPostFailed as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+            )
+
+        return {
+            "episode_id": episode_id,
+            "episode_tweet_id": post.episode_tweet_id,
+            "episode_tweet_url": post.episode_tweet_url,
+            "feedback_prompt_tweet_id": post.feedback_prompt_tweet_id,
+            "feedback_prompt_tweet_url": post.feedback_prompt_tweet_url,
+        }
+
+    @app.post("/jobs/broadcast/generate-and-publish")
+    def broadcast_generate_and_publish(
+        request_payload: BroadcastGenerateAndPublishRequest,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Phase 1 happy path: generate an episode from a topic brief
+        and immediately post it to X with the supplied tweet text.
+        Equivalent to /jobs/broadcast/generate-once followed by
+        /jobs/broadcast/publish; the only state shared between the two
+        steps is the GCS object the generate step writes."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        if container.podcast_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Podcast client not initialized",
+            )
+        if container.x_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="X client not initialized",
+            )
+        topic = (request_payload.topic or "").strip()
+        if not topic:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="topic is required",
+            )
+        tweet_text = (request_payload.tweet_text or "").strip()
+        if not tweet_text:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="tweet_text is required",
+            )
+        feedback_prompt = _resolve_feedback_prompt(request_payload.feedback_prompt_text)
+
+        broadcast_settings = BroadcastSettings(
+            app_base_url=container.settings.app_base_url,
+            primary_voice_id=container.settings.elevenlabs_voice_primary_id,
+            secondary_voice_id=container.settings.elevenlabs_voice_secondary_id,
+            primary_host_name=container.settings.podcast_host_primary_name,
+            secondary_host_name=container.settings.podcast_host_secondary_name,
+            cover_image_path=static_dir / "cover.png",
+        )
+        service = BroadcastService(
+            settings=broadcast_settings,
+            storage=container.storage,
+            podcast_client=container.podcast_client,
+        )
+        publisher = BroadcastPublisher(storage=container.storage, x_client=container.x_client)
+        brief = BroadcastBrief(
+            topic=topic,
+            audience_hint=(request_payload.audience_hint or None),
+            prior_feedback_summary=(request_payload.prior_feedback_summary or None),
+            desired_minutes=request_payload.desired_minutes,
+        )
+        title = (request_payload.title or "").strip() or f"ClawCast Broadcast: {topic[:60]}"
+        try:
+            generated = service.generate_once(
+                brief=brief,
+                title=title,
+                ux=container.settings.podcast_ux_config(),
+            )
+        except PodcastApiUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            )
+        except FfmpegUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            )
+        except FfmpegFailed as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+            )
+
+        try:
+            post = publisher.publish(
+                episode_id=generated.episode_id,
+                tweet_text=tweet_text,
+                feedback_prompt_text=feedback_prompt,
+            )
+        except XClientUnavailable as exc:
+            # Episode is already in GCS; surface it in the error so the
+            # operator can hit /jobs/broadcast/publish manually instead
+            # of losing the generated artifact.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error": str(exc),
+                    "episode_id": generated.episode_id,
+                    "video_url": generated.video_url,
+                },
+            )
+        except XPostFailed as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "error": str(exc),
+                    "episode_id": generated.episode_id,
+                    "video_url": generated.video_url,
+                },
+            )
+
+        return {
+            "episode_id": generated.episode_id,
+            "title": generated.title,
+            "show_notes": generated.show_notes,
+            "video_url": generated.video_url,
+            "audio_url": generated.audio_url,
+            "episode_tweet_id": post.episode_tweet_id,
+            "episode_tweet_url": post.episode_tweet_url,
+            "feedback_prompt_tweet_id": post.feedback_prompt_tweet_id,
+            "feedback_prompt_tweet_url": post.feedback_prompt_tweet_url,
+        }
+
+    @app.post("/jobs/broadcast/loops")
+    def broadcast_loops_upsert(
+        request_payload: BroadcastLoopUpsertRequest,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Create or update one loop. Idempotent on loop_id — same id
+        overwrites the existing row, so this is also the edit endpoint."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.broadcast_repository is not None
+        try:
+            loop_id = validate_loop_id(request_payload.loop_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
+        existing = container.broadcast_repository.get_loop(loop_id)
+        now = utc_now()
+        loop = BroadcastLoopRecord(
+            loop_id=loop_id,
+            region=request_payload.region.strip(),
+            timezone=request_payload.timezone.strip(),
+            audience_persona=request_payload.audience_persona.strip(),
+            post_local_time=request_payload.post_local_time.strip(),
+            seed_topics=[t.strip() for t in request_payload.seed_topics if t.strip()],
+            active=request_payload.active,
+            feedback_prompt_text=request_payload.feedback_prompt_text,
+            created_at=(existing.created_at if existing else now),
+            updated_at=now,
+        )
+        container.broadcast_repository.save_loop(loop)
+        return loop.model_dump(mode="json")
+
+    @app.get("/jobs/broadcast/loops")
+    def broadcast_loops_list(
+        active_only: bool = False,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.broadcast_repository is not None
+        loops = container.broadcast_repository.list_loops(active_only=active_only)
+        return {"loops": [l.model_dump(mode="json") for l in loops]}
+
+    @app.get("/jobs/broadcast/loops/{loop_id}")
+    def broadcast_loop_get(
+        loop_id: str,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.broadcast_repository is not None
+        loop = container.broadcast_repository.get_loop(loop_id)
+        if loop is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Loop not found"
+            )
+        return loop.model_dump(mode="json")
+
+    @app.delete("/jobs/broadcast/loops/{loop_id}")
+    def broadcast_loop_delete(
+        loop_id: str,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.broadcast_repository is not None
+        deleted = container.broadcast_repository.delete_loop(loop_id)
+        return {"loop_id": loop_id, "deleted": deleted}
+
+    @app.get("/jobs/broadcast/loops/{loop_id}/episodes")
+    def broadcast_loop_episodes(
+        loop_id: str,
+        limit: int = 20,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.broadcast_repository is not None
+        episodes = container.broadcast_repository.list_episodes_for_loop(loop_id, limit=max(1, min(limit, 200)))
+        return {
+            "loop_id": loop_id,
+            "episodes": [e.model_dump(mode="json") for e in episodes],
+        }
+
+    @app.post("/jobs/broadcast/loops/{loop_id}/run")
+    def broadcast_loop_run(
+        loop_id: str,
+        request_payload: Optional[BroadcastScheduledRunRequest] = None,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Scheduled run for one loop. Cloud Scheduler hits this on the
+        loop's daily cadence. Picks a topic from prior feedback + seed
+        topics, generates the episode, posts it to X, and persists the
+        episode row so tomorrow's run has signal to read."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        if container.podcast_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Podcast client not initialized",
+            )
+        if container.x_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="X client not initialized",
+            )
+        assert container.broadcast_repository is not None
+
+        runner = _build_scheduled_runner(container, static_dir)
+        try:
+            result = runner.run(
+                loop_id,
+                tweet_text_override=(request_payload.tweet_text_override if request_payload else None),
+                feedback_prompt_override=(
+                    request_payload.feedback_prompt_override if request_payload else None
+                ),
+            )
+        except LoopNotFound as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        except LoopInactive as exc:
+            # 200 with a skipped marker: Cloud Scheduler retries on non-2xx,
+            # and an inactive loop is intentional state, not a failure.
+            logger.info("Scheduled run skipped: %s", exc)
+            return {"loop_id": loop_id, "status": "skipped", "reason": str(exc)}
+        except PodcastApiUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            )
+        except FfmpegUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            )
+        except FfmpegFailed as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+            )
+        except XClientUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            )
+        except XPostFailed as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+            )
+
+        return {
+            "loop_id": result.loop_id,
+            "episode_id": result.episode_id,
+            "topic": result.topic,
+            "run_date": result.run_date.isoformat(),
+            "audio_url": result.audio_url,
+            "video_url": result.video_url,
+            "episode_tweet_id": result.episode_tweet_id,
+            "episode_tweet_url": result.episode_tweet_url,
+            "feedback_prompt_tweet_id": result.feedback_prompt_tweet_id,
+            "feedback_prompt_tweet_url": result.feedback_prompt_tweet_url,
+        }
+
+    @app.post("/jobs/broadcast/episodes/{episode_id}/feedback")
+    def broadcast_episode_paste_feedback(
+        episode_id: str,
+        request_payload: BroadcastPasteFeedbackRequest,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Operator-pasted feedback. Until we upgrade to API Basic and
+        can read replies automatically, the daily routine is: open the
+        episode tweet, copy the replies, POST them here. We LLM-condense
+        them into a brief that tomorrow's run reads."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.broadcast_repository is not None
+
+        episode_id = (episode_id or "").strip().lower()
+        if not EPISODE_ID_RE.fullmatch(episode_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="episode_id must be 16 hex characters",
+            )
+        episode = container.broadcast_repository.get_episode(episode_id)
+        if episode is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No broadcast episode with id={episode_id!r}",
+            )
+
+        feedback_text = (request_payload.feedback_text or "").strip()
+        if not feedback_text:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="feedback_text is required",
+            )
+
+        summarizer = _build_feedback_summarizer(container.settings)
+        summary = None
+        if summarizer is not None:
+            summary = summarizer.summarize(
+                replies_text=feedback_text, topic=episode.topic_used
+            )
+
+        updated = episode.model_copy(update={
+            "feedback_raw": feedback_text,
+            "feedback_summary": summary,
+            "feedback_pasted_at": utc_now(),
+        })
+        container.broadcast_repository.save_episode(updated)
+        return {
+            "episode_id": episode_id,
+            "feedback_summary": summary,
+            "feedback_summary_status": (
+                "summarized" if summary
+                else ("summarizer_unavailable" if summarizer is None else "no_useful_content")
+            ),
         }
 
     @app.post("/v1/auth/apple")
@@ -1212,6 +1665,18 @@ def _build_container(settings: Settings) -> ServiceContainer:
         environment=settings.apns_environment,
     )
 
+    x_client = XClient(
+        api_key=settings.x_api_key,
+        api_secret=settings.x_api_secret,
+        access_token=settings.x_access_token,
+        access_token_secret=settings.x_access_token_secret,
+    )
+
+    if settings.use_inmemory_adapters:
+        broadcast_repository: BroadcastRepository = InMemoryBroadcastRepository()
+    else:
+        broadcast_repository = FirestoreBroadcastRepository(settings.firestore_collection_prefix)
+
     return ServiceContainer(
         settings=settings,
         storage=storage,
@@ -1219,6 +1684,8 @@ def _build_container(settings: Settings) -> ServiceContainer:
         control_plane=control_plane,
         push_sender=push_sender,
         podcast_client=podcast_client,
+        x_client=x_client,
+        broadcast_repository=broadcast_repository,
     )
 
 
@@ -1391,6 +1858,74 @@ def _build_substack_discovery(settings: Settings):
             model=settings.substack_discovery_model,
         )
     )
+
+
+def _build_topic_picker(
+    settings: Settings,
+    broadcast_repository: BroadcastRepository,
+) -> BroadcastTopicPicker:
+    proposer = None
+    if settings.podcast_api_key:
+        proposer = OpenAITopicProposer(
+            api_key=settings.podcast_api_key,
+            model=settings.broadcast_llm_model,
+        )
+    return BroadcastTopicPicker(proposer=proposer, repository=broadcast_repository)
+
+
+def _build_feedback_summarizer(settings: Settings):
+    if not settings.podcast_api_key:
+        return None
+    return OpenAIFeedbackSummarizer(
+        api_key=settings.podcast_api_key,
+        model=settings.broadcast_llm_model,
+    )
+
+
+def _build_scheduled_runner(container: ServiceContainer, static_dir: Path) -> ScheduledBroadcastRunner:
+    assert container.podcast_client is not None
+    assert container.x_client is not None
+    assert container.broadcast_repository is not None
+
+    broadcast_settings = BroadcastSettings(
+        app_base_url=container.settings.app_base_url,
+        primary_voice_id=container.settings.elevenlabs_voice_primary_id,
+        secondary_voice_id=container.settings.elevenlabs_voice_secondary_id,
+        primary_host_name=container.settings.podcast_host_primary_name,
+        secondary_host_name=container.settings.podcast_host_secondary_name,
+        cover_image_path=static_dir / "cover.png",
+    )
+    service = BroadcastService(
+        settings=broadcast_settings,
+        storage=container.storage,
+        podcast_client=container.podcast_client,
+    )
+    publisher = BroadcastPublisher(storage=container.storage, x_client=container.x_client)
+    topic_picker = _build_topic_picker(container.settings, container.broadcast_repository)
+    return ScheduledBroadcastRunner(
+        repository=container.broadcast_repository,
+        topic_picker=topic_picker,
+        broadcast_service=service,
+        publisher=publisher,
+    )
+
+
+def _resolve_feedback_prompt(value: Optional[str]) -> Optional[str]:
+    """Decide what feedback-prompt reply (if any) to post under a broadcast
+    tweet. The caller has three tri-state intents — fall back to default,
+    use a custom prompt, or suppress entirely — collapsed onto a single
+    Optional[str] body field:
+
+    - None (field omitted): use the bundled default copy.
+    - "" (explicit empty): suppress the reply entirely.
+    - anything else: use it verbatim.
+    """
+    if value is None:
+        return DEFAULT_FEEDBACK_PROMPT
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return stripped
 
 
 def _serve_broadcast_object(
