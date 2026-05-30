@@ -335,6 +335,14 @@ class Settings(BaseSettings):
     welcome_episode_duration_seconds: int = Field(default=0, alias="WELCOME_EPISODE_DURATION_SECONDS")
     welcome_episode_version: str = Field(default="v1", alias="WELCOME_EPISODE_VERSION")
 
+    # X (Twitter) API — OAuth 1.0a user-context credentials for the
+    # broadcast-loop poster. All four are required to publish; any one
+    # missing disables the X client (publish endpoints return 503).
+    x_api_key: Optional[str] = Field(default=None, alias="X_API_KEY")
+    x_api_secret: Optional[str] = Field(default=None, alias="X_API_SECRET")
+    x_access_token: Optional[str] = Field(default=None, alias="X_ACCESS_TOKEN")
+    x_access_token_secret: Optional[str] = Field(default=None, alias="X_ACCESS_TOKEN_SECRET")
+
     @classmethod
     def from_env(cls) -> "Settings":
         settings = cls()
@@ -365,6 +373,12 @@ class Settings(BaseSettings):
         settings.openai_embedding_api_key = _normalize_secret_value(
             _resolve_secret_reference(settings.openai_embedding_api_key)
         ) or settings.podcast_api_key
+        settings.x_api_key = _normalize_secret_value(_resolve_secret_reference(settings.x_api_key))
+        settings.x_api_secret = _normalize_secret_value(_resolve_secret_reference(settings.x_api_secret))
+        settings.x_access_token = _normalize_secret_value(_resolve_secret_reference(settings.x_access_token))
+        settings.x_access_token_secret = _normalize_secret_value(
+            _resolve_secret_reference(settings.x_access_token_secret)
+        )
         settings.google_cloud_project = settings.google_cloud_project or os.getenv("GCP_PROJECT")
         return settings
 
