@@ -82,6 +82,7 @@ class BroadcastService:
     ) -> BroadcastResult:
         prompt = build_broadcast_prompt(brief)
 
+        logger.info("BroadcastService.generate_once: calling PodcastApiClient.generate")
         episode: GeneratedEpisode = self._podcast_client.generate(
             prompt=prompt,
             title=title,
@@ -91,22 +92,45 @@ class BroadcastService:
             secondary_speaker_name=self._settings.secondary_host_name,
             ux=ux,
         )
+        logger.info(
+            "BroadcastService.generate_once: script+TTS done audio_bytes=%d segments=%d",
+            len(episode.audio_bytes),
+            len(episode.audio_segments),
+        )
 
         cover_bytes = self._settings.cover_image_path.read_bytes()
+        logger.info(
+            "BroadcastService.generate_once: rendering waveform video cover_bytes=%d",
+            len(cover_bytes),
+        )
         video_bytes = self._renderer(
             audio_bytes=episode.audio_bytes,
             cover_image_bytes=cover_bytes,
+        )
+        logger.info(
+            "BroadcastService.generate_once: video render done video_bytes=%d",
+            len(video_bytes),
         )
 
         episode_id = self._episode_id_factory()
         audio_object_name = f"{BROADCAST_PREFIX}/{episode_id}.mp3"
         video_object_name = f"{BROADCAST_PREFIX}/{episode_id}.mp4"
 
+        logger.info(
+            "BroadcastService.generate_once: uploading to GCS episode_id=%s",
+            episode_id,
+        )
         _, audio_size = self._storage.upload_object(
             audio_object_name, episode.audio_bytes, episode.mime_type
         )
         _, video_size = self._storage.upload_object(
             video_object_name, video_bytes, "video/mp4"
+        )
+        logger.info(
+            "BroadcastService.generate_once: GCS upload done episode_id=%s audio_size=%d video_size=%d",
+            episode_id,
+            audio_size,
+            video_size,
         )
 
         base = self._settings.app_base_url.rstrip("/")
