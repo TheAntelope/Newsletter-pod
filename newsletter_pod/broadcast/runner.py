@@ -80,10 +80,24 @@ class ScheduledBroadcastRunner:
             raise LoopInactive(f"Loop {loop_id!r} is inactive — skipping run")
 
         topic, brief = self._topic_picker.pick(loop)
+        logger.info(
+            "Broadcast run picked topic loop_id=%s desired_minutes=%d topic=%r",
+            loop.loop_id,
+            brief.desired_minutes,
+            topic,
+        )
         run_date = self._run_date_factory(loop)
         title = self._default_title(loop=loop, topic=topic, run_date=run_date)
 
+        logger.info("Broadcast run generating episode loop_id=%s", loop.loop_id)
         generated = self._broadcast_service.generate_once(brief=brief, title=title)
+        logger.info(
+            "Broadcast run generated episode loop_id=%s episode_id=%s audio_bytes=%d video_bytes=%d",
+            loop.loop_id,
+            generated.episode_id,
+            generated.audio_size_bytes,
+            generated.video_size_bytes,
+        )
 
         tweet_text = tweet_text_override or self._default_tweet_text(
             topic=topic, title=generated.title
@@ -97,10 +111,20 @@ class ScheduledBroadcastRunner:
         else:
             feedback_text = _normalize_feedback_intent(loop.feedback_prompt_text)
 
+        logger.info(
+            "Broadcast run publishing episode_id=%s loop_id=%s",
+            generated.episode_id,
+            loop.loop_id,
+        )
         post: PublishResult = self._publisher.publish(
             episode_id=generated.episode_id,
             tweet_text=tweet_text,
             feedback_prompt_text=feedback_text,
+        )
+        logger.info(
+            "Broadcast run published episode_id=%s tweet_id=%s",
+            generated.episode_id,
+            post.episode_tweet_id,
         )
 
         record = BroadcastEpisodeRecord(

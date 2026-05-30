@@ -25,9 +25,13 @@ class _FakeUploader:
         self.raise_on_upload = raise_on_upload
         self.calls: list[dict] = []
 
-    def media_upload(self, filename: str, *, media_category: str, chunked: bool):
+    def chunked_upload(self, filename: str, *, media_category: str, max_wait_seconds: int):
         self.calls.append(
-            {"filename": filename, "media_category": media_category, "chunked": chunked}
+            {
+                "filename": filename,
+                "media_category": media_category,
+                "max_wait_seconds": max_wait_seconds,
+            }
         )
         if self.raise_on_upload:
             raise tweepy.TweepyException("upload boom")
@@ -106,7 +110,7 @@ def test_post_video_tweet_uploads_then_posts_with_media_id():
     assert result.media_id == "m1"
     assert result.tweet_url == "https://x.com/theclawcast/status/42"
     assert len(uploader.calls) == 1
-    assert uploader.calls[0]["chunked"] is True
+    assert uploader.calls[0]["max_wait_seconds"] > 0
     assert uploader.calls[0]["media_category"] == "tweet_video"
     assert len(poster.calls) == 1
     assert poster.calls[0]["text"] == "Hello X"
