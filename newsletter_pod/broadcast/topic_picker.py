@@ -134,6 +134,11 @@ class BroadcastTopicPicker:
             topic=topic,
             audience_hint=loop.audience_persona,
             prior_feedback_summary=prior_feedback,
+            # 2-minute episodes for now: stays well under X's standard tweet
+            # video duration ceiling and within ElevenLabs char budgets even
+            # on slow days. Bump later (or make per-loop) once we've seen a
+            # successful end-to-end run.
+            desired_minutes=2,
         )
         return topic, brief
 

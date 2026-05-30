@@ -11,11 +11,21 @@ import tweepy
 logger = logging.getLogger(__name__)
 
 
-# X's standard tweet video category supports up to 140 seconds and 512MB.
-# We don't enforce these client-side — let X reject so the error surfaces
-# naturally — but log the duration when uploading to make debugging the
-# "too long" case obvious.
+# X's standard tweet video category supports up to 140 seconds and 512MB
+# on consumer accounts; Premium accounts get hours. We don't enforce these
+# client-side — let X reject so the error surfaces naturally.
 TWEET_TEXT_MAX_CHARS = 280
+
+# Cap per-request HTTP timeout on the v1.1 media-upload session. Without
+# this, tweepy.API defaults to no timeout and a network hiccup will hang
+# Cloud Run for the full 600s request timeout.
+TWEEPY_HTTP_TIMEOUT_SECONDS = 60
+
+# Cap the chunked-upload FINALIZE polling loop. X transcodes the video
+# server-side after FINALIZE and tweepy polls STATUS until it succeeds
+# or the cap is hit. Default tweepy cap is 900s (15 min) which exceeds
+# Cloud Run's request timeout, so we set our own ceiling.
+TWEEPY_FINALIZE_MAX_WAIT_SECONDS = 180
 
 
 class XClientUnavailable(RuntimeError):
@@ -37,8 +47,8 @@ class XPostResult:
 
 
 class _MediaUploader(Protocol):
-    def media_upload(
-        self, filename: str, *, media_category: str, chunked: bool
+    def chunked_upload(
+        self, filename: str, *, media_category: str, max_wait_seconds: int
     ) -> object: ...
 
 
@@ -98,7 +108,7 @@ class XClient:
                 self._access_token,
                 self._access_token_secret,
             )
-            self._media_uploader_cached = tweepy.API(auth)
+            self._media_uploader_cached = tweepy.API(auth, timeout=TWEEPY_HTTP_TIMEOUT_SECONDS)
         return self._media_uploader_cached
 
     def _tweet_poster(self) -> _TweetPoster:
@@ -145,12 +155,15 @@ class XClient:
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as fp:
             tmp_path = Path(fp.name)
             fp.write(video_bytes)
+        logger.info(
+            "X media upload starting: bytes=%d path=%s", len(video_bytes), tmp_path
+        )
         try:
             try:
-                media = self._media_uploader().media_upload(
+                media = self._media_uploader().chunked_upload(
                     filename=str(tmp_path),
                     media_category="tweet_video",
-                    chunked=True,
+                    max_wait_seconds=TWEEPY_FINALIZE_MAX_WAIT_SECONDS,
                 )
             except tweepy.TweepyException as exc:
                 raise XPostFailed(f"X media upload failed: {exc}") from exc
@@ -161,7 +174,9 @@ class XClient:
                 logger.warning("Failed to delete temp file %s", tmp_path, exc_info=True)
 
         media_id = str(getattr(media, "media_id_string", None) or getattr(media, "media_id"))
+        logger.info("X media upload finished: media_id=%s", media_id)
 
+        logger.info("X create_tweet starting: media_id=%s text_len=%d", media_id, len(text))
         try:
             response = self._tweet_poster().create_tweet(
                 text=text,
@@ -172,6 +187,7 @@ class XClient:
             raise XPostFailed(f"X tweet create failed: {exc}") from exc
 
         tweet_id = self._extract_tweet_id(response)
+        logger.info("X create_tweet finished: tweet_id=%s", tweet_id)
         return XPostResult(
             tweet_id=tweet_id,
             tweet_url=self._tweet_url(tweet_id),
