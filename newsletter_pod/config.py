@@ -343,6 +343,15 @@ class Settings(BaseSettings):
     x_access_token: Optional[str] = Field(default=None, alias="X_ACCESS_TOKEN")
     x_access_token_secret: Optional[str] = Field(default=None, alias="X_ACCESS_TOKEN_SECRET")
 
+    # Phase 2 broadcast-loop LLM model. Used by both the topic picker
+    # (proposes tomorrow's topic from yesterday's feedback summary +
+    # seed topics) and the feedback summarizer (condenses pasted X
+    # replies into a 1-3 sentence brief). One model serves both because
+    # the tasks share shape — small chat completion with a JSON
+    # response format. Falls back to round-robin / raw replies when no
+    # OpenAI key is configured.
+    broadcast_llm_model: str = Field(default="gpt-4o-mini", alias="BROADCAST_LLM_MODEL")
+
     @classmethod
     def from_env(cls) -> "Settings":
         settings = cls()
