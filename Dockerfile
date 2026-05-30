@@ -3,6 +3,13 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+# ffmpeg powers the broadcast-loop waveform-video renderer
+# (newsletter_pod/broadcast/video.py). ~50MB added; acceptable for the
+# single image.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY pyproject.toml ./

@@ -21,6 +21,20 @@ class AudioStorage(ABC):
         objects are not an error."""
         raise NotImplementedError
 
+    @abstractmethod
+    def upload_object(self, object_name: str, data: bytes, mime_type: str) -> tuple[str, int]:
+        """Upload bytes at an explicit object name with a caller-chosen
+        mime type. Unlike upload_audio, the prefix is the caller's
+        responsibility — pass the full GCS-style key (e.g. "broadcast/<id>.mp4").
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_object(self, object_name: str) -> bytes:
+        """Read raw bytes at an explicit object name. Raises FileNotFoundError
+        when the object doesn't exist."""
+        raise NotImplementedError
+
 
 class InMemoryAudioStorage(AudioStorage):
     def __init__(self) -> None:
@@ -39,6 +53,16 @@ class InMemoryAudioStorage(AudioStorage):
 
     def delete_audio(self, object_name: str) -> bool:
         return self._objects.pop(object_name, None) is not None
+
+    def upload_object(self, object_name: str, data: bytes, mime_type: str) -> tuple[str, int]:
+        self._objects[object_name] = data
+        return object_name, len(data)
+
+    def get_object(self, object_name: str) -> bytes:
+        data = self._objects.get(object_name)
+        if data is None:
+            raise FileNotFoundError(object_name)
+        return data
 
 
 class GCSAudioStorage(AudioStorage):
@@ -65,3 +89,14 @@ class GCSAudioStorage(AudioStorage):
             return False
         blob.delete()
         return True
+
+    def upload_object(self, object_name: str, data: bytes, mime_type: str) -> tuple[str, int]:
+        blob = self._bucket.blob(object_name)
+        blob.upload_from_string(data, content_type=mime_type)
+        return object_name, len(data)
+
+    def get_object(self, object_name: str) -> bytes:
+        blob = self._bucket.blob(object_name)
+        if not blob.exists():
+            raise FileNotFoundError(object_name)
+        return blob.download_as_bytes()

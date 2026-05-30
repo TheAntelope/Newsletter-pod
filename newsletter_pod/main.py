@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,6 +26,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .auth import AppleIdentityVerifier, AuthError, SessionManager
+from .broadcast.prompting import BroadcastBrief
+from .broadcast.service import BroadcastService, BroadcastSettings
+from .broadcast.video import FfmpegFailed, FfmpegUnavailable
 from .config import Settings, load_voices
 from .admin_metrics import (
     AdminMetricsService,
@@ -46,7 +50,7 @@ from .inbound import (
 )
 from .legal import PRIVACY_HTML, TERMS_HTML
 from .mailer import NoopMailer, SMTPMailer
-from .podcast_api import PodcastApiClient
+from .podcast_api import PodcastApiClient, PodcastApiUnavailable
 from .push import PushSender, build_push_sender_from_settings
 from .shared_items import MAX_UPLOAD_BYTES as SHARED_MAX_UPLOAD_BYTES, SUPPORTED_KINDS as SHARED_SUPPORTED_KINDS
 from .storage import AudioStorage, GCSAudioStorage, InMemoryAudioStorage
@@ -56,6 +60,9 @@ from .utils import utc_now
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+
+_BROADCAST_EPISODE_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 class AppleAuthRequest(BaseModel):
@@ -173,6 +180,14 @@ class RegisterDeviceTokenRequest(BaseModel):
     bundle_id: Optional[str] = None
 
 
+class BroadcastGenerateOnceRequest(BaseModel):
+    topic: str
+    title: Optional[str] = None
+    audience_hint: Optional[str] = None
+    prior_feedback_summary: Optional[str] = None
+    desired_minutes: int = 5
+
+
 @dataclass
 class ServiceContainer:
     settings: Settings
@@ -183,6 +198,10 @@ class ServiceContainer:
     # built once per process so the JWT cache + HTTP/2 client are reused
     # across every push attempt.
     push_sender: PushSender | None = None
+    # Shared OpenAI/ElevenLabs client. Reused by both the per-user generation
+    # path (via control_plane) and the broadcast loop, so we configure it
+    # once and pass the same instance to both.
+    podcast_client: PodcastApiClient | None = None
 
 
 def create_app(container: ServiceContainer | None = None) -> FastAPI:
@@ -311,6 +330,81 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         _validate_job_auth(container.settings, authorization, x_job_trigger_token)
         assert container.control_plane is not None
         return container.control_plane.poll_sources()
+
+    @app.post("/jobs/broadcast/generate-once")
+    def broadcast_generate_once(
+        request_payload: BroadcastGenerateOnceRequest,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Phase 0 broadcast loop entrypoint: take a hand-written topic
+        brief, return a postable audio + waveform-video pair stored under
+        `broadcast/<episode_id>.{mp3,mp4}` on the same bucket as user
+        episodes. Stateless — no Firestore writes. Callers are responsible
+        for remembering the episode_id if they want to find the assets
+        again outside of GCS object listing."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        if container.podcast_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Podcast client not initialized",
+            )
+        topic = (request_payload.topic or "").strip()
+        if not topic:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="topic is required",
+            )
+
+        broadcast_settings = BroadcastSettings(
+            app_base_url=container.settings.app_base_url,
+            primary_voice_id=container.settings.elevenlabs_voice_primary_id,
+            secondary_voice_id=container.settings.elevenlabs_voice_secondary_id,
+            primary_host_name=container.settings.podcast_host_primary_name,
+            secondary_host_name=container.settings.podcast_host_secondary_name,
+            cover_image_path=static_dir / "cover.png",
+        )
+        service = BroadcastService(
+            settings=broadcast_settings,
+            storage=container.storage,
+            podcast_client=container.podcast_client,
+        )
+        brief = BroadcastBrief(
+            topic=topic,
+            audience_hint=(request_payload.audience_hint or None),
+            prior_feedback_summary=(request_payload.prior_feedback_summary or None),
+            desired_minutes=request_payload.desired_minutes,
+        )
+        title = (request_payload.title or "").strip() or f"ClawCast Broadcast: {topic[:60]}"
+        try:
+            result = service.generate_once(
+                brief=brief,
+                title=title,
+                ux=container.settings.podcast_ux_config(),
+            )
+        except PodcastApiUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            )
+        except FfmpegUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            )
+        except FfmpegFailed as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+            )
+
+        return {
+            "episode_id": result.episode_id,
+            "title": result.title,
+            "show_notes": result.show_notes,
+            "audio_url": result.audio_url,
+            "audio_size_bytes": result.audio_size_bytes,
+            "video_url": result.video_url,
+            "video_size_bytes": result.video_size_bytes,
+            "duration_seconds": result.duration_seconds,
+        }
 
     @app.post("/v1/auth/apple")
     def auth_with_apple(request_payload: AppleAuthRequest) -> dict:
@@ -953,6 +1047,25 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         except InboundConfigError as exc:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 
+    @app.api_route("/broadcast/{episode_id}.mp3", methods=["GET", "HEAD"])
+    def get_broadcast_audio(episode_id: str, request: Request) -> Response:
+        """Public download for a broadcast-loop audio asset. Intentionally
+        unauthenticated — these are marketing assets meant to be embedded
+        in tweets and shared. Returns 404 for any id that doesn't match
+        the broadcast id shape, so the route doubles as a path-traversal
+        guard."""
+        return _serve_broadcast_object(
+            container, episode_id, suffix="mp3", media_type="audio/mpeg", request=request
+        )
+
+    @app.api_route("/broadcast/{episode_id}.mp4", methods=["GET", "HEAD"])
+    def get_broadcast_video(episode_id: str, request: Request) -> Response:
+        """Public download for a broadcast-loop video asset. See
+        get_broadcast_audio for the auth + id-validation rationale."""
+        return _serve_broadcast_object(
+            container, episode_id, suffix="mp4", media_type="video/mp4", request=request
+        )
+
     @app.api_route("/media/{secret_token}/{episode_id}.mp3", methods=["GET", "HEAD"])
     def get_private_media(
         secret_token: str,
@@ -1105,6 +1218,7 @@ def _build_container(settings: Settings) -> ServiceContainer:
         control_repository=control_repository,
         control_plane=control_plane,
         push_sender=push_sender,
+        podcast_client=podcast_client,
     )
 
 
@@ -1277,6 +1391,27 @@ def _build_substack_discovery(settings: Settings):
             model=settings.substack_discovery_model,
         )
     )
+
+
+def _serve_broadcast_object(
+    container: ServiceContainer,
+    episode_id: str,
+    *,
+    suffix: str,
+    media_type: str,
+    request: Request,
+) -> Response:
+    if not _BROADCAST_EPISODE_ID_RE.fullmatch(episode_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    object_name = f"broadcast/{episode_id}.{suffix}"
+    try:
+        data = container.storage.get_object(object_name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    headers = {"Content-Length": str(len(data)), "Accept-Ranges": "none"}
+    if request.method == "HEAD":
+        return Response(content=b"", media_type=media_type, headers=headers)
+    return Response(content=data, media_type=media_type, headers=headers)
 
 
 def _validate_job_auth(
