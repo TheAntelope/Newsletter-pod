@@ -9,6 +9,7 @@ from typing import Callable, Optional, Protocol
 from ..models import GeneratedEpisode, PodcastUxConfig
 from ..podcast_api import PodcastApiClient
 from ..storage import AudioStorage
+from .framing import build_framing
 from .prompting import BroadcastBrief, build_broadcast_prompt
 from .video import render_waveform_video
 
@@ -79,8 +80,14 @@ class BroadcastService:
         brief: BroadcastBrief,
         title: str,
         ux: Optional[PodcastUxConfig] = None,
+        feedback_prompt_text: Optional[str] = None,
     ) -> BroadcastResult:
         prompt = build_broadcast_prompt(brief)
+
+        # Wrap every broadcast episode in the standard spoken show framing.
+        # This is a pure string-assembly step in front of the existing TTS
+        # call — voice settings and audio assembly are unchanged.
+        framing = build_framing(topic=brief.topic, feedback_text=feedback_prompt_text)
 
         logger.info("BroadcastService.generate_once: calling PodcastApiClient.generate")
         episode: GeneratedEpisode = self._podcast_client.generate(
@@ -91,6 +98,8 @@ class BroadcastService:
             primary_speaker_name=self._settings.primary_host_name,
             secondary_speaker_name=self._settings.secondary_host_name,
             ux=ux,
+            lead_in_texts=framing.lead,
+            tail_texts=framing.tail,
         )
         logger.info(
             "BroadcastService.generate_once: script+TTS done audio_bytes=%d segments=%d",

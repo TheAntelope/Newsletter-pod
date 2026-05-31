@@ -89,8 +89,21 @@ class ScheduledBroadcastRunner:
         run_date = self._run_date_factory(loop)
         title = self._default_title(loop=loop, topic=topic, run_date=run_date)
 
+        # The explicitly configured feedback prompt (run override wins, else the
+        # loop's stored value) — passed into generation so the spoken feedback
+        # line stays in sync with the feedback tweet copy resolved below.
+        configured_feedback = (
+            feedback_prompt_override
+            if feedback_prompt_override is not None
+            else loop.feedback_prompt_text
+        )
+
         logger.info("Broadcast run generating episode loop_id=%s", loop.loop_id)
-        generated = self._broadcast_service.generate_once(brief=brief, title=title)
+        generated = self._broadcast_service.generate_once(
+            brief=brief,
+            title=title,
+            feedback_prompt_text=configured_feedback,
+        )
         logger.info(
             "Broadcast run generated episode loop_id=%s episode_id=%s audio_bytes=%d video_bytes=%d",
             loop.loop_id,
@@ -102,14 +115,9 @@ class ScheduledBroadcastRunner:
         tweet_text = tweet_text_override or self._default_tweet_text(
             topic=topic, title=generated.title
         )
-        # Tri-state resolution for the feedback prompt, layered:
-        # 1. Explicit override on this run wins.
-        # 2. Otherwise the loop's stored value: None ⇒ default copy,
-        #    "" ⇒ suppress, anything else ⇒ verbatim.
-        if feedback_prompt_override is not None:
-            feedback_text = _normalize_feedback_intent(feedback_prompt_override)
-        else:
-            feedback_text = _normalize_feedback_intent(loop.feedback_prompt_text)
+        # Tri-state resolution for the feedback tweet copy, from the configured
+        # value above: None ⇒ default copy, "" ⇒ suppress, else ⇒ verbatim.
+        feedback_text = _normalize_feedback_intent(configured_feedback)
 
         logger.info(
             "Broadcast run publishing episode_id=%s loop_id=%s",
