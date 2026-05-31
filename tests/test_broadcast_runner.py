@@ -33,6 +33,8 @@ class _FakePodcastClient:
         secondary_speaker_name=None,
         ux=None,
         force_default_voice=False,
+        lead_in_texts=None,
+        tail_texts=None,
     ):
         return GeneratedEpisode(
             episode_title=title,

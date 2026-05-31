@@ -87,6 +87,75 @@ def test_openai_provider_generates_structured_script_and_chunked_speech(monkeypa
     assert calls[2][0].endswith("/v1/audio/speech")
 
 
+def test_lead_in_and_tail_framing_wraps_body_for_tts(monkeypatch):
+    speech_inputs: list[str] = []
+
+    def fake_post(url, json, headers, timeout):
+        if url.endswith("/v1/responses"):
+            return FakeResponse(
+                json_data={
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": (
+                                        '{"episode_title":"T",'
+                                        '"show_notes":"- A",'
+                                        '"audio_segments":['
+                                        '{"role":"primary","text":"Body one."},'
+                                        '{"role":"secondary","text":"Body two."}'
+                                        "]}"
+                                    ),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        if url.endswith("/v1/audio/speech"):
+            speech_inputs.append(json["input"])
+            return FakeResponse(content=json["input"].encode("utf-8"))
+        raise AssertionError(url)
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="gpt-4o-mini-tts",
+        tts_voice="alloy",
+    )
+
+    generated = client.generate(
+        prompt="Source content",
+        title="T",
+        primary_speaker_name="Elena",
+        secondary_speaker_name="Marcus",
+        lead_in_texts=["Hello!", "Welcome."],
+        tail_texts=["Leave a comment.", "See you tomorrow."],
+    )
+
+    # Framing brackets the body, in order, each as its own TTS call.
+    assert speech_inputs == [
+        "Hello!",
+        "Welcome.",
+        "Body one.",
+        "Body two.",
+        "Leave a comment.",
+        "See you tomorrow.",
+    ]
+    # Framing is voiced by the primary host and present in the transcript.
+    assert generated.audio_segments[0].speaker == "Elena"
+    assert generated.audio_bytes.startswith(b"Hello!Welcome.")
+    assert generated.audio_bytes.endswith(b"Leave a comment.See you tomorrow.")
+
+
 def test_elevenlabs_tts_uses_user_voice_id(monkeypatch):
     calls: list[tuple[str, dict, dict]] = []
 

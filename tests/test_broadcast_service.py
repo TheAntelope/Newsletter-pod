@@ -20,6 +20,8 @@ class _RecordedGenerate:
     secondary_voice_id: Optional[str]
     primary_speaker_name: Optional[str]
     secondary_speaker_name: Optional[str]
+    lead_in_texts: Optional[list]
+    tail_texts: Optional[list]
 
 
 class _FakePodcastClient:
@@ -38,6 +40,8 @@ class _FakePodcastClient:
         secondary_speaker_name=None,
         ux=None,
         force_default_voice=False,
+        lead_in_texts=None,
+        tail_texts=None,
     ) -> GeneratedEpisode:
         self.calls.append(
             _RecordedGenerate(
@@ -47,6 +51,8 @@ class _FakePodcastClient:
                 secondary_voice_id=secondary_voice_id,
                 primary_speaker_name=primary_speaker_name,
                 secondary_speaker_name=secondary_speaker_name,
+                lead_in_texts=lead_in_texts,
+                tail_texts=tail_texts,
             )
         )
         return GeneratedEpisode(
@@ -140,6 +146,55 @@ def test_generate_once_passes_brief_into_prompt(tmp_path):
     assert call.secondary_voice_id == "voice-secondary"
     assert call.primary_speaker_name == "Vinnie"
     assert call.secondary_speaker_name == "Demi"
+
+
+def test_generate_once_wraps_body_in_show_framing(tmp_path):
+    from newsletter_pod.broadcast.framing import FEEDBACK, GREETING, OUTRO
+
+    cover = tmp_path / "cover.png"
+    cover.write_bytes(b"x")
+    client = _FakePodcastClient()
+    service = BroadcastService(
+        settings=_settings(cover),
+        storage=InMemoryAudioStorage(),
+        podcast_client=client,
+        renderer=_fake_renderer,
+    )
+
+    service.generate_once(
+        brief=BroadcastBrief(topic="agent evals"),
+        title="Evals",
+    )
+
+    call = client.calls[0]
+    # Greeting then intro (which announces the topic) lead the episode.
+    assert call.lead_in_texts[0] == GREETING
+    assert "agent evals" in call.lead_in_texts[1]
+    # Feedback then outro close it; default feedback line used when no override.
+    assert call.tail_texts == [FEEDBACK, OUTRO]
+
+
+def test_generate_once_feedback_line_syncs_with_loop_prompt(tmp_path):
+    from newsletter_pod.broadcast.framing import OUTRO
+
+    cover = tmp_path / "cover.png"
+    cover.write_bytes(b"x")
+    client = _FakePodcastClient()
+    service = BroadcastService(
+        settings=_settings(cover),
+        storage=InMemoryAudioStorage(),
+        podcast_client=client,
+        renderer=_fake_renderer,
+    )
+
+    service.generate_once(
+        brief=BroadcastBrief(topic="agent evals"),
+        title="Evals",
+        feedback_prompt_text="Tell us your hot take in the comments.",
+    )
+
+    call = client.calls[0]
+    assert call.tail_texts == ["Tell us your hot take in the comments.", OUTRO]
 
 
 def test_generate_once_trailing_slash_in_base_url(tmp_path):

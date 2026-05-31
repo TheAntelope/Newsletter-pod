@@ -59,6 +59,8 @@ class PodcastApiClient:
         secondary_speaker_name: Optional[str] = None,
         ux: Optional[PodcastUxConfig] = None,
         force_default_voice: bool = False,
+        lead_in_texts: Optional[list[str]] = None,
+        tail_texts: Optional[list[str]] = None,
     ) -> GeneratedEpisode:
         if not self.enabled:
             raise PodcastApiUnavailable("Podcast API is disabled")
@@ -80,6 +82,8 @@ class PodcastApiClient:
                     primary_speaker_name=primary_speaker_name,
                     secondary_speaker_name=secondary_speaker_name,
                     ux=ux,
+                    lead_in_texts=lead_in_texts,
+                    tail_texts=tail_texts,
                 )
         if provider == "generic":
             return self._generate_with_generic(prompt=prompt, title=title)
@@ -106,6 +110,8 @@ class PodcastApiClient:
         primary_speaker_name: Optional[str] = None,
         secondary_speaker_name: Optional[str] = None,
         ux: Optional[PodcastUxConfig] = None,
+        lead_in_texts: Optional[list[str]] = None,
+        tail_texts: Optional[list[str]] = None,
     ) -> GeneratedEpisode:
         if not self.api_key:
             raise PodcastApiUnavailable("OpenAI API key is not configured")
@@ -139,6 +145,26 @@ class PodcastApiClient:
                 raise PodcastApiError(
                     f"Audio segment exceeds speech input limit ({speech_max_chars} chars)"
                 )
+
+        # Wrap the generated body in spoken framing *after* length validation
+        # so the framing (e.g. greeting/outro) is never subject to truncation.
+        # Each framing line is its own segment, giving a natural pause between
+        # sections, and is voiced by the primary host.
+        if lead_in_texts or tail_texts:
+            primary_display = (primary_speaker_name or "").strip() or "Host"
+
+            def _framing_segments(texts: Optional[list[str]]) -> list[AudioSegment]:
+                return [
+                    AudioSegment(role="primary", speaker=primary_display, text=text)
+                    for text in (texts or [])
+                    if text and text.strip()
+                ]
+
+            audio_segments = (
+                _framing_segments(lead_in_texts)
+                + audio_segments
+                + _framing_segments(tail_texts)
+            )
 
         def _voice_for(segment: AudioSegment) -> Optional[str]:
             if not secondary_voice_id:
