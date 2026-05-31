@@ -9,13 +9,17 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-# X-friendly 1080x1080 square. Same dimensions for feed and reels-style placement.
-# 200px tall waveform band sits at the bottom of the frame on top of the cover.
-DEFAULT_WIDTH = 1080
-DEFAULT_HEIGHT = 1080
-WAVEFORM_HEIGHT = 200
+# X-friendly 720x720 square. We dropped from 1080 to 720 because libx264 was
+# spending 7+ minutes encoding 2-minute videos at 1080p on Cloud Run's 2 vCPU
+# — 720 brings render time under 30 seconds with no visible loss when the
+# tweet plays in a feed (X compresses on its end anyway). Reverse this if
+# we ever publish to a quality-sensitive target.
+DEFAULT_WIDTH = 720
+DEFAULT_HEIGHT = 720
+WAVEFORM_HEIGHT = 140
 WAVEFORM_COLOR = "white"
-WAVEFORM_RATE = 25  # frames/sec; matches output fps
+WAVEFORM_RATE = 15  # frames/sec; matches output fps. Static cover + slow
+# waveform doesn't need 25; 15 cuts encode time by 40%.
 
 
 class FfmpegUnavailable(RuntimeError):
@@ -69,7 +73,13 @@ def render_waveform_video(
             "-i", str(audio_path),
             "-filter_complex", filter_complex,
             "-map", "[v]", "-map", "1:a",
-            "-c:v", "libx264", "-tune", "stillimage", "-pix_fmt", "yuv420p",
+            # ultrafast preset trades some bitrate efficiency for ~10x encode
+            # speed; tune stillimage further drops compute since the cover
+            # never changes frame-to-frame. CRF 28 keeps the file under
+            # ~15MB for a 2-min clip without visible artifacts.
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage",
+            "-crf", "28", "-pix_fmt", "yuv420p",
+            "-r", str(WAVEFORM_RATE),
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
             "-shortest",
             "-movflags", "+faststart",
