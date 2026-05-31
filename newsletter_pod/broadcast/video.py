@@ -16,10 +16,7 @@ logger = logging.getLogger(__name__)
 # we ever publish to a quality-sensitive target.
 DEFAULT_WIDTH = 720
 DEFAULT_HEIGHT = 720
-WAVEFORM_HEIGHT = 140
-WAVEFORM_COLOR = "white"
-WAVEFORM_RATE = 15  # frames/sec; matches output fps. Static cover + slow
-# waveform doesn't need 25; 15 cuts encode time by 40%.
+WAVEFORM_RATE = 15  # frames/sec — static cover doesn't need higher.
 
 
 class FfmpegUnavailable(RuntimeError):
@@ -49,13 +46,15 @@ def render_waveform_video(
             "the container ships it via the Dockerfile."
         )
 
-    overlay_y = DEFAULT_HEIGHT - WAVEFORM_HEIGHT
+    # Static cover scaled to a 720x720 square — no waveform overlay. The
+    # showwaves+overlay path was burning 4-5 minutes per 2-min video on
+    # 2 vCPU because both filters run pixel-by-pixel per output frame
+    # (sequential audio sample reads + per-frame alpha compositing).
+    # Visual is now a static branded card behind the audio; we can layer
+    # a waveform back in if it turns out to drive engagement on X.
     filter_complex = (
         f"[0:v]scale={DEFAULT_WIDTH}:{DEFAULT_HEIGHT}:force_original_aspect_ratio=increase,"
-        f"crop={DEFAULT_WIDTH}:{DEFAULT_HEIGHT}[bg];"
-        f"[1:a]showwaves=s={DEFAULT_WIDTH}x{WAVEFORM_HEIGHT}:colors={WAVEFORM_COLOR}:"
-        f"mode=cline:rate={WAVEFORM_RATE}[wave];"
-        f"[bg][wave]overlay=0:{overlay_y}:format=auto[v]"
+        f"crop={DEFAULT_WIDTH}:{DEFAULT_HEIGHT}[v]"
     )
 
     with tempfile.TemporaryDirectory(prefix="broadcast_video_") as tmpdir:
