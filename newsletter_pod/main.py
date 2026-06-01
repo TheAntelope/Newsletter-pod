@@ -31,7 +31,7 @@ from .auth import (
     FirebaseIdentityVerifier,
     SessionManager,
 )
-from .broadcast.feedback import OpenAIFeedbackSummarizer
+from .broadcast.feedback import OpenAIFeedbackSummarizer, format_replies_as_feedback_text
 from .broadcast.models import BroadcastEpisodeRecord, BroadcastLoopRecord
 from .broadcast.prompting import BroadcastBrief
 from .broadcast.publisher import BroadcastPublisher, DEFAULT_FEEDBACK_PROMPT
@@ -51,7 +51,6 @@ from .broadcast.service import BroadcastService, BroadcastSettings
 from .broadcast.topic_picker import BroadcastTopicPicker, OpenAITopicProposer
 from .broadcast.video import FfmpegFailed, FfmpegUnavailable
 from .broadcast.x_client import (
-    ReplyItem,
     XClient,
     XClientUnavailable,
     XPostFailed,
@@ -946,7 +945,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 "feedback_summary_status": "no_replies",
             }
 
-        feedback_text = _format_replies_as_feedback_text(replies)
+        feedback_text = format_replies_as_feedback_text(replies)
         summarizer = _build_feedback_summarizer(container.settings)
         summary = None
         if summarizer is not None:
@@ -2007,21 +2006,6 @@ def _build_feedback_summarizer(settings: Settings):
     )
 
 
-def _format_replies_as_feedback_text(replies: list[ReplyItem]) -> str:
-    """Render fetched X replies in the multi-line shape the feedback
-    summarizer prompt is designed for — one '@handle: text' block per
-    reply, blank line between. Empty reply bodies are dropped so the
-    summarizer doesn't get tripped by zero-content rows."""
-    lines: list[str] = []
-    for reply in replies:
-        text = reply.text.strip()
-        if not text:
-            continue
-        handle = (reply.author_username or "").strip().lstrip("@") or "unknown"
-        lines.append(f"@{handle}: {text}")
-    return "\n\n".join(lines)
-
-
 def _build_scheduled_runner(container: ServiceContainer, static_dir: Path) -> ScheduledBroadcastRunner:
     assert container.podcast_client is not None
     assert container.x_client is not None
@@ -2078,6 +2062,13 @@ def _build_scheduled_runner(container: ServiceContainer, static_dir: Path) -> Sc
         broadcast_service=service,
         publisher=publisher,
         source_item_provider=_source_item_provider,
+        # Auto-poll deps: both must be set for the runner to read replies
+        # on yesterday's episode before picking today's topic. X client
+        # is always present (raises XClientUnavailable when creds missing,
+        # which the runner catches). Summarizer is None when no LLM key
+        # is configured.
+        x_client=container.x_client,
+        feedback_summarizer=_build_feedback_summarizer(container.settings),
     )
 
 

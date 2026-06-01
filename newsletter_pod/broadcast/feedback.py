@@ -6,7 +6,28 @@ from typing import Optional, Protocol
 
 import requests
 
+from .x_client import ReplyItem
+
 logger = logging.getLogger(__name__)
+
+
+def format_replies_as_feedback_text(replies: list[ReplyItem]) -> str:
+    """Render fetched X replies in the multi-line shape the feedback
+    summarizer prompt is designed for — one '@handle: text' block per
+    reply, blank line between. Empty bodies are dropped so the summarizer
+    isn't tripped by zero-content rows.
+
+    Shared between the /poll-replies endpoint (manual one-shot) and the
+    scheduled runner's pre-pick auto-poll so both produce identical raw
+    text on the episode record."""
+    lines: list[str] = []
+    for reply in replies:
+        text = reply.text.strip()
+        if not text:
+            continue
+        handle = (reply.author_username or "").strip().lstrip("@") or "unknown"
+        lines.append(f"@{handle}: {text}")
+    return "\n\n".join(lines)
 
 _OPENAI_CHAT_ENDPOINT = "https://api.openai.com/v1/chat/completions"
 _DEFAULT_TIMEOUT_SECONDS = 30

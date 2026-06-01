@@ -9,11 +9,13 @@ from zoneinfo import ZoneInfo
 
 from ..models import SourceItem
 from ..utils import utc_now
+from .feedback import FeedbackSummarizer, format_replies_as_feedback_text
 from .models import BroadcastEpisodeRecord, BroadcastLoopRecord
 from .publisher import DEFAULT_FEEDBACK_PROMPT, BroadcastPublisher, PublishResult
 from .repository import BroadcastRepository
 from .service import BroadcastService
 from .topic_picker import BroadcastTopicPicker
+from .x_client import XClient, XClientUnavailable, XReadFailed
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +69,22 @@ class ScheduledBroadcastRunner:
         publisher: BroadcastPublisher,
         source_item_provider: Optional[SourceItemProvider] = None,
         run_date_factory: Callable[[BroadcastLoopRecord], date] = None,
+        # Optional auto-poll deps. When both are provided, the runner
+        # fetches replies to the loop's most recent prior episode at the
+        # start of run() and writes feedback_summary back to that record
+        # before the topic_picker reads it. Either being None disables
+        # the auto-poll — the loop falls back to whatever's persisted
+        # (manual paste, prior auto-poll, or nothing).
+        x_client: Optional[XClient] = None,
+        feedback_summarizer: Optional[FeedbackSummarizer] = None,
     ) -> None:
         self._repository = repository
         self._topic_picker = topic_picker
         self._broadcast_service = broadcast_service
         self._publisher = publisher
         self._source_item_provider = source_item_provider
+        self._x_client = x_client
+        self._feedback_summarizer = feedback_summarizer
         # Default to "today" in the loop's local timezone — important
         # when Cloud Scheduler fires at 00:30 UTC for a Tokyo loop and
         # the local date is already "tomorrow".
@@ -90,6 +102,12 @@ class ScheduledBroadcastRunner:
             raise LoopNotFound(f"No broadcast loop with id={loop_id!r}")
         if not loop.active:
             raise LoopInactive(f"Loop {loop_id!r} is inactive — skipping run")
+
+        # Pull yesterday's X replies into the prior episode's feedback_summary
+        # BEFORE the topic picker reads it, so today's topic gets steered by
+        # the freshest audience signal. Fails open: any error logs + falls
+        # through to whatever's currently persisted on the prior record.
+        self._auto_poll_prior_episode(loop_id)
 
         topic, brief = self._topic_picker.pick(loop)
         logger.info(
@@ -198,6 +216,80 @@ class ScheduledBroadcastRunner:
             episode_tweet_url=post.episode_tweet_url,
             feedback_prompt_tweet_id=post.feedback_prompt_tweet_id,
             feedback_prompt_tweet_url=post.feedback_prompt_tweet_url,
+        )
+
+    def _auto_poll_prior_episode(self, loop_id: str) -> None:
+        """Fetch X replies for the loop's most recent prior episode and
+        write feedback_summary back to that record. No-op when:
+          - auto-poll deps aren't wired (x_client / summarizer = None)
+          - no prior episode exists (first run for the loop)
+          - prior episode has no episode_tweet_id (publish failed before)
+          - feedback_pasted_at is already set (operator pasted or a
+            previous run already auto-polled — idempotent)
+          - X read or summarizer errors (logged; run continues with
+            whatever's currently persisted, which may be nothing)
+        """
+        if self._x_client is None or self._feedback_summarizer is None:
+            return
+        prior = self._repository.get_latest_episode_for_loop(loop_id)
+        if prior is None:
+            logger.info(
+                "Auto-poll skipped loop_id=%s reason=no_prior_episode", loop_id
+            )
+            return
+        if not prior.episode_tweet_id:
+            logger.info(
+                "Auto-poll skipped loop_id=%s prior_episode_id=%s reason=no_tweet_id",
+                loop_id, prior.episode_id,
+            )
+            return
+        if prior.feedback_pasted_at is not None:
+            logger.info(
+                "Auto-poll skipped loop_id=%s prior_episode_id=%s reason=already_has_feedback",
+                loop_id, prior.episode_id,
+            )
+            return
+
+        try:
+            replies = self._x_client.fetch_conversation_replies(
+                conversation_id=prior.episode_tweet_id,
+            )
+        except (XClientUnavailable, XReadFailed):
+            logger.warning(
+                "Auto-poll X read failed loop_id=%s prior_episode_id=%s — continuing run",
+                loop_id, prior.episode_id, exc_info=True,
+            )
+            return
+
+        if not replies:
+            logger.info(
+                "Auto-poll found no replies loop_id=%s prior_episode_id=%s",
+                loop_id, prior.episode_id,
+            )
+            return
+
+        feedback_text = format_replies_as_feedback_text(replies)
+        try:
+            summary = self._feedback_summarizer.summarize(
+                replies_text=feedback_text, topic=prior.topic_used,
+            )
+        except Exception:
+            logger.warning(
+                "Auto-poll summarizer failed loop_id=%s prior_episode_id=%s — persisting raw only",
+                loop_id, prior.episode_id, exc_info=True,
+            )
+            summary = None
+
+        updated = prior.model_copy(update={
+            "feedback_raw": feedback_text,
+            "feedback_summary": summary,
+            "feedback_pasted_at": utc_now(),
+        })
+        self._repository.save_episode(updated)
+        logger.info(
+            "Auto-poll persisted feedback loop_id=%s prior_episode_id=%s replies=%d "
+            "summary_present=%s",
+            loop_id, prior.episode_id, len(replies), summary is not None,
         )
 
     @staticmethod
