@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass
 from datetime import date
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
+from ..models import SourceItem
 from ..utils import utc_now
 from .models import BroadcastEpisodeRecord, BroadcastLoopRecord
 from .publisher import DEFAULT_FEEDBACK_PROMPT, BroadcastPublisher, PublishResult
@@ -14,6 +16,14 @@ from .service import BroadcastService
 from .topic_picker import BroadcastTopicPicker
 
 logger = logging.getLogger(__name__)
+
+
+# Sourced items fetched per scheduled run. The provider returns recent
+# items across the loop's curated source_ids; the runner threads them
+# into the brief so the prompt builder can ground the script in actual
+# newsletter content. `None` (or a no-op provider) keeps Phase-0
+# behaviour — the LLM riffs on the topic alone.
+SourceItemProvider = Callable[[list[str]], list[SourceItem]]
 
 
 @dataclass(frozen=True)
@@ -55,12 +65,14 @@ class ScheduledBroadcastRunner:
         topic_picker: BroadcastTopicPicker,
         broadcast_service: BroadcastService,
         publisher: BroadcastPublisher,
+        source_item_provider: Optional[SourceItemProvider] = None,
         run_date_factory: Callable[[BroadcastLoopRecord], date] = None,
     ) -> None:
         self._repository = repository
         self._topic_picker = topic_picker
         self._broadcast_service = broadcast_service
         self._publisher = publisher
+        self._source_item_provider = source_item_provider
         # Default to "today" in the loop's local timezone — important
         # when Cloud Scheduler fires at 00:30 UTC for a Tokyo loop and
         # the local date is already "tomorrow".
@@ -86,6 +98,29 @@ class ScheduledBroadcastRunner:
             brief.desired_minutes,
             topic,
         )
+
+        # Ground the brief in recent items from the loop's configured
+        # source list. Fails open: any provider error is logged and we
+        # fall back to the un-grounded brief so the loop still runs.
+        if self._source_item_provider is not None and loop.source_ids:
+            try:
+                items = self._source_item_provider(loop.source_ids)
+            except Exception:
+                logger.warning(
+                    "Source item provider failed for loop_id=%s — falling back to "
+                    "un-grounded brief",
+                    loop.loop_id,
+                    exc_info=True,
+                )
+                items = []
+            if items:
+                brief = dataclasses.replace(brief, source_items=items)
+                logger.info(
+                    "Broadcast run grounded brief loop_id=%s source_items=%d",
+                    loop.loop_id,
+                    len(items),
+                )
+
         run_date = self._run_date_factory(loop)
         title = self._default_title(loop=loop, topic=topic, run_date=run_date)
 

@@ -67,6 +67,7 @@ from .inbound import (
 )
 from .legal import PRIVACY_HTML, TERMS_HTML
 from .mailer import NoopMailer, SMTPMailer
+from .models import SourceItem
 from .podcast_api import PodcastApiClient, PodcastApiUnavailable
 from .push import PushSender, build_push_sender_from_settings
 from .shared_items import MAX_UPLOAD_BYTES as SHARED_MAX_UPLOAD_BYTES, SUPPORTED_KINDS as SHARED_SUPPORTED_KINDS
@@ -232,6 +233,7 @@ class BroadcastLoopUpsertRequest(BaseModel):
     seed_topics: list[str] = []
     active: bool = True
     feedback_prompt_text: Optional[str] = None
+    source_ids: list[str] = []
 
 
 class BroadcastScheduledRunRequest(BaseModel):
@@ -662,6 +664,16 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             )
         existing = container.broadcast_repository.get_loop(loop_id)
         now = utc_now()
+        # Dedupe + trim the source_ids list while preserving submission
+        # order so the operator's intended priority survives the round-trip.
+        seen_source_ids: set[str] = set()
+        deduped_source_ids: list[str] = []
+        for raw in request_payload.source_ids:
+            cleaned = (raw or "").strip()
+            if not cleaned or cleaned in seen_source_ids:
+                continue
+            seen_source_ids.add(cleaned)
+            deduped_source_ids.append(cleaned)
         loop = BroadcastLoopRecord(
             loop_id=loop_id,
             region=request_payload.region.strip(),
@@ -671,6 +683,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             seed_topics=[t.strip() for t in request_payload.seed_topics if t.strip()],
             active=request_payload.active,
             feedback_prompt_text=request_payload.feedback_prompt_text,
+            source_ids=deduped_source_ids,
             created_at=(existing.created_at if existing else now),
             updated_at=now,
         )
@@ -1886,6 +1899,7 @@ def _build_scheduled_runner(container: ServiceContainer, static_dir: Path) -> Sc
     assert container.podcast_client is not None
     assert container.x_client is not None
     assert container.broadcast_repository is not None
+    assert container.control_repository is not None
 
     broadcast_settings = BroadcastSettings(
         app_base_url=container.settings.app_base_url,
@@ -1902,11 +1916,41 @@ def _build_scheduled_runner(container: ServiceContainer, static_dir: Path) -> Sc
     )
     publisher = BroadcastPublisher(storage=container.storage, x_client=container.x_client)
     topic_picker = _build_topic_picker(container.settings, container.broadcast_repository)
+
+    # Bound the per-loop grounding fetch. Lookback covers a usual week of
+    # newsletters; the cap stops a 90-source loop from pulling thousands
+    # of items before the prompt builder dedupes per source.
+    control_repository = container.control_repository
+    def _source_item_provider(source_ids: list[str]) -> list[SourceItem]:
+        if not source_ids:
+            return []
+        records = control_repository.list_recent_source_items_for_sources(
+            source_ids=source_ids,
+            lookback_days=7,
+            limit=150,
+        )
+        # SourceItemRecord -> SourceItem so the broadcast pipeline only
+        # depends on the lightweight read-only model.
+        return [
+            SourceItem(
+                source_id=r.source_id,
+                source_name=r.source_name,
+                guid=r.guid,
+                link=r.link,
+                title=r.title,
+                summary=r.summary,
+                published_at=r.published_at,
+                dedupe_key=r.dedupe_key,
+            )
+            for r in records
+        ]
+
     return ScheduledBroadcastRunner(
         repository=container.broadcast_repository,
         topic_picker=topic_picker,
         broadcast_service=service,
         publisher=publisher,
+        source_item_provider=_source_item_provider,
     )
 
 
