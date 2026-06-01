@@ -343,6 +343,13 @@ class Settings(BaseSettings):
     x_api_secret: Optional[str] = Field(default=None, alias="X_API_SECRET")
     x_access_token: Optional[str] = Field(default=None, alias="X_ACCESS_TOKEN")
     x_access_token_secret: Optional[str] = Field(default=None, alias="X_ACCESS_TOKEN_SECRET")
+    # The X handle the broadcast loop posts as. Used by the reply reader
+    # to exclude our own posts (the feedback-prompt reply we auto-post)
+    # from conversation_id search results. Strip the leading "@" if
+    # present in env. Leaving this unset disables self-filtering — the
+    # raw search results still flow through, just including our own
+    # feedback-prompt reply in the LLM-summarizer input.
+    broadcast_x_username: Optional[str] = Field(default=None, alias="BROADCAST_X_USERNAME")
 
     # Phase 2 broadcast-loop LLM model. Used by both the topic picker
     # (proposes tomorrow's topic from yesterday's feedback summary +

@@ -50,7 +50,13 @@ from .broadcast.runner import (
 from .broadcast.service import BroadcastService, BroadcastSettings
 from .broadcast.topic_picker import BroadcastTopicPicker, OpenAITopicProposer
 from .broadcast.video import FfmpegFailed, FfmpegUnavailable
-from .broadcast.x_client import XClient, XClientUnavailable, XPostFailed
+from .broadcast.x_client import (
+    ReplyItem,
+    XClient,
+    XClientUnavailable,
+    XPostFailed,
+    XReadFailed,
+)
 from .config import Settings, load_voices
 from .admin_metrics import (
     AdminMetricsService,
@@ -833,10 +839,10 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         authorization: str | None = Header(default=None),
         x_job_trigger_token: str | None = Header(default=None),
     ) -> dict:
-        """Operator-pasted feedback. Until we upgrade to API Basic and
-        can read replies automatically, the daily routine is: open the
-        episode tweet, copy the replies, POST them here. We LLM-condense
-        them into a brief that tomorrow's run reads."""
+        """Operator-pasted feedback. Kept alongside the auto-poll path
+        (POST .../poll-replies) as the manual fallback — when the X read
+        endpoint is rate-limited, out of credits, or the operator wants
+        to hand-edit the raw text before summarization."""
         _validate_job_auth(container.settings, authorization, x_job_trigger_token)
         assert container.broadcast_repository is not None
 
@@ -875,6 +881,88 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         container.broadcast_repository.save_episode(updated)
         return {
             "episode_id": episode_id,
+            "feedback_summary": summary,
+            "feedback_summary_status": (
+                "summarized" if summary
+                else ("summarizer_unavailable" if summarizer is None else "no_useful_content")
+            ),
+        }
+
+    @app.post("/jobs/broadcast/episodes/{episode_id}/poll-replies")
+    def broadcast_episode_poll_replies(
+        episode_id: str,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Automated counterpart to the paste-feedback path: hit X's
+        /2/tweets/search/recent for replies in the episode tweet's
+        conversation, join them into the same multi-line shape the
+        summarizer expects, and persist feedback_raw / feedback_summary
+        / feedback_pasted_at exactly like a manual paste. Intended to be
+        called by Cloud Scheduler shortly before the next loop run, so
+        tomorrow's topic-picker reads a fresh signal."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.broadcast_repository is not None
+        assert container.x_client is not None
+
+        episode_id = (episode_id or "").strip().lower()
+        if not EPISODE_ID_RE.fullmatch(episode_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="episode_id must be 16 hex characters",
+            )
+        episode = container.broadcast_repository.get_episode(episode_id)
+        if episode is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No broadcast episode with id={episode_id!r}",
+            )
+        if not episode.episode_tweet_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Episode has no episode_tweet_id — nothing to poll replies against",
+            )
+
+        try:
+            replies = container.x_client.fetch_conversation_replies(
+                conversation_id=episode.episode_tweet_id,
+            )
+        except XClientUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            )
+        except XReadFailed as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"X reply search failed: {exc}",
+            )
+
+        if not replies:
+            return {
+                "episode_id": episode_id,
+                "replies_count": 0,
+                "feedback_summary": episode.feedback_summary,
+                "feedback_summary_status": "no_replies",
+            }
+
+        feedback_text = _format_replies_as_feedback_text(replies)
+        summarizer = _build_feedback_summarizer(container.settings)
+        summary = None
+        if summarizer is not None:
+            summary = summarizer.summarize(
+                replies_text=feedback_text, topic=episode.topic_used
+            )
+
+        updated = episode.model_copy(update={
+            "feedback_raw": feedback_text,
+            "feedback_summary": summary,
+            "feedback_pasted_at": utc_now(),
+        })
+        container.broadcast_repository.save_episode(updated)
+        return {
+            "episode_id": episode_id,
+            "replies_count": len(replies),
             "feedback_summary": summary,
             "feedback_summary_status": (
                 "summarized" if summary
@@ -1704,6 +1792,7 @@ def _build_container(settings: Settings) -> ServiceContainer:
         api_secret=settings.x_api_secret,
         access_token=settings.x_access_token,
         access_token_secret=settings.x_access_token_secret,
+        username=settings.broadcast_x_username,
     )
 
     if settings.use_inmemory_adapters:
@@ -1916,6 +2005,21 @@ def _build_feedback_summarizer(settings: Settings):
         api_key=settings.podcast_api_key,
         model=settings.broadcast_llm_model,
     )
+
+
+def _format_replies_as_feedback_text(replies: list[ReplyItem]) -> str:
+    """Render fetched X replies in the multi-line shape the feedback
+    summarizer prompt is designed for — one '@handle: text' block per
+    reply, blank line between. Empty reply bodies are dropped so the
+    summarizer doesn't get tripped by zero-content rows."""
+    lines: list[str] = []
+    for reply in replies:
+        text = reply.text.strip()
+        if not text:
+            continue
+        handle = (reply.author_username or "").strip().lstrip("@") or "unknown"
+        lines.append(f"@{handle}: {text}")
+    return "\n\n".join(lines)
 
 
 def _build_scheduled_runner(container: ServiceContainer, static_dir: Path) -> ScheduledBroadcastRunner:

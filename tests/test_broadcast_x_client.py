@@ -6,11 +6,15 @@ from typing import Optional
 import pytest
 import tweepy
 
+from datetime import datetime, timezone
+
 from newsletter_pod.broadcast.x_client import (
     TWEET_TEXT_MAX_CHARS,
+    ReplyItem,
     XClient,
     XClientUnavailable,
     XPostFailed,
+    XReadFailed,
 )
 
 
@@ -72,7 +76,13 @@ class _FakePoster:
         return _FakeTweetResponse(data={"id": self.tweet_id})
 
 
-def _client(uploader=None, poster=None, configured: bool = True, username: str = "theclawcast") -> XClient:
+def _client(
+    uploader=None,
+    poster=None,
+    searcher=None,
+    configured: bool = True,
+    username: Optional[str] = "theclawcast",
+) -> XClient:
     if configured:
         creds = {"api_key": "k", "api_secret": "s", "access_token": "t", "access_token_secret": "ts"}
     else:
@@ -81,8 +91,67 @@ def _client(uploader=None, poster=None, configured: bool = True, username: str =
         username=username,
         media_uploader=uploader,
         tweet_poster=poster,
+        tweet_searcher=searcher,
         **creds,
     )
+
+
+@dataclass
+class _FakeUser:
+    id: str
+    username: str
+
+
+@dataclass
+class _FakeTweet:
+    id: str
+    text: str
+    author_id: str
+    created_at: Optional[datetime] = None
+
+
+@dataclass
+class _FakeSearchResponse:
+    data: list
+    includes: dict
+
+
+class _FakeSearcher:
+    def __init__(
+        self,
+        *,
+        data: Optional[list] = None,
+        users: Optional[list] = None,
+        raise_on_search: bool = False,
+    ) -> None:
+        self.data = data or []
+        self.users = users or []
+        self.raise_on_search = raise_on_search
+        self.calls: list[dict] = []
+
+    def search_recent_tweets(
+        self,
+        query: str,
+        *,
+        max_results: int,
+        tweet_fields: list,
+        expansions: list,
+        user_fields: list,
+        user_auth: bool,
+    ):
+        self.calls.append(
+            {
+                "query": query,
+                "max_results": max_results,
+                "tweet_fields": tweet_fields,
+                "expansions": expansions,
+                "user_fields": user_fields,
+                "user_auth": user_auth,
+            }
+        )
+        if self.raise_on_search:
+            raise tweepy.TweepyException("search boom")
+        return _FakeSearchResponse(data=self.data, includes={"users": self.users})
 
 
 def test_is_configured_false_when_any_credential_missing():
@@ -185,3 +254,133 @@ def test_tweet_url_falls_back_to_anonymous_handle_when_username_unset():
     result = client.post_reply(text="hi", in_reply_to_tweet_id="1")
     # tweepy convention: x.com/i/status/<id> works without a handle
     assert result.tweet_url == "https://x.com/i/status/7"
+
+
+def test_fetch_conversation_replies_requires_full_credentials():
+    client = _client(configured=False, searcher=_FakeSearcher())
+    with pytest.raises(XClientUnavailable):
+        client.fetch_conversation_replies(conversation_id="12345")
+
+
+def test_fetch_conversation_replies_rejects_empty_conversation_id():
+    client = _client(searcher=_FakeSearcher())
+    with pytest.raises(ValueError):
+        client.fetch_conversation_replies(conversation_id=" ")
+
+
+def test_fetch_conversation_replies_excludes_our_own_handle_when_configured():
+    # When username is set, the query must filter our own posts out so the
+    # auto-posted feedback-prompt reply doesn't pollute audience signal.
+    searcher = _FakeSearcher()
+    client = _client(searcher=searcher, username="theclawcast_")
+
+    client.fetch_conversation_replies(conversation_id="42")
+
+    assert searcher.calls[-1]["query"] == "conversation_id:42 -from:theclawcast_"
+    assert searcher.calls[-1]["user_auth"] is True
+
+
+def test_fetch_conversation_replies_omits_from_filter_when_username_unset():
+    searcher = _FakeSearcher()
+    client = _client(searcher=searcher, username=None)
+
+    client.fetch_conversation_replies(conversation_id="42")
+
+    assert searcher.calls[-1]["query"] == "conversation_id:42"
+
+
+def test_fetch_conversation_replies_caps_max_results():
+    # X requires 10..100; we floor/ceil so a caller passing 5 or 250
+    # doesn't hit a TweepyException on validation.
+    searcher = _FakeSearcher()
+    client = _client(searcher=searcher)
+
+    client.fetch_conversation_replies(conversation_id="42", max_results=5)
+    assert searcher.calls[-1]["max_results"] == 10
+
+    client.fetch_conversation_replies(conversation_id="42", max_results=250)
+    assert searcher.calls[-1]["max_results"] == 100
+
+
+def test_fetch_conversation_replies_returns_chronological_replyitems():
+    # Recent-search returns newest first; we reverse to chronological so
+    # the summarizer reads the conversation as it actually happened.
+    t1 = datetime(2026, 6, 1, 13, 45, tzinfo=timezone.utc)
+    t2 = datetime(2026, 6, 1, 19, 32, tzinfo=timezone.utc)
+    t3 = datetime(2026, 6, 1, 19, 33, tzinfo=timezone.utc)
+    searcher = _FakeSearcher(
+        data=[
+            _FakeTweet(id="3", text="@theclawcast_ Opus 4.8", author_id="u1", created_at=t3),
+            _FakeTweet(id="2", text="@theclawcast_ Claude and Opus 4.8", author_id="u1", created_at=t2),
+            _FakeTweet(id="1", text="@theclawcast_ Salami betting link", author_id="u2", created_at=t1),
+        ],
+        users=[
+            _FakeUser(id="u1", username="VincentMar97260"),
+            _FakeUser(id="u2", username="Salamipace"),
+        ],
+    )
+    client = _client(searcher=searcher)
+
+    replies = client.fetch_conversation_replies(conversation_id="42")
+
+    assert [r.tweet_id for r in replies] == ["1", "2", "3"]
+    assert [r.author_username for r in replies] == ["Salamipace", "VincentMar97260", "VincentMar97260"]
+    assert replies[-1].text.endswith("Opus 4.8")
+    assert replies[-1].created_at == t3
+    assert all(isinstance(r, ReplyItem) for r in replies)
+
+
+def test_fetch_conversation_replies_drops_empty_text_rows():
+    searcher = _FakeSearcher(
+        data=[
+            _FakeTweet(id="1", text="", author_id="u1"),
+            _FakeTweet(id="2", text="something real", author_id="u1"),
+        ],
+        users=[_FakeUser(id="u1", username="someone")],
+    )
+    client = _client(searcher=searcher)
+
+    replies = client.fetch_conversation_replies(conversation_id="42")
+
+    assert [r.tweet_id for r in replies] == ["2"]
+
+
+def test_fetch_conversation_replies_falls_back_to_author_id_when_user_not_in_includes():
+    searcher = _FakeSearcher(
+        data=[_FakeTweet(id="1", text="hi", author_id="u-unknown")],
+        users=[],  # includes.users missing — happens when X omits the expansion
+    )
+    client = _client(searcher=searcher)
+
+    replies = client.fetch_conversation_replies(conversation_id="42")
+
+    assert replies[0].author_username == "u-unknown"
+
+
+def test_fetch_conversation_replies_wraps_tweepy_error_as_xreadfailed():
+    searcher = _FakeSearcher(raise_on_search=True)
+    client = _client(searcher=searcher)
+
+    with pytest.raises(XReadFailed) as excinfo:
+        client.fetch_conversation_replies(conversation_id="42")
+    assert "search" in str(excinfo.value).lower()
+
+
+def test_fetch_conversation_replies_handles_dict_shapes():
+    # Real tweepy returns objects with attributes; tests sometimes pass
+    # plain dicts. Both shapes should parse — same belt-and-suspenders
+    # pattern _extract_tweet_id uses on the write path.
+    response = _FakeSearchResponse(
+        data=[{"id": "9", "text": "yo", "author_id": "u1"}],
+        includes={"users": [{"id": "u1", "username": "alice"}]},
+    )
+
+    class _DictReturningSearcher:
+        def search_recent_tweets(self, query, *, max_results, tweet_fields,
+                                 expansions, user_fields, user_auth):
+            return response
+
+    client = _client(searcher=_DictReturningSearcher())
+    replies = client.fetch_conversation_replies(conversation_id="42")
+
+    assert replies == [ReplyItem(tweet_id="9", author_username="alice", text="yo", created_at=None)]

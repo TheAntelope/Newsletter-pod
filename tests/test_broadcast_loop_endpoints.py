@@ -6,11 +6,16 @@ from fastapi.testclient import TestClient
 
 from newsletter_pod.broadcast.models import BroadcastEpisodeRecord
 from newsletter_pod.broadcast.repository import InMemoryBroadcastRepository
+from newsletter_pod.broadcast.x_client import (
+    ReplyItem,
+    XClientUnavailable,
+    XReadFailed,
+)
 from newsletter_pod.config import Settings
 from newsletter_pod.main import _build_container, create_app
 
 
-def _build_client() -> tuple[TestClient, InMemoryBroadcastRepository]:
+def _build_client(x_client_override=None) -> tuple[TestClient, InMemoryBroadcastRepository]:
     settings = Settings.from_env()
     settings.use_inmemory_adapters = True
     settings.session_signing_secret = "test-session-secret-32-bytes-long"
@@ -19,6 +24,8 @@ def _build_client() -> tuple[TestClient, InMemoryBroadcastRepository]:
     settings.app_base_url = "http://testserver"
     settings.publish_summary_email_enabled = False
     container = _build_container(settings)
+    if x_client_override is not None:
+        container.x_client = x_client_override
     client = TestClient(create_app(container=container))
     assert isinstance(container.broadcast_repository, InMemoryBroadcastRepository)
     return client, container.broadcast_repository
@@ -146,6 +153,133 @@ def test_paste_feedback_rejects_malformed_episode_id():
         "/jobs/broadcast/episodes/not-hex/feedback",
         json={"feedback_text": "x"},
     )
+    assert resp.status_code == 400
+
+
+# ---- /poll-replies endpoint ----------------------------------------------
+
+
+class _FakeXClient:
+    """Stand-in for XClient when exercising the poll-replies endpoint.
+    Only implements fetch_conversation_replies — that's all the endpoint
+    touches. raise_with overrides return when set."""
+
+    def __init__(self, *, replies=None, raise_with=None) -> None:
+        self.replies = replies or []
+        self.raise_with = raise_with
+        self.calls: list[dict] = []
+
+    def fetch_conversation_replies(self, *, conversation_id, max_results=100):
+        self.calls.append({"conversation_id": conversation_id, "max_results": max_results})
+        if self.raise_with is not None:
+            raise self.raise_with
+        return list(self.replies)
+
+
+def _seed_episode(repo, *, episode_id="deadbeefdeadbeef", episode_tweet_id="999"):
+    repo.save_episode(BroadcastEpisodeRecord(
+        episode_id=episode_id,
+        loop_id="us-morning",
+        run_date=datetime(2026, 5, 30).date(),
+        topic_used="Why OpenAI is the new Salesforce",
+        title="t",
+        show_notes="n",
+        audio_object_name=f"broadcast/{episode_id}.mp3",
+        video_object_name=f"broadcast/{episode_id}.mp4",
+        episode_tweet_id=episode_tweet_id,
+        episode_tweet_url=f"https://x.com/i/status/{episode_tweet_id}",
+        created_at=datetime(2026, 5, 30, tzinfo=timezone.utc),
+    ))
+
+
+def test_poll_replies_writes_handle_prefixed_feedback_text_and_returns_count():
+    # Replies should be persisted in the multi-line "@handle: text" shape
+    # the summarizer is designed for, and the returned status mirrors the
+    # paste-feedback endpoint (summarizer_unavailable when no key set).
+    xclient = _FakeXClient(replies=[
+        ReplyItem(tweet_id="1", author_username="Salamipace", text="@theclawcast_ Salami link"),
+        ReplyItem(tweet_id="2", author_username="VincentMar97260", text="@theclawcast_ Opus 4.8"),
+    ])
+    client, repo = _build_client(x_client_override=xclient)
+    _seed_episode(repo, episode_tweet_id="2061350166011986039")
+
+    resp = client.post("/jobs/broadcast/episodes/deadbeefdeadbeef/poll-replies")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["replies_count"] == 2
+    assert body["feedback_summary_status"] == "summarizer_unavailable"
+    assert xclient.calls[-1]["conversation_id"] == "2061350166011986039"
+    updated = repo.get_episode("deadbeefdeadbeef")
+    assert updated.feedback_raw == (
+        "@Salamipace: @theclawcast_ Salami link\n\n"
+        "@VincentMar97260: @theclawcast_ Opus 4.8"
+    )
+    assert updated.feedback_pasted_at is not None
+
+
+def test_poll_replies_returns_no_replies_without_writing_when_search_empty():
+    # Empty search result must NOT clobber an existing feedback_summary —
+    # the run that came before may have produced a useful one.
+    xclient = _FakeXClient(replies=[])
+    client, repo = _build_client(x_client_override=xclient)
+    _seed_episode(repo)
+    existing = repo.get_episode("deadbeefdeadbeef").model_copy(update={
+        "feedback_summary": "previous run signal",
+    })
+    repo.save_episode(existing)
+
+    resp = client.post("/jobs/broadcast/episodes/deadbeefdeadbeef/poll-replies")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["replies_count"] == 0
+    assert body["feedback_summary_status"] == "no_replies"
+    # Untouched.
+    assert repo.get_episode("deadbeefdeadbeef").feedback_summary == "previous run signal"
+    assert repo.get_episode("deadbeefdeadbeef").feedback_raw is None
+
+
+def test_poll_replies_409_when_episode_has_no_tweet_id():
+    xclient = _FakeXClient()
+    client, repo = _build_client(x_client_override=xclient)
+    _seed_episode(repo, episode_tweet_id=None)
+
+    resp = client.post("/jobs/broadcast/episodes/deadbeefdeadbeef/poll-replies")
+
+    assert resp.status_code == 409
+    assert xclient.calls == []  # short-circuited before hitting X
+
+
+def test_poll_replies_503_when_x_client_unconfigured():
+    xclient = _FakeXClient(raise_with=XClientUnavailable("creds missing"))
+    client, repo = _build_client(x_client_override=xclient)
+    _seed_episode(repo)
+
+    resp = client.post("/jobs/broadcast/episodes/deadbeefdeadbeef/poll-replies")
+
+    assert resp.status_code == 503
+
+
+def test_poll_replies_502_when_search_errors():
+    xclient = _FakeXClient(raise_with=XReadFailed("rate limited"))
+    client, repo = _build_client(x_client_override=xclient)
+    _seed_episode(repo)
+
+    resp = client.post("/jobs/broadcast/episodes/deadbeefdeadbeef/poll-replies")
+
+    assert resp.status_code == 502
+
+
+def test_poll_replies_404_for_unknown_episode():
+    client, _ = _build_client(x_client_override=_FakeXClient())
+    resp = client.post("/jobs/broadcast/episodes/deadbeefdeadbeef/poll-replies")
+    assert resp.status_code == 404
+
+
+def test_poll_replies_400_for_malformed_episode_id():
+    client, _ = _build_client(x_client_override=_FakeXClient())
+    resp = client.post("/jobs/broadcast/episodes/not-hex/poll-replies")
     assert resp.status_code == 400
 
 
