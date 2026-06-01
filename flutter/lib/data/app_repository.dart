@@ -13,4 +13,14 @@ abstract interface class AppRepository {
   Future<NextEpisodeQueueEnvelope> fetchNextEpisodeQueue();
   Future<void> pinNextEpisodeItem(String dedupeKey);
   Future<void> excludeNextEpisodeItem(String dedupeKey);
+
+  Future<PodcastConfigEnvelope> fetchPodcastConfig();
+  Future<PodcastConfigEnvelope> updatePodcastConfig(PodcastProfileDto profile);
+  Future<ScheduleEnvelope> fetchSchedule();
+  Future<ScheduleEnvelope> updateSchedule({
+    required String timezone,
+    required List<String> weekdays,
+    String? localTime,
+  });
+  Future<VoiceCatalogEnvelope> fetchVoiceCatalog();
 }

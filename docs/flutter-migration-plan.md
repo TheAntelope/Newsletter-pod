@@ -261,9 +261,9 @@ _(Update as work proceeds.)_
     `FakeAppRepository` (in-memory demo data, used now + in tests) and `ApiAppRepository`
     (wraps `ApiClient`). First flow shipped: `SignInScreen` (stubbed) → `HomeScreen` dashboard
     (greeting + plan/schedule cards + Generate now) via `RootView`. Widget test covers it.
-  - **Built so far (committed):** sign-in stub, tabbed shell (Today / Sources / Library),
-    dashboard, Sources + Library list screens, and the next-episode queue (pushed from Today,
-    with optimistic pin/exclude). Navigable, themed, 17 tests green.
-  - **Remaining screens:** Substack add (discover/probe), podcast setup + schedule editor,
-    paywall, 8-step onboarding wizard, swipe deck. Then real auth/billing/push once the user
-    creates Firebase / RevenueCat / Google Play.
+  - **Built so far (committed):** sign-in stub; tabbed shell (Today / Sources / Library);
+    dashboard; Sources + Library list screens; next-episode queue (pushed from Today, optimistic
+    pin/exclude); podcast setup + schedule editor (title/hosts/length/voice/weekday/time → save
+    via updatePodcastConfig + updateSchedule). Navigable, themed, 18 tests green.
+  - **Remaining screens:** Substack add (discover/probe), paywall, 8-step onboarding wizard,
+    swipe deck. Then real auth/billing/push once the user creates Firebase / RevenueCat / Play.

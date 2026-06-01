@@ -15,20 +15,8 @@ class FakeAppRepository implements AppRepository {
         timezone: 'Europe/Copenhagen',
         inboundAddress: 'demo@theclawcast.com',
       ),
-      profile: PodcastProfileDto(
-        title: 'ClawCast',
-        formatPreset: 'two_hosts',
-        hostPrimaryName: 'Vinnie',
-        hostSecondaryName: 'Demi',
-        guestNames: const [],
-        desiredDurationMinutes: 5,
-      ),
-      schedule: DeliveryScheduleDto(
-        timezone: 'Europe/Copenhagen',
-        weekdays: const ['mon', 'tue', 'wed', 'thu', 'fri'],
-        localTime: '07:00',
-        cutoffTime: '23:00',
-      ),
+      profile: _demoProfile(),
+      schedule: _demoSchedule(),
       subscription: SubscriptionDto(
         userId: 'demo-user',
         tier: 'free',
@@ -176,6 +164,90 @@ class FakeAppRepository implements AppRepository {
   Future<void> excludeNextEpisodeItem(String dedupeKey) async {
     await Future<void>.delayed(const Duration(milliseconds: 80));
   }
+
+  @override
+  Future<PodcastConfigEnvelope> fetchPodcastConfig() async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    return PodcastConfigEnvelope(
+      profile: _demoProfile(),
+      entitlements: _demoEntitlements(),
+    );
+  }
+
+  @override
+  Future<PodcastConfigEnvelope> updatePodcastConfig(
+      PodcastProfileDto profile) async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    return PodcastConfigEnvelope(
+      profile: profile,
+      entitlements: _demoEntitlements(),
+    );
+  }
+
+  @override
+  Future<ScheduleEnvelope> fetchSchedule() async {
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    return ScheduleEnvelope(
+      schedule: _demoSchedule(),
+      entitlements: _demoEntitlements(),
+    );
+  }
+
+  @override
+  Future<ScheduleEnvelope> updateSchedule({
+    required String timezone,
+    required List<String> weekdays,
+    String? localTime,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    return ScheduleEnvelope(
+      schedule: DeliveryScheduleDto(
+        timezone: timezone,
+        weekdays: weekdays,
+        localTime: localTime ?? '07:00',
+        cutoffTime: '23:00',
+      ),
+      entitlements: _demoEntitlements(),
+    );
+  }
+
+  @override
+  Future<VoiceCatalogEnvelope> fetchVoiceCatalog() async {
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    return VoiceCatalogEnvelope(
+      voices: [
+        CatalogVoiceDto(
+          id: 'vinnie',
+          name: 'Vinnie Chase',
+          gender: 'male',
+          description: 'Warm, conversational anchor.',
+        ),
+        CatalogVoiceDto(
+          id: 'demi',
+          name: 'Demi Dreams',
+          gender: 'female',
+          description: 'Bright, energetic co-host.',
+        ),
+      ],
+    );
+  }
+
+  PodcastProfileDto _demoProfile() => PodcastProfileDto(
+        title: 'ClawCast',
+        formatPreset: 'two_hosts',
+        hostPrimaryName: 'Vinnie',
+        hostSecondaryName: 'Demi',
+        guestNames: const [],
+        desiredDurationMinutes: 5,
+        voiceId: 'vinnie',
+      );
+
+  DeliveryScheduleDto _demoSchedule() => DeliveryScheduleDto(
+        timezone: 'Europe/Copenhagen',
+        weekdays: const ['mon', 'tue', 'wed', 'thu', 'fri'],
+        localTime: '07:00',
+        cutoffTime: '23:00',
+      );
 
   EntitlementsDto _demoEntitlements() => EntitlementsDto(
         tier: 'free',

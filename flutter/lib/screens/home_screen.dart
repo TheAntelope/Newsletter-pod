@@ -4,6 +4,7 @@ import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
 import 'next_episode_queue_screen.dart';
+import 'podcast_setup_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -17,6 +18,13 @@ class HomeScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Today'),
         actions: [
+          IconButton(
+            tooltip: 'Podcast & schedule',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const PodcastSetupScreen()),
+            ),
+            icon: const Icon(Icons.tune),
+          ),
           IconButton(
             tooltip: 'Sign out',
             onPressed: app.signOut,

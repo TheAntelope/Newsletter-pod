@@ -32,4 +32,51 @@ class ApiAppRepository implements AppRepository {
   @override
   Future<void> excludeNextEpisodeItem(String dedupeKey) =>
       _client.excludeNextEpisodeItem(_token, dedupeKey);
+
+  @override
+  Future<PodcastConfigEnvelope> fetchPodcastConfig() =>
+      _client.fetchPodcastConfig(_token);
+
+  @override
+  Future<PodcastConfigEnvelope> updatePodcastConfig(PodcastProfileDto p) =>
+      _client.updatePodcastConfig(
+        _token,
+        title: p.title,
+        formatPreset: p.formatPreset,
+        hostPrimaryName: p.hostPrimaryName,
+        hostSecondaryName: p.hostSecondaryName,
+        guestNames: p.guestNames,
+        desiredDurationMinutes: p.desiredDurationMinutes,
+        voiceId: p.voiceId,
+        secondaryVoiceId: p.secondaryVoiceId,
+        tone: p.tone,
+        keyFindingsCount: p.keyFindingsCount,
+        humorStyle: p.humorStyle,
+        personalizedGreeting: p.personalizedGreeting,
+        includeTopTakeaways: p.includeTopTakeaways,
+        includeWeather: p.includeWeather,
+        weatherLocation: p.weatherLocation,
+        customGuidance: p.customGuidance,
+        customGuidancePresetId: p.customGuidancePresetId,
+      );
+
+  @override
+  Future<ScheduleEnvelope> fetchSchedule() => _client.fetchSchedule(_token);
+
+  @override
+  Future<ScheduleEnvelope> updateSchedule({
+    required String timezone,
+    required List<String> weekdays,
+    String? localTime,
+  }) =>
+      _client.updateSchedule(
+        _token,
+        timezone: timezone,
+        weekdays: weekdays,
+        localTime: localTime,
+      );
+
+  @override
+  Future<VoiceCatalogEnvelope> fetchVoiceCatalog() =>
+      _client.fetchVoiceCatalog();
 }

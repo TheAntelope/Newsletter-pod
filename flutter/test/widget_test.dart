@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:app/data/fake_app_repository.dart';
@@ -75,5 +76,29 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Pinned'), findsNWidgets(2));
+  });
+
+  testWidgets('podcast setup loads, edits length, and saves', (tester) async {
+    // Tall viewport so the whole form (incl. Save) fits without scrolling.
+    tester.view.physicalSize = const Size(1000, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await _signIn(tester);
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Podcast & schedule'), findsOneWidget); // app bar title
+    expect(find.text('5 min'), findsOneWidget);
+
+    // Decrement the length (5 -> 4; min is 3).
+    await tester.tap(find.byIcon(Icons.remove));
+    await tester.pumpAndSettle();
+    expect(find.text('4 min'), findsOneWidget);
+
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(find.text('Saved'), findsOneWidget);
   });
 }
