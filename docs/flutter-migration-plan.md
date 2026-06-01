@@ -249,6 +249,13 @@ _(Update as work proceeds.)_
     staleness check stays green). Copied to `flutter/lib/design_tokens.dart`.
   - **Theme:** `flutter/lib/theme.dart` (editorial palette/type/spacing over the generated
     tokens, mirroring `Theme.swift`); themed app shell renders; widget test green.
-  - **Next:** port `APIModels.swift` DTOs + the 35-endpoint `APIClient.swift` to Dart; build
-    screens (dashboard, sources, onboarding, paywall, swipe deck, …). Auth/billing/push
-    stubbed until the user creates Firebase / RevenueCat / Google Play accounts.
+  - **API layer ported (committed):** `lib/api/models.dart` — all ~30 DTOs/envelopes via
+    `json_serializable` (FieldRename.snake, tolerant defaults, display helpers; 10 round-trip
+    tests). `lib/api/api_client.dart` — all 35 endpoints + `signInWithFirebase`, Bearer auth,
+    `{detail}` error mapping (`MockClient` tests). `lib/api/responses.dart` for the client ack
+    types; `lib/config.dart` holds the Cloud Run base URL (overridable via `--dart-define`).
+    `flutter analyze` clean, all tests green.
+  - **Next:** build screens (dashboard, sources, Substack add, podcast setup + schedule,
+    paywall, 8-step onboarding, library, swipe deck, next-episode queue) against the theme,
+    over a stubbable data layer. Auth/billing/push wired once the user creates Firebase /
+    RevenueCat / Google Play accounts.

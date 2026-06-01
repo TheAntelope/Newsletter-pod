@@ -23,6 +23,9 @@ linter:
   rules:
     # avoid_print: false  # Uncomment to disable the `avoid_print` rule
     # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
+    # The explicit collection-if form `if (x != null) 'key': x` reads more clearly
+    # than the terse `'key': ?x` null-aware element in our request-body builders.
+    use_null_aware_elements: false
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options
