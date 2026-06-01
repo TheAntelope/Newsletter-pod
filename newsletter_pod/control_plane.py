@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import feedparser
 import requests
 
-from .auth import AppleIdentityVerifier, SessionManager
+from .auth import AppleIdentityVerifier, FirebaseIdentityVerifier, SessionManager
 from .app_store_verifier import (
     AppStoreNotificationVerifier,
     AppStoreVerificationError,
@@ -247,6 +247,7 @@ class ControlPlaneService:
     card_summarizer: Optional[CardSummarizer] = None
     substack_discovery: Optional[SubstackDiscoveryService] = None
     app_store_verifier: Optional[AppStoreNotificationVerifier] = None
+    firebase_identity_verifier: Optional[FirebaseIdentityVerifier] = None
 
     def __post_init__(self) -> None:
         self._catalog = {source.id: source for source in load_sources(self.settings.sources_file)}
@@ -275,14 +276,39 @@ class ControlPlaneService:
         given_name: Optional[str] = None,
     ) -> dict[str, Any]:
         identity = self.apple_identity_verifier.verify(identity_token)
+        # Apple lookup kept untouched (rollback-safe); it also resolves rows
+        # created before the neutral-identity fields existed.
         existing_user = self.repository.get_user_by_apple_subject(identity.subject)
         is_new = existing_user is None
-        user = existing_user or self._create_default_user(
-            identity.subject, identity.email, given_name=given_name
-        )
         if existing_user is None:
+            user = self._create_default_user(
+                identity.subject, identity.email, given_name=given_name, provider="apple"
+            )
             self._persist_default_records(user)
+        else:
+            user = self._backfill_identity(existing_user, "apple", identity.subject)
+        return self._complete_sign_in(user, is_new)
 
+    def authenticate_with_firebase(
+        self,
+        id_token: str,
+        given_name: Optional[str] = None,
+    ) -> dict[str, Any]:
+        if self.firebase_identity_verifier is None:
+            raise ControlPlaneError("Firebase auth is not configured")
+        identity = self.firebase_identity_verifier.verify(id_token)
+        existing_user = self.repository.get_user_by_identity("firebase", identity.subject)
+        is_new = existing_user is None
+        if existing_user is None:
+            user = self._create_default_user(
+                identity.subject, identity.email, given_name=given_name, provider="firebase"
+            )
+            self._persist_default_records(user)
+        else:
+            user = existing_user
+        return self._complete_sign_in(user, is_new)
+
+    def _complete_sign_in(self, user: UserRecord, is_new: bool) -> dict[str, Any]:
         ensure_user_inbound_alias(self.repository, user)
         token, session = self.session_manager.issue(user.id)
         log_event(EventName.SIGN_IN, user.id, is_new_user=is_new)
@@ -293,6 +319,19 @@ class ControlPlaneService:
             "user": self._user_payload(user),
             "subscription": self._get_subscription(user.id).model_dump(mode="json"),
         }
+
+    def _backfill_identity(self, user: UserRecord, provider: str, subject: str) -> UserRecord:
+        # Self-healing migration: stamp the neutral identity pair on existing Apple
+        # users so get_user_by_identity resolves them directly on the next sign-in.
+        if user.identity_provider and user.provider_subject:
+            return user
+        updated = user.model_copy(update={
+            "identity_provider": user.identity_provider or provider,
+            "provider_subject": user.provider_subject or subject,
+            "updated_at": utc_now(),
+        })
+        self.repository.save_user(updated)
+        return updated
 
     def get_authenticated_user(self, session_token: str) -> UserRecord:
         session = self.session_manager.verify(session_token)
@@ -2399,13 +2438,17 @@ class ControlPlaneService:
         subject: str,
         email: Optional[str],
         given_name: Optional[str] = None,
+        *,
+        provider: str = "apple",
     ) -> UserRecord:
         now = utc_now()
         cleaned_given = (given_name or "").strip()
         display_name = cleaned_given or "Listener"
         return UserRecord(
             id=uuid4().hex,
-            apple_subject=subject,
+            apple_subject=subject if provider == "apple" else None,
+            identity_provider=provider,
+            provider_subject=subject,
             email=email,
             display_name=display_name,
             timezone="UTC",

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     session_signing_secret: str = Field(default="dev-session-secret", alias="SESSION_SIGNING_SECRET")
     session_ttl_hours: int = Field(default=720, alias="SESSION_TTL_HOURS")
     apple_client_id: Optional[str] = Field(default=None, alias="APPLE_CLIENT_ID")
+    firebase_project_id: Optional[str] = Field(default=None, alias="FIREBASE_PROJECT_ID")
 
     sources_file: str = Field(default="sources.yml", alias="SOURCES_FILE")
     voices_file: str = Field(default="voices.yml", alias="VOICES_FILE")

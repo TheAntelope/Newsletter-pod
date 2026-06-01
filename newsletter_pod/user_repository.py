@@ -69,6 +69,10 @@ class ControlPlaneRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_user_by_identity(self, provider: str, subject: str) -> Optional[UserRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
     def save_user(self, user: UserRecord) -> None:
         raise NotImplementedError
 
@@ -524,6 +528,8 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
     def __init__(self) -> None:
         self._users: dict[str, UserRecord] = {}
         self._users_by_subject: dict[str, str] = {}
+        # (identity_provider, provider_subject) -> user_id
+        self._users_by_identity: dict[tuple[str, str], str] = {}
         self._profiles: dict[str, PodcastProfileRecord] = {}
         self._sources: dict[str, list[UserSourceRecord]] = {}
         self._feed_tokens_by_user: dict[str, FeedTokenRecord] = {}
@@ -557,9 +563,22 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         user_id = self._users_by_subject.get(apple_subject)
         return self._users.get(user_id) if user_id else None
 
+    def get_user_by_identity(self, provider: str, subject: str) -> Optional[UserRecord]:
+        user_id = self._users_by_identity.get((provider, subject))
+        if user_id:
+            return self._users.get(user_id)
+        # Fall back to the Apple index so pre-migration Apple rows (which have
+        # apple_subject but no provider pair yet) still resolve.
+        if provider == "apple":
+            return self.get_user_by_apple_subject(subject)
+        return None
+
     def save_user(self, user: UserRecord) -> None:
         self._users[user.id] = user
-        self._users_by_subject[user.apple_subject] = user.id
+        if user.apple_subject:
+            self._users_by_subject[user.apple_subject] = user.id
+        if user.identity_provider and user.provider_subject:
+            self._users_by_identity[(user.identity_provider, user.provider_subject)] = user.id
 
     def get_profile(self, user_id: str) -> Optional[PodcastProfileRecord]:
         return self._profiles.get(user_id)
@@ -1013,7 +1032,10 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         user = self._users.pop(user_id, None)
         counts["users"] = 1 if user else 0
         if user:
-            self._users_by_subject.pop(user.apple_subject, None)
+            if user.apple_subject:
+                self._users_by_subject.pop(user.apple_subject, None)
+            if user.identity_provider and user.provider_subject:
+                self._users_by_identity.pop((user.identity_provider, user.provider_subject), None)
 
         counts["podcast_profiles"] = 1 if self._profiles.pop(user_id, None) else 0
         counts["user_sources"] = len(self._sources.pop(user_id, []) or [])
@@ -1145,6 +1167,23 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         if not docs:
             return None
         return UserRecord.model_validate(docs[0].to_dict())
+
+    def get_user_by_identity(self, provider: str, subject: str) -> Optional[UserRecord]:
+        # Two equality filters resolve via Firestore's automatic single-field
+        # indexes (no composite index required).
+        docs = list(
+            self._users
+            .where("identity_provider", "==", provider)
+            .where("provider_subject", "==", subject)
+            .limit(1)
+            .stream()
+        )
+        if docs:
+            return UserRecord.model_validate(docs[0].to_dict())
+        # Fall back to the Apple lookup for pre-migration rows.
+        if provider == "apple":
+            return self.get_user_by_apple_subject(subject)
+        return None
 
     def save_user(self, user: UserRecord) -> None:
         self._users.document(user.id).set(user.model_dump(mode="python"))
