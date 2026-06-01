@@ -232,6 +232,52 @@ class FakeAppRepository implements AppRepository {
     );
   }
 
+  @override
+  Future<SwipeDeckEnvelope> fetchSwipeDeck() async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    final now = DateTime.now();
+    return SwipeDeckEnvelope(
+      items: [
+        SwipeDeckCardDto(
+          sourceItemDedupeKey: 'sw1',
+          title: 'The state of open-source LLMs',
+          summary: 'A roundup of the latest open-weight releases and benchmarks.',
+          cardSummary:
+              'A roundup of the latest open-weight model releases and where they beat closed ones.',
+          sourceId: 'stratechery',
+          sourceName: 'Stratechery',
+          link: 'https://stratechery.com/sw1',
+          publishedAt: now.subtract(const Duration(hours: 6)),
+        ),
+        SwipeDeckCardDto(
+          sourceItemDedupeKey: 'sw2',
+          title: 'Why latency is the new moat',
+          summary: 'Speed is becoming the defensible edge in consumer AI.',
+          cardSummary:
+              'Why response speed is becoming the defensible edge in consumer AI products.',
+          sourceId: 'platformer',
+          sourceName: 'Platformer',
+          link: 'https://platformer.news/sw2',
+          publishedAt: now.subtract(const Duration(hours: 9)),
+        ),
+        SwipeDeckCardDto(
+          sourceItemDedupeKey: 'sw3',
+          title: 'A field guide to agent frameworks',
+          summary: 'Comparing the major agent orchestration libraries.',
+          cardSummary:
+              'A practical comparison of the major agent-orchestration libraries shipping now.',
+          sourceId: 'stratechery',
+          sourceName: 'Stratechery',
+          link: 'https://stratechery.com/sw3',
+          publishedAt: now.subtract(const Duration(hours: 14)),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Future<void> submitSwipe(String dedupeKey, int direction) async {}
+
   PodcastProfileDto _demoProfile() => PodcastProfileDto(
         title: 'ClawCast',
         formatPreset: 'two_hosts',

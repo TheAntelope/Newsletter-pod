@@ -79,4 +79,12 @@ class ApiAppRepository implements AppRepository {
   @override
   Future<VoiceCatalogEnvelope> fetchVoiceCatalog() =>
       _client.fetchVoiceCatalog();
+
+  @override
+  Future<SwipeDeckEnvelope> fetchSwipeDeck() =>
+      _client.fetchRecentSwipeDeck(_token);
+
+  @override
+  Future<void> submitSwipe(String dedupeKey, int direction) =>
+      _client.submitSwipe(_token, dedupeKey: dedupeKey, direction: direction);
 }

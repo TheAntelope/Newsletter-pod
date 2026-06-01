@@ -101,4 +101,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Saved'), findsOneWidget);
   });
+
+  testWidgets('swipe deck keeps a card and advances', (tester) async {
+    await _signIn(tester);
+
+    await tester.tap(find.text('Discover'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('The state of open-source LLMs'), findsOneWidget); // top
+    expect(
+      find.text('A field guide to agent frameworks'),
+      findsNothing, // 3rd card not rendered yet (only top + 1 behind)
+    );
+
+    await tester.tap(find.text('Keep'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('The state of open-source LLMs'), findsNothing); // swiped
+    expect(
+      find.text('A field guide to agent frameworks'),
+      findsOneWidget, // now the card behind the new top
+    );
+  });
 }

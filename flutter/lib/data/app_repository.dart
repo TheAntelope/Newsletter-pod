@@ -23,4 +23,6 @@ abstract interface class AppRepository {
     String? localTime,
   });
   Future<VoiceCatalogEnvelope> fetchVoiceCatalog();
+  Future<SwipeDeckEnvelope> fetchSwipeDeck();
+  Future<void> submitSwipe(String dedupeKey, int direction);
 }
