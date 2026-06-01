@@ -216,7 +216,7 @@ class ScheduledBroadcastRunner:
         # shorter than the local budget calculation suggests, which is
         # fine.
         prefix = "New episode: "
-        ios_cta = "\n\nGet your own daily briefing on iOS → theclawcast.com/listeners"
+        ios_cta = "\n\nGet your own daily briefing on iOS → https://www.theclawcast.com/"
         replies_cta = "\n\nReplies welcome 🎙️"
         budget = 280 - len(prefix) - len(ios_cta) - len(replies_cta)
         return f"{prefix}{topic[:budget].rstrip()}{ios_cta}{replies_cta}"
