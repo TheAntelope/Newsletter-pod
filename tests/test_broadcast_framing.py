@@ -28,7 +28,9 @@ def test_app_cta_mentions_personalization_and_app_store():
     # would break the audio/tweet alignment.
     assert "made just for you" in APP_CTA
     assert "App Store" in APP_CTA
-    assert "Claw Cast" in APP_CTA
+    # The brand is "The Claw Cast" — the "The" matters and we want it
+    # spoken naturally rather than dropping to just "Claw Cast".
+    assert "The Claw Cast" in APP_CTA
 
 
 def test_build_framing_prefers_loop_feedback_text():

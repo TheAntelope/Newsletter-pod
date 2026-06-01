@@ -19,7 +19,7 @@ INTRO = (
 APP_CTA = (
     "If you want your very own podcast made just for you — covering the "
     "writers, newsletters, and topics you actually follow — download "
-    "Claw Cast on the App Store."
+    "The Claw Cast on the App Store."
 )
 FEEDBACK = (
     "Enjoying the show? We'd love to hear from you — leave a comment to tell "

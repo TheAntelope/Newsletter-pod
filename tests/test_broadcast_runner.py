@@ -203,6 +203,8 @@ def test_run_uses_default_tweet_text_when_no_override(tmp_path):
     # Total tweet length must stay under the 280-char cap.
     assert "https://www.theclawcast.com/" in text
     assert "App Store" in text
+    # Brand is "The Claw Cast" — "The" intentional.
+    assert "The Claw Cast" in text
     assert len(text) <= 280
 
 

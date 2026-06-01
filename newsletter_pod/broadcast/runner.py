@@ -220,7 +220,7 @@ class ScheduledBroadcastRunner:
         # the X feed get the same offer as listeners landing in the audio.
         ios_cta = (
             "\n\nWant your own podcast made just for you, from the writers and "
-            "newsletters you actually follow? Get Claw Cast on the App Store "
+            "newsletters you actually follow? Get The Claw Cast on the App Store "
             "→ https://www.theclawcast.com/"
         )
         replies_cta = "\n\nReplies welcome 🎙️"
