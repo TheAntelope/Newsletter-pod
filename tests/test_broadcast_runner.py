@@ -200,12 +200,45 @@ def test_run_uses_default_tweet_text_when_no_override(tmp_path):
     assert text.startswith("New episode: ")
     # App-Store CTA: must be in the default tweet so every scheduled post
     # promotes the app and matches the spoken APP_CTA inside framing.py.
-    # Total tweet length must stay under the 280-char cap.
     assert "https://www.theclawcast.com/" in text
     assert "App Store" in text
     # Brand is "The Claw Cast" — "The" intentional.
     assert "The Claw Cast" in text
-    assert len(text) <= 280
+    # Default hashtags for discovery (X searches on hashtags + raw text).
+    assert "#ClawCast" in text
+    assert "#AI" in text
+
+
+def test_run_includes_story_bullets_when_brief_is_grounded(tmp_path):
+    def provider(_source_ids):
+        return [
+            _src_item(source_id="src-stratechery", title="Aggregation and the AI agent"),
+            _src_item(source_id="src-platformer", title="Why X's API tier shift matters"),
+            _src_item(source_id="src-evans", title="The compute bottleneck nobody's pricing in"),
+        ]
+
+    runner, repo, x = _build_runner(tmp_path, source_item_provider=provider)
+    loop = _loop().model_copy(update={"source_ids": ["src-stratechery", "src-platformer", "src-evans"]})
+    repo.save_loop(loop)
+
+    runner.run("us-morning")
+    text = x.video_calls[0]["text"]
+
+    # Stories header + bullets for each of the three sources.
+    assert "📰 Stories covered" in text
+    assert "• name-src-stratechery — Aggregation and the AI agent" in text
+    assert "• name-src-platformer — Why X's API tier shift matters" in text
+    assert "• name-src-evans — The compute bottleneck nobody's pricing in" in text
+
+
+def test_run_omits_stories_block_when_brief_ungrounded(tmp_path):
+    runner, repo, x = _build_runner(tmp_path)
+    repo.save_loop(_loop())  # source_ids=[] -> brief has no source items
+
+    runner.run("us-morning")
+    text = x.video_calls[0]["text"]
+
+    assert "Stories covered" not in text
 
 
 def test_run_uses_tweet_text_override(tmp_path):

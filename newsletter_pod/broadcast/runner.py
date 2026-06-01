@@ -15,6 +15,19 @@ from .repository import BroadcastRepository
 from .service import BroadcastService
 from .topic_picker import BroadcastTopicPicker
 
+# Static hashtags appended to the default tweet for discoverability. Short
+# list — too many hashtags reads as spam. We keep them brand+category so
+# they're meaningful across topics rather than topic-specific.
+DEFAULT_TWEET_HASHTAGS = ["#ClawCast", "#AI", "#Tech", "#Podcast"]
+
+# How many stories to surface as bullets in the post body. Higher values
+# bloat the tweet without proportional discovery value; the script LLM
+# only really riffs on the top few items anyway.
+_MAX_STORIES_IN_POST = 4
+# Per-bullet title cap. Long item titles get truncated mid-clause so the
+# post stays scannable.
+_MAX_STORY_TITLE_CHARS = 90
+
 logger = logging.getLogger(__name__)
 
 
@@ -148,7 +161,10 @@ class ScheduledBroadcastRunner:
         )
 
         tweet_text = tweet_text_override or self._default_tweet_text(
-            topic=topic, title=generated.title
+            topic=topic,
+            title=generated.title,
+            stories=_extract_post_stories(brief.source_items),
+            hashtags=DEFAULT_TWEET_HASHTAGS,
         )
         # Tri-state resolution for the feedback tweet copy, from the configured
         # value above: None ⇒ default copy, "" ⇒ suppress, else ⇒ verbatim.
@@ -207,25 +223,67 @@ class ScheduledBroadcastRunner:
         return f"{run_date.isoformat()} · {topic[:80]}"
 
     @staticmethod
-    def _default_tweet_text(*, topic: str, title: str) -> str:
-        # Twitter limit is 280; topic is the load-bearing portion, so
-        # we shape around it and leave room for the implicit video card
-        # plus the iOS-app CTA. X counts any URL as 23 chars (t.co
-        # shortening) — we use the actual URL length here because Python
-        # doesn't know about t.co; the realized tweet will be a little
-        # shorter than the local budget calculation suggests, which is
-        # fine.
-        prefix = "New episode: "
-        # Mirrors the spoken APP_CTA in framing.py so listeners landing in
-        # the X feed get the same offer as listeners landing in the audio.
-        ios_cta = (
-            "\n\nWant your own podcast made just for you, from the writers and "
+    def _default_tweet_text(
+        *,
+        topic: str,
+        title: str,
+        stories: Optional[list[str]] = None,
+        hashtags: Optional[list[str]] = None,
+    ) -> str:
+        # Default broadcast tweet shape. X Premium accounts (which
+        # @theclawcast is) can post up to ~25k chars via the v2 API, so
+        # we no longer compress this into the 280-char ceiling — instead
+        # we use the room for a stories bullet list (extracted from the
+        # brief's source items) and a hashtag line for discovery.
+        #
+        # Sections, in order:
+        #   1. "New episode: <topic>"
+        #   2. (optional) stories list, bulleted
+        #   3. App-Store CTA mirroring the spoken APP_CTA in framing.py
+        #   4. (optional) hashtags on their own line
+        #   5. "Replies welcome 🎙️"
+        parts: list[str] = [f"New episode: {topic.strip()}"]
+
+        if stories:
+            bullet_lines = [f"• {s}" for s in stories]
+            parts.append("📰 Stories covered:\n" + "\n".join(bullet_lines))
+
+        parts.append(
+            "Want your own podcast made just for you, from the writers and "
             "newsletters you actually follow? Get The Claw Cast on the App Store "
             "→ https://www.theclawcast.com/"
         )
-        replies_cta = "\n\nReplies welcome 🎙️"
-        budget = 280 - len(prefix) - len(ios_cta) - len(replies_cta)
-        return f"{prefix}{topic[:budget].rstrip()}{ios_cta}{replies_cta}"
+
+        if hashtags:
+            parts.append(" ".join(hashtags))
+
+        parts.append("Replies welcome 🎙️")
+
+        return "\n\n".join(parts)
+
+
+def _extract_post_stories(source_items: list[SourceItem]) -> list[str]:
+    """Build short "publication — title" bullets from the brief's grounding
+    items. Picks the freshest items (newest first), capped at
+    _MAX_STORIES_IN_POST, with per-source uniqueness so one prolific feed
+    doesn't dominate the bullet list. Returns [] when the brief was
+    un-grounded (no source items)."""
+    if not source_items:
+        return []
+    ordered = sorted(source_items, key=lambda it: it.published_at, reverse=True)
+    seen_sources: set[str] = set()
+    bullets: list[str] = []
+    for item in ordered:
+        if item.source_id in seen_sources:
+            continue
+        seen_sources.add(item.source_id)
+        title = (item.title or "").strip()
+        if len(title) > _MAX_STORY_TITLE_CHARS:
+            title = title[:_MAX_STORY_TITLE_CHARS].rsplit(" ", 1)[0] + "…"
+        bullets.append(f"{item.source_name} — {title}")
+        if len(bullets) >= _MAX_STORIES_IN_POST:
+            break
+    return bullets
 
 
 def _normalize_feedback_intent(value: Optional[str]) -> Optional[str]:
