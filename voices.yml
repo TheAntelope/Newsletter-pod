@@ -31,20 +31,13 @@ voices:
     speed: 1.2
 
   # ============================================================
-  # Premium voices (3 male / 3 female on top of Vinnie + Demi = 8 total).
+  # Premium voices (2 male / 3 female on top of Vinnie + Demi = 7 total).
   # ============================================================
   - id: 5e3JKXK83vvgQqBcdUol
     name: Chaz Cobalt
     gender: male
     description: Confident drive-time DJ; warm and a little swaggery.
     preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/5e3JKXK83vvgQqBcdUol.mp3
-    enabled: true
-
-  - id: Fxt4GZnlXkUGMtWSYIcm
-    name: Rocky Reverb
-    gender: male
-    description: Late-night radio energy; smooth, low, and unhurried.
-    preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/Fxt4GZnlXkUGMtWSYIcm.mp3
     enabled: true
 
   - id: rPMkKgdwgIwqv4fXgR6N
