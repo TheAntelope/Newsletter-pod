@@ -232,3 +232,23 @@ _(Update as work proceeds.)_
     re-verify the **unchanged Swift app** still signs in + `/v1/me` against the new revision;
     a **real Firebase token** end-to-end needs a Firebase project + `FIREBASE_PROJECT_ID`
     (Phase 2 setup). Code + unit-level gate is met.
+  - **Merged + deployed:** PR #35 squash-merged (`2d4ada1`); Cloud Run rev
+    `newsletter-pod-00194-vnm` live; smoke test passed (`/v1/auth/firebase`→400 configured-guard,
+    `/v1/auth/apple`→400 invalid-token). TestFlight v1.0.5 build #118 accepted.
+- 2026-06-01 — **Phase 2 started — Flutter Android local scaffold.** Branch
+  `feature/phase2-flutter-android` (account-independent work; validated locally).
+  - **Toolchain:** Flutter 3.44.1 installed at `C:\flutter` (no admin, git clone; invoke
+    `C:\flutter\bin\flutter.bat`). `flutter doctor`: web + Windows-desktop run available;
+    Android SDK is the only gap (deferred — only needed to run an APK).
+  - **Scaffold:** `flutter/` (`flutter create --org com.newsletterpod --project-name app
+    --platforms android,ios,web`), applicationId/namespace `com.newsletterpod.app`. Committed
+    `0494074`. `flutter analyze` clean, `flutter test` green.
+  - **Design tokens (done properly):** added a `dart/design-tokens` format + `flutter`
+    platform to the **`clawcast-tokens` submodule** `build.js` → `dist/design_tokens.dart`
+    (pushed `a1fbec9`); submodule pointer bumped here. Swift/CSS outputs unchanged (iOS CI
+    staleness check stays green). Copied to `flutter/lib/design_tokens.dart`.
+  - **Theme:** `flutter/lib/theme.dart` (editorial palette/type/spacing over the generated
+    tokens, mirroring `Theme.swift`); themed app shell renders; widget test green.
+  - **Next:** port `APIModels.swift` DTOs + the 35-endpoint `APIClient.swift` to Dart; build
+    screens (dashboard, sources, onboarding, paywall, swipe deck, …). Auth/billing/push
+    stubbed until the user creates Firebase / RevenueCat / Google Play accounts.
