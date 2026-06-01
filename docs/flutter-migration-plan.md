@@ -255,7 +255,12 @@ _(Update as work proceeds.)_
     `{detail}` error mapping (`MockClient` tests). `lib/api/responses.dart` for the client ack
     types; `lib/config.dart` holds the Cloud Run base URL (overridable via `--dart-define`).
     `flutter analyze` clean, all tests green.
-  - **Next:** build screens (dashboard, sources, Substack add, podcast setup + schedule,
-    paywall, 8-step onboarding, library, swipe deck, next-episode queue) against the theme,
-    over a stubbable data layer. Auth/billing/push wired once the user creates Firebase /
-    RevenueCat / Google Play accounts.
+  - **Screens — architecture + first flow (committed):** state via `AppState`
+    (`ChangeNotifier`, the iOS AppViewModel analogue) exposed through an `InheritedNotifier`
+    (`AppScope`) — no extra state-mgmt dependency. Data via an `AppRepository` interface with
+    `FakeAppRepository` (in-memory demo data, used now + in tests) and `ApiAppRepository`
+    (wraps `ApiClient`). First flow shipped: `SignInScreen` (stubbed) → `HomeScreen` dashboard
+    (greeting + plan/schedule cards + Generate now) via `RootView`. Widget test covers it.
+  - **Remaining screens (next increments):** sources, Substack add, podcast setup + schedule
+    editor, paywall, 8-step onboarding wizard, library, swipe deck, next-episode queue. Then
+    real auth/billing/push once the user creates Firebase / RevenueCat / Google Play.
