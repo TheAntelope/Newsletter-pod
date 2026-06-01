@@ -31,6 +31,12 @@ class BroadcastLoopRecord(BaseModel):
     # Default copy posted under the episode tweet to solicit feedback;
     # set to empty string on the loop to suppress entirely.
     feedback_prompt_text: Optional[str] = None
+    # Curated source ids (matching newsletter_pod source_id values) the
+    # broadcast pipeline should read recent items from when assembling
+    # the brief. Empty list means "no grounding" — the LLM riffs on the
+    # topic alone (Phase 0 behavior). Lookback window and per-source
+    # item caps are applied at fetch time, not stored here.
+    source_ids: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

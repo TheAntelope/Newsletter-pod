@@ -18,8 +18,52 @@ from newsletter_pod.broadcast.runner import (
 from newsletter_pod.broadcast.service import BroadcastService, BroadcastSettings
 from newsletter_pod.broadcast.topic_picker import BroadcastTopicPicker
 from newsletter_pod.broadcast.x_client import XPostResult
-from newsletter_pod.models import AudioSegment, GeneratedEpisode
+from newsletter_pod.models import AudioSegment, GeneratedEpisode, SourceItem
 from newsletter_pod.storage import InMemoryAudioStorage
+
+
+def _src_item(source_id="src-a", title="t", summary="s"):
+    return SourceItem(
+        source_id=source_id,
+        source_name=f"name-{source_id}",
+        guid=title,
+        link=f"https://x.test/{title}",
+        title=title,
+        summary=summary,
+        published_at=datetime(2026, 5, 30, tzinfo=timezone.utc),
+        dedupe_key=title,
+    )
+
+
+# Captures the prompt that generate() was called with — so the source-items
+# test can assert the brief actually reached the LLM call.
+class _CapturingPodcastClient:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def generate(
+        self,
+        prompt,
+        title,
+        voice_id=None,
+        secondary_voice_id=None,
+        primary_speaker_name=None,
+        secondary_speaker_name=None,
+        ux=None,
+        force_default_voice=False,
+        lead_in_texts=None,
+        tail_texts=None,
+    ):
+        self.prompts.append(prompt)
+        return GeneratedEpisode(
+            episode_title=title,
+            audio_bytes=b"mp3",
+            mime_type="audio/mpeg",
+            show_notes="notes",
+            audio_segments=[AudioSegment(role="primary", speaker="V", text="hi")],
+            transcript="V: hi",
+            duration_seconds=10,
+        )
 
 
 class _FakePodcastClient:
@@ -86,7 +130,12 @@ def _fake_renderer(*, audio_bytes, cover_image_bytes):
     return b"mp4-bytes"
 
 
-def _build_runner(tmp_path: Path) -> tuple[ScheduledBroadcastRunner, InMemoryBroadcastRepository, _FakeXClient]:
+def _build_runner(
+    tmp_path: Path,
+    *,
+    source_item_provider=None,
+    podcast_client=None,
+) -> tuple[ScheduledBroadcastRunner, InMemoryBroadcastRepository, _FakeXClient]:
     cover = tmp_path / "cover.png"
     cover.write_bytes(b"cover")
     storage = InMemoryAudioStorage()
@@ -102,7 +151,7 @@ def _build_runner(tmp_path: Path) -> tuple[ScheduledBroadcastRunner, InMemoryBro
     service = BroadcastService(
         settings=settings,
         storage=storage,
-        podcast_client=_FakePodcastClient(),
+        podcast_client=podcast_client or _FakePodcastClient(),
         renderer=_fake_renderer,
         episode_id_factory=lambda: "deadbeefdeadbeef",
     )
@@ -114,6 +163,7 @@ def _build_runner(tmp_path: Path) -> tuple[ScheduledBroadcastRunner, InMemoryBro
         topic_picker=picker,
         broadcast_service=service,
         publisher=publisher,
+        source_item_provider=source_item_provider,
         run_date_factory=lambda loop: date(2026, 5, 30),
     )
     return runner, repo, x
@@ -179,3 +229,59 @@ def test_run_threads_feedback_prompt_to_episode_tweet(tmp_path):
 
     assert len(x.reply_calls) == 1
     assert x.reply_calls[0]["in_reply_to_tweet_id"] == "100"
+
+
+def test_run_calls_source_item_provider_and_includes_items_in_prompt(tmp_path):
+    captured: dict[str, list[str]] = {}
+
+    def provider(source_ids: list[str]):
+        captured["source_ids"] = list(source_ids)
+        return [_src_item(source_id="src-a", title="Hot take from A")]
+
+    client = _CapturingPodcastClient()
+    runner, repo, _ = _build_runner(
+        tmp_path, source_item_provider=provider, podcast_client=client
+    )
+    loop = _loop()
+    loop = loop.model_copy(update={"source_ids": ["src-a", "src-b"]})
+    repo.save_loop(loop)
+
+    runner.run("us-morning")
+
+    assert captured["source_ids"] == ["src-a", "src-b"]
+    assert client.prompts, "podcast client never called"
+    assert "Hot take from A" in client.prompts[0]
+    assert "Recent source items" in client.prompts[0]
+
+
+def test_run_falls_back_to_ungrounded_when_provider_raises(tmp_path):
+    def provider(source_ids: list[str]):
+        raise RuntimeError("upstream went down")
+
+    client = _CapturingPodcastClient()
+    runner, repo, _ = _build_runner(
+        tmp_path, source_item_provider=provider, podcast_client=client
+    )
+    loop = _loop().model_copy(update={"source_ids": ["src-a"]})
+    repo.save_loop(loop)
+
+    runner.run("us-morning")
+
+    # Run completes and the prompt does not get the source block.
+    assert client.prompts
+    assert "Recent source items" not in client.prompts[0]
+
+
+def test_run_skips_provider_when_loop_has_no_source_ids(tmp_path):
+    calls: list[list[str]] = []
+
+    def provider(source_ids: list[str]):
+        calls.append(list(source_ids))
+        return [_src_item()]
+
+    runner, repo, _ = _build_runner(tmp_path, source_item_provider=provider)
+    repo.save_loop(_loop())  # default source_ids=[]
+
+    runner.run("us-morning")
+
+    assert calls == []
