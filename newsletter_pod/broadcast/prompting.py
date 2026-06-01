@@ -24,6 +24,11 @@ class BroadcastBrief:
     prior_feedback_summary: Optional[str] = None
     desired_minutes: int = 5
     source_items: list[SourceItem] = field(default_factory=list)
+    # LLM-derived entity hashtags for this episode (e.g. ["#OpenAI",
+    # "#Salesforce"]). Combined with the runner's brand-static set
+    # (DEFAULT_TWEET_HASHTAGS) when building the tweet so each post
+    # carries hashtags that actually match the day's story.
+    topic_hashtags: list[str] = field(default_factory=list)
 
 
 # Cap how many items per source we surface to the LLM. Same source spamming

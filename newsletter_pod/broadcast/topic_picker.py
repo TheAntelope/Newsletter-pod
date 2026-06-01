@@ -3,7 +3,9 @@ from __future__ import annotations
 import itertools
 import json
 import logging
-from typing import Optional, Protocol
+import re
+from dataclasses import dataclass, field
+from typing import Optional, Protocol, Union
 
 import requests
 
@@ -16,10 +18,32 @@ logger = logging.getLogger(__name__)
 _OPENAI_CHAT_ENDPOINT = "https://api.openai.com/v1/chat/completions"
 _DEFAULT_TIMEOUT_SECONDS = 30
 _SYSTEM_PROMPT = (
-    "You select a single specific topic for tomorrow's 5-minute podcast episode "
-    "aimed at an X (Twitter) audience. Topics must be concrete (a specific story, "
-    "announcement, or angle), not broad themes. Return JSON only."
+    "You select a single specific topic for tomorrow's 5-minute podcast "
+    "episode aimed at an X (Twitter) audience, AND surface the concrete "
+    "entities the topic is about so the post can be tagged for discovery. "
+    "Topics must be concrete (a specific story, announcement, or angle), "
+    "not broad themes. Return JSON only."
 )
+
+# Sanitize/cap per-episode topic hashtags from the LLM. X allows
+# alphanumeric + underscore; we strip everything else so a sloppy
+# proposal can't break the post. Cap is small so the hashtag line stays
+# scannable when combined with brand-static defaults.
+_MAX_TOPIC_HASHTAGS = 3
+_HASHTAG_BODY_RE = re.compile(r"[A-Za-z0-9_]+")
+
+
+@dataclass(frozen=True)
+class TopicProposal:
+    """LLM proposal for the next episode. `hashtags` are entity-level
+    (specific people, products, companies, events) and combine with the
+    runner's brand-static set when building the tweet."""
+
+    topic: str
+    hashtags: list[str] = field(default_factory=list)
+
+
+ProposerResult = Union["TopicProposal", str, None]
 
 
 class TopicProposer(Protocol):
@@ -29,9 +53,12 @@ class TopicProposer(Protocol):
         audience_persona: str,
         prior_feedback_summary: Optional[str],
         seed_topics: list[str],
-    ) -> Optional[str]:
-        """Return a one-line topic string, or None if the proposer
-        couldn't ideate (e.g. no API key configured)."""
+    ) -> ProposerResult:
+        """Return a TopicProposal (topic + entity hashtags) or None.
+
+        A bare topic string is also accepted for backward compatibility
+        with simpler proposers — the picker normalizes both shapes.
+        """
         ...
 
 
@@ -47,7 +74,7 @@ class OpenAITopicProposer:
         audience_persona: str,
         prior_feedback_summary: Optional[str],
         seed_topics: list[str],
-    ) -> Optional[str]:
+    ) -> Optional[TopicProposal]:
         user_lines = [
             f"Audience: {audience_persona}",
         ]
@@ -63,7 +90,15 @@ class OpenAITopicProposer:
                 + "\n- ".join(seed_topics)
             )
         user_lines.append(
-            "Output JSON: {\"topic\": \"<one specific topic, 80 chars or less>\"}"
+            "Output JSON: {"
+            "\"topic\": \"<one specific topic, 80 chars or less>\", "
+            "\"hashtags\": [\"#Entity\", \"#OtherEntity\"]"
+            "}. "
+            "hashtags: 0-3 PascalCase tags for the specific entities the "
+            "topic is about — companies (#OpenAI, #Salesforce), products "
+            "(#GPT5, #Claude), people (#SamAltman), or events "
+            "(#WWDC). No #AI, #Tech, #Podcast — those are brand-static and "
+            "added separately. Empty list when the topic is abstract."
         )
 
         payload = {
@@ -90,10 +125,44 @@ class OpenAITopicProposer:
             content = response.json()["choices"][0]["message"]["content"]
             parsed = json.loads(content)
             topic = (parsed.get("topic") or "").strip()
-            return topic or None
+            if not topic:
+                return None
+            raw_hashtags = parsed.get("hashtags") or []
+            return TopicProposal(
+                topic=topic,
+                hashtags=_normalize_hashtags(raw_hashtags),
+            )
         except Exception:
             logger.warning("OpenAI topic proposer failed", exc_info=True)
             return None
+
+
+def _normalize_hashtags(raw: object) -> list[str]:
+    """Coerce LLM output into a clean hashtag list. Drops anything that
+    isn't a string, strips leading `#`s, keeps only alphanumeric/underscore
+    bodies, re-prefixes a single `#`, dedupes case-insensitively, and caps
+    at `_MAX_TOPIC_HASHTAGS`. Returns [] for any malformed input rather
+    than failing the run.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in raw:
+        if not isinstance(entry, str):
+            continue
+        match = _HASHTAG_BODY_RE.search(entry)
+        if not match:
+            continue
+        tag = f"#{match.group(0)}"
+        key = tag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(tag)
+        if len(out) >= _MAX_TOPIC_HASHTAGS:
+            break
+    return out
 
 
 class BroadcastTopicPicker:
@@ -118,12 +187,20 @@ class BroadcastTopicPicker:
         prior_feedback = prior.feedback_summary if prior else None
 
         topic: Optional[str] = None
+        topic_hashtags: list[str] = []
         if self._proposer is not None:
-            topic = self._proposer.propose(
+            raw = self._proposer.propose(
                 audience_persona=loop.audience_persona,
                 prior_feedback_summary=prior_feedback,
                 seed_topics=loop.seed_topics,
             )
+            if isinstance(raw, TopicProposal):
+                topic = raw.topic
+                topic_hashtags = list(raw.hashtags)
+            elif isinstance(raw, str) and raw.strip():
+                # Backward-compat path for proposers that still return a
+                # bare string (older fakes, custom proposers).
+                topic = raw.strip()
 
         if not topic:
             topic = self._round_robin_seed(loop)
@@ -141,6 +218,7 @@ class BroadcastTopicPicker:
             # comfortably under the cap. video.py also enforces a 110s
             # hard ceiling at encode time as a safety net.
             desired_minutes=1,
+            topic_hashtags=topic_hashtags,
         )
         return topic, brief
 

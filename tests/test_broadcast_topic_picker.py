@@ -4,11 +4,19 @@ from datetime import date, datetime, timezone
 
 from newsletter_pod.broadcast.models import BroadcastEpisodeRecord, BroadcastLoopRecord
 from newsletter_pod.broadcast.repository import InMemoryBroadcastRepository
-from newsletter_pod.broadcast.topic_picker import BroadcastTopicPicker
+from newsletter_pod.broadcast.topic_picker import (
+    BroadcastTopicPicker,
+    TopicProposal,
+    _normalize_hashtags,
+)
 
 
 class _FakeProposer:
-    def __init__(self, *, returns: str | None = None) -> None:
+    """Returns whatever was passed at construction time. `returns` can be
+    a TopicProposal (the modern shape), a bare string (back-compat path),
+    or None (proposer abstained)."""
+
+    def __init__(self, *, returns=None) -> None:
         self.returns = returns
         self.calls: list[dict] = []
 
@@ -105,3 +113,60 @@ def test_pick_proposer_none_skips_llm_step():
     topic, _ = picker.pick(_loop(seed_topics=["a"]))
 
     assert topic == "a"
+
+
+def test_pick_surfaces_topic_hashtags_from_proposal():
+    repo = InMemoryBroadcastRepository()
+    proposer = _FakeProposer(
+        returns=TopicProposal(
+            topic="OpenAI's enterprise pivot mirrors Salesforce",
+            hashtags=["#OpenAI", "#Salesforce"],
+        )
+    )
+    picker = BroadcastTopicPicker(proposer=proposer, repository=repo)
+
+    topic, brief = picker.pick(_loop())
+
+    assert topic == "OpenAI's enterprise pivot mirrors Salesforce"
+    assert brief.topic_hashtags == ["#OpenAI", "#Salesforce"]
+
+
+def test_pick_returns_empty_hashtags_when_proposer_returns_bare_string():
+    # Backward-compat path: older proposers returning a plain string
+    # still produce a usable topic, with no entity hashtags.
+    repo = InMemoryBroadcastRepository()
+    proposer = _FakeProposer(returns="The compute bottleneck")
+    picker = BroadcastTopicPicker(proposer=proposer, repository=repo)
+
+    topic, brief = picker.pick(_loop())
+
+    assert topic == "The compute bottleneck"
+    assert brief.topic_hashtags == []
+
+
+def test_pick_returns_empty_hashtags_for_seed_or_persona_fallback():
+    # Seed-topic and persona fallbacks don't have an LLM step to derive
+    # hashtags from, so the brief gets [] and the tweet ends up with
+    # only the brand-static set.
+    repo = InMemoryBroadcastRepository()
+    proposer = _FakeProposer(returns=None)
+    picker = BroadcastTopicPicker(proposer=proposer, repository=repo)
+
+    _, brief = picker.pick(_loop(seed_topics=["a"]))
+    assert brief.topic_hashtags == []
+
+    picker2 = BroadcastTopicPicker(proposer=None, repository=repo)
+    _, brief2 = picker2.pick(_loop(persona="X", seed_topics=[]))
+    assert brief2.topic_hashtags == []
+
+
+def test_normalize_hashtags_cleans_llm_output():
+    assert _normalize_hashtags(["#OpenAI", "Salesforce"]) == ["#OpenAI", "#Salesforce"]
+    # Strips junk characters, keeps the alphanumeric body.
+    assert _normalize_hashtags(["#Sam Altman", " #GPT-5 "]) == ["#Sam", "#GPT"]
+    # Dedupes case-insensitively, caps at 3.
+    assert _normalize_hashtags(["#AI", "#ai", "#Tech", "#X", "#Y"]) == ["#AI", "#Tech", "#X"]
+    # Bad inputs become an empty list, not an exception.
+    assert _normalize_hashtags(None) == []
+    assert _normalize_hashtags("not a list") == []
+    assert _normalize_hashtags([1, {"x": 1}, ""]) == []

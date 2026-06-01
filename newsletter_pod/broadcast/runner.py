@@ -164,7 +164,7 @@ class ScheduledBroadcastRunner:
             topic=topic,
             title=generated.title,
             stories=_extract_post_stories(brief.source_items),
-            hashtags=DEFAULT_TWEET_HASHTAGS,
+            hashtags=_combine_hashtags(brief.topic_hashtags, DEFAULT_TWEET_HASHTAGS),
         )
         # Tri-state resolution for the feedback tweet copy, from the configured
         # value above: None ⇒ default copy, "" ⇒ suppress, else ⇒ verbatim.
@@ -260,6 +260,25 @@ class ScheduledBroadcastRunner:
         parts.append("Replies welcome 🎙️")
 
         return "\n\n".join(parts)
+
+
+def _combine_hashtags(topic_hashtags: list[str], brand_hashtags: list[str]) -> list[str]:
+    """Combine the per-episode topic-derived hashtags (e.g. #OpenAI,
+    #Salesforce) with the brand-static set (#ClawCast, #AI, ...), in
+    that order so the entity tags appear first when X truncates
+    aggressively. Case-insensitive dedup keeps an LLM-emitted #AI from
+    duplicating the static one."""
+    combined: list[str] = []
+    seen: set[str] = set()
+    for tag in list(topic_hashtags) + list(brand_hashtags):
+        if not tag:
+            continue
+        key = tag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        combined.append(tag)
+    return combined
 
 
 def _extract_post_stories(source_items: list[SourceItem]) -> list[str]:

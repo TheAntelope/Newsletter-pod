@@ -241,6 +241,77 @@ def test_run_omits_stories_block_when_brief_ungrounded(tmp_path):
     assert "Stories covered" not in text
 
 
+def test_run_merges_topic_hashtags_with_brand_static(tmp_path):
+    from newsletter_pod.broadcast.topic_picker import TopicProposal
+
+    class _HashtagProposer:
+        def propose(self, *, audience_persona, prior_feedback_summary, seed_topics):
+            return TopicProposal(
+                topic="OpenAI's enterprise pivot mirrors Salesforce",
+                hashtags=["#OpenAI", "#Salesforce"],
+            )
+
+    # Substitute the picker with one that uses our hashtag-emitting proposer.
+    cover = tmp_path / "cover.png"
+    cover.write_bytes(b"cover")
+    storage = InMemoryAudioStorage()
+    repo = InMemoryBroadcastRepository()
+    from newsletter_pod.broadcast.service import BroadcastService, BroadcastSettings
+    settings = BroadcastSettings(
+        app_base_url="https://example.test",
+        primary_voice_id="v1",
+        secondary_voice_id="v2",
+        primary_host_name="Vinnie",
+        secondary_host_name="Demi",
+        cover_image_path=cover,
+    )
+    service = BroadcastService(
+        settings=settings,
+        storage=storage,
+        podcast_client=_FakePodcastClient(),
+        renderer=_fake_renderer,
+        episode_id_factory=lambda: "deadbeefdeadbeef",
+    )
+    x = _FakeXClient()
+    publisher = BroadcastPublisher(storage=storage, x_client=x)
+    picker = BroadcastTopicPicker(proposer=_HashtagProposer(), repository=repo)
+    runner = ScheduledBroadcastRunner(
+        repository=repo,
+        topic_picker=picker,
+        broadcast_service=service,
+        publisher=publisher,
+        run_date_factory=lambda loop: date(2026, 5, 30),
+    )
+    repo.save_loop(_loop())
+
+    runner.run("us-morning")
+    text = x.video_calls[0]["text"]
+
+    # Topic-derived hashtags appear first (better positioned if X truncates).
+    assert text.index("#OpenAI") < text.index("#ClawCast")
+    assert text.index("#Salesforce") < text.index("#ClawCast")
+    # Static brand set still present.
+    for tag in ["#ClawCast", "#AI", "#Tech", "#Podcast"]:
+        assert tag in text
+
+
+def test_run_uses_only_brand_hashtags_when_topic_has_none(tmp_path):
+    # When the picker fell back to a seed topic or persona (no LLM
+    # proposal) the brief carries no topic_hashtags. Tweet should still
+    # carry the brand-static set so discovery doesn't go to zero.
+    runner, repo, x = _build_runner(tmp_path)
+    repo.save_loop(_loop())
+
+    runner.run("us-morning")
+    text = x.video_calls[0]["text"]
+
+    for tag in ["#ClawCast", "#AI", "#Tech", "#Podcast"]:
+        assert tag in text
+    # No entity tags inadvertently merged in.
+    assert "#OpenAI" not in text
+    assert "#Salesforce" not in text
+
+
 def test_run_uses_tweet_text_override(tmp_path):
     runner, repo, x = _build_runner(tmp_path)
     repo.save_loop(_loop())
