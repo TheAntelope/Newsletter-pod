@@ -7,7 +7,7 @@ import jwt
 import requests
 from jwt import PyJWKClient
 
-from .user_models import AppleIdentity, AuthenticatedSession
+from .user_models import AppleIdentity, AuthenticatedSession, FirebaseIdentity
 
 
 class AuthError(RuntimeError):
@@ -43,6 +43,49 @@ class AppleIdentityVerifier:
             raise AuthError("Apple identity token missing subject")
 
         return AppleIdentity(
+            subject=subject,
+            email=claims.get("email"),
+        )
+
+
+class FirebaseIdentityVerifier:
+    """Verifies a Firebase Auth ID token (used by the Android/Flutter client, which
+    federates Google/Apple sign-in through Firebase). Mirrors `AppleIdentityVerifier`:
+    RS256, issuer/audience pinned to the Firebase project, keys fetched from Google's
+    JWK endpoint. The neutral session JWT issued afterwards is provider-agnostic."""
+
+    _JWKS_URL = (
+        "https://www.googleapis.com/service_accounts/v1/jwk/"
+        "securetoken@system.gserviceaccount.com"
+    )
+    _ISSUER_PREFIX = "https://securetoken.google.com/"
+
+    def __init__(self, project_id: Optional[str]) -> None:
+        self._project_id = project_id
+        self._jwks_client = PyJWKClient(self._JWKS_URL)
+
+    def verify(self, id_token: str) -> FirebaseIdentity:
+        if not self._project_id:
+            raise AuthError("FIREBASE_PROJECT_ID is not configured")
+
+        try:
+            signing_key = self._jwks_client.get_signing_key_from_jwt(id_token)
+            claims = jwt.decode(
+                id_token,
+                signing_key.key,
+                algorithms=["RS256"],
+                audience=self._project_id,
+                issuer=f"{self._ISSUER_PREFIX}{self._project_id}",
+            )
+        except (jwt.InvalidTokenError, requests.RequestException) as exc:
+            raise AuthError("Invalid Firebase identity token") from exc
+
+        # Firebase puts the stable uid in `sub` (and mirrors it in `user_id`).
+        subject = claims.get("sub") or claims.get("user_id")
+        if not subject:
+            raise AuthError("Firebase identity token missing subject")
+
+        return FirebaseIdentity(
             subject=subject,
             email=claims.get("email"),
         )

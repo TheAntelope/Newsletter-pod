@@ -10,7 +10,15 @@ from .models import SourceItemRef
 
 class UserRecord(BaseModel):
     id: str
-    apple_subject: str
+    # apple_subject is no longer required: Firebase/Google users (Flutter migration,
+    # 2026-06-01) have no Apple subject. It is kept and dual-written for Apple users
+    # so the legacy /v1/auth/apple lookup and the Swift rollback path stay intact.
+    apple_subject: Optional[str] = None
+    # Neutral identity pair. Apple: identity_provider="apple", provider_subject ==
+    # apple_subject. Firebase: identity_provider="firebase", provider_subject == the
+    # Firebase uid (apple_subject is None). The internal `id` stays canonical.
+    identity_provider: Optional[str] = None
+    provider_subject: Optional[str] = None
     email: Optional[str] = None
     display_name: str = "Listener"
     timezone: str = "UTC"
@@ -338,5 +346,10 @@ class AuthenticatedSession(BaseModel):
 
 
 class AppleIdentity(BaseModel):
+    subject: str
+    email: Optional[str] = None
+
+
+class FirebaseIdentity(BaseModel):
     subject: str
     email: Optional[str] = None
