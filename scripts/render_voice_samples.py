@@ -50,10 +50,6 @@ SAMPLE_SCRIPTS: dict[str, str] = {
         "and a little swaggery. Pick me when you want your morning "
         "to feel like a road trip."
     ),
-    "Fxt4GZnlXkUGMtWSYIcm": (  # Rocky Reverb
-        "I'm Rocky Reverb. Smooth, low, unhurried — late-night radio "
-        "energy. Pick me when you've got time to sit with it."
-    ),
     "rPMkKgdwgIwqv4fXgR6N": (  # Marlon Midnight
         "I'm Marlon Midnight. Deep, reflective — the voice you want "
         "when the story matters and the drive is long."
