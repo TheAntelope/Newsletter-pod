@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Protocol
 
@@ -39,11 +40,33 @@ class XPostFailed(RuntimeError):
     tweepy exception is chained via __cause__."""
 
 
+class XReadFailed(RuntimeError):
+    """Raised when a read endpoint (conversation_id search etc.) errors.
+    Kept separate from XPostFailed so the caller can distinguish a write
+    failure (the daily run can't post) from a read failure (we couldn't
+    pull replies — fall back to manual paste)."""
+
+
 @dataclass(frozen=True)
 class XPostResult:
     tweet_id: str
     tweet_url: str
     media_id: Optional[str] = None
+
+
+# Max replies pulled in a single conversation_id search. X recent-search
+# returns up to 100 per page; we'd need pagination beyond that. A single
+# broadcast post realistically attracts ~dozens — 100 is a comfortable
+# ceiling without paging logic.
+_REPLY_PAGE_LIMIT = 100
+
+
+@dataclass(frozen=True)
+class ReplyItem:
+    tweet_id: str
+    author_username: str
+    text: str
+    created_at: Optional[datetime] = None
 
 
 class _MediaUploader(Protocol):
@@ -59,6 +82,19 @@ class _TweetPoster(Protocol):
         text: str,
         media_ids: Optional[list[str]] = None,
         in_reply_to_tweet_id: Optional[str] = None,
+    ) -> object: ...
+
+
+class _TweetSearcher(Protocol):
+    def search_recent_tweets(
+        self,
+        query: str,
+        *,
+        max_results: int,
+        tweet_fields: list[str],
+        expansions: list[str],
+        user_fields: list[str],
+        user_auth: bool,
     ) -> object: ...
 
 
@@ -80,16 +116,19 @@ class XClient:
         # Injection seams for tests; default to real tweepy on prod.
         media_uploader: Optional[_MediaUploader] = None,
         tweet_poster: Optional[_TweetPoster] = None,
+        tweet_searcher: Optional[_TweetSearcher] = None,
     ) -> None:
         self._api_key = api_key
         self._api_secret = api_secret
         self._access_token = access_token
         self._access_token_secret = access_token_secret
-        self._username = username
+        self._username = (username or "").strip().lstrip("@") or None
         self._media_uploader_override = media_uploader
         self._tweet_poster_override = tweet_poster
+        self._tweet_searcher_override = tweet_searcher
         self._media_uploader_cached: Optional[_MediaUploader] = None
         self._tweet_poster_cached: Optional[_TweetPoster] = None
+        self._tweet_searcher_cached: Optional[_TweetSearcher] = None
 
     @property
     def is_configured(self) -> bool:
@@ -123,6 +162,16 @@ class XClient:
                 access_token_secret=self._access_token_secret,
             )
         return self._tweet_poster_cached
+
+    def _tweet_searcher(self) -> _TweetSearcher:
+        # Same underlying tweepy.Client as the poster in prod — the v2
+        # endpoint set covers both. Kept as a separate injection seam so
+        # tests can fake reads without faking writes (and vice versa).
+        if self._tweet_searcher_override is not None:
+            return self._tweet_searcher_override
+        if self._tweet_searcher_cached is None:
+            self._tweet_searcher_cached = self._tweet_poster()  # type: ignore[assignment]
+        return self._tweet_searcher_cached
 
     def _require_configured(self) -> None:
         if not self.is_configured:
@@ -218,6 +267,81 @@ class XClient:
 
         tweet_id = self._extract_tweet_id(response)
         return XPostResult(tweet_id=tweet_id, tweet_url=self._tweet_url(tweet_id))
+
+    def fetch_conversation_replies(
+        self,
+        *,
+        conversation_id: str,
+        max_results: int = _REPLY_PAGE_LIMIT,
+    ) -> list[ReplyItem]:
+        """Pull replies to the tweet rooted at conversation_id (typically
+        the broadcast episode tweet itself). Excludes posts by our own
+        handle when configured, so the auto-posted feedback-prompt reply
+        doesn't show up as audience signal.
+
+        Returns oldest-first to match the order a human would read the
+        thread; that ordering is also what the summarizer prompt expects.
+        Raises XReadFailed on transport / API errors so the caller can
+        distinguish "couldn't read" from "no replies yet"."""
+        self._require_configured()
+        if not conversation_id or not conversation_id.strip():
+            raise ValueError("conversation_id is required")
+        query = f"conversation_id:{conversation_id.strip()}"
+        if self._username:
+            query += f" -from:{self._username}"
+        # X requires max_results between 10 and 100 on recent-search.
+        capped = max(10, min(max_results, _REPLY_PAGE_LIMIT))
+        logger.info(
+            "X reply search starting: conversation_id=%s max_results=%d",
+            conversation_id,
+            capped,
+        )
+        try:
+            response = self._tweet_searcher().search_recent_tweets(
+                query,
+                max_results=capped,
+                tweet_fields=["author_id", "created_at"],
+                expansions=["author_id"],
+                user_fields=["username"],
+                user_auth=True,
+            )
+        except tweepy.TweepyException as exc:
+            raise XReadFailed(f"X reply search failed: {exc}") from exc
+
+        data = getattr(response, "data", None) or []
+        includes = getattr(response, "includes", None) or {}
+        users_by_id = {
+            str(getattr(u, "id", None) or (u.get("id") if isinstance(u, dict) else None)):
+                (getattr(u, "username", None) or (u.get("username") if isinstance(u, dict) else None) or "")
+            for u in includes.get("users", []) or []
+        }
+
+        replies: list[ReplyItem] = []
+        for tweet in data:
+            tweet_id = str(getattr(tweet, "id", None) or (tweet.get("id") if isinstance(tweet, dict) else "") or "")
+            text = str(getattr(tweet, "text", None) or (tweet.get("text") if isinstance(tweet, dict) else "") or "")
+            author_id = str(getattr(tweet, "author_id", None) or (tweet.get("author_id") if isinstance(tweet, dict) else "") or "")
+            created_at = getattr(tweet, "created_at", None) or (tweet.get("created_at") if isinstance(tweet, dict) else None)
+            author_username = users_by_id.get(author_id) or author_id
+            if not tweet_id or not text:
+                continue
+            replies.append(
+                ReplyItem(
+                    tweet_id=tweet_id,
+                    author_username=author_username,
+                    text=text,
+                    created_at=created_at if isinstance(created_at, datetime) else None,
+                )
+            )
+        # X recent-search returns newest first; reverse for chronological
+        # order so the summarizer sees the conversation as it happened.
+        replies.reverse()
+        logger.info(
+            "X reply search finished: conversation_id=%s replies=%d",
+            conversation_id,
+            len(replies),
+        )
+        return replies
 
     def _tweet_url(self, tweet_id: str) -> str:
         handle = (self._username or "i").strip().lstrip("@") or "i"
