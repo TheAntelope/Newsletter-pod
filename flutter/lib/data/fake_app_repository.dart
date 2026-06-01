@@ -119,6 +119,64 @@ class FakeAppRepository implements AppRepository {
     );
   }
 
+  @override
+  Future<NextEpisodeQueueEnvelope> fetchNextEpisodeQueue() async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    final now = DateTime.now();
+    return NextEpisodeQueueEnvelope(
+      enabled: true,
+      pinnedCount: 1,
+      maxPins: 3,
+      pinsRemaining: 2,
+      rankerUsed: true,
+      candidates: [
+        NextEpisodeCandidateDto(
+          dedupeKey: 'c1',
+          sourceId: 'stratechery',
+          sourceName: 'Stratechery',
+          title: 'The agentic web and the next platform shift',
+          summary: 'Why agents change distribution and what it means for aggregators.',
+          link: 'https://stratechery.com/x',
+          publishedAt: now.subtract(const Duration(hours: 5)),
+          pinned: true,
+          likelyIncluded: true,
+        ),
+        NextEpisodeCandidateDto(
+          dedupeKey: 'c2',
+          sourceId: 'platformer',
+          sourceName: 'Platformer',
+          title: 'Inside the latest trust & safety reorg',
+          summary: 'A look at how the team is restructuring after a tough quarter.',
+          link: 'https://platformer.news/x',
+          publishedAt: now.subtract(const Duration(hours: 8)),
+          pinned: false,
+          likelyIncluded: true,
+        ),
+        NextEpisodeCandidateDto(
+          dedupeKey: 'c3',
+          sourceId: 'platformer',
+          sourceName: 'Platformer',
+          title: 'A quieter week in fintech',
+          summary: 'Few launches, but two funding rounds worth noting.',
+          link: 'https://platformer.news/y',
+          publishedAt: now.subtract(const Duration(hours: 20)),
+          pinned: false,
+          likelyIncluded: false,
+        ),
+      ],
+    );
+  }
+
+  @override
+  Future<void> pinNextEpisodeItem(String dedupeKey) async {
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+  }
+
+  @override
+  Future<void> excludeNextEpisodeItem(String dedupeKey) async {
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+  }
+
   EntitlementsDto _demoEntitlements() => EntitlementsDto(
         tier: 'free',
         maxDeliveryDays: 7,

@@ -29,9 +29,12 @@ void main() {
 
     // Today tab: greeting + generate.
     expect(find.textContaining('Vince'), findsWidgets);
-    expect(find.text('Generate now'), findsOneWidget);
+    final generate = find.text('Generate now');
+    expect(generate, findsOneWidget);
 
-    await tester.tap(find.text('Generate now'));
+    await tester.ensureVisible(generate);
+    await tester.pumpAndSettle();
+    await tester.tap(generate);
     await tester.pumpAndSettle();
     expect(find.textContaining('being generated'), findsOneWidget);
   });
@@ -48,5 +51,29 @@ void main() {
     await tester.tap(find.text('Library'));
     await tester.pumpAndSettle();
     expect(find.text('Your Tuesday Briefing'), findsOneWidget);
+  });
+
+  testWidgets('next-pod queue opens and pins a story', (tester) async {
+    await _signIn(tester);
+
+    final entry = find.text('Preview & pin the stories');
+    await tester.ensureVisible(entry);
+    await tester.pumpAndSettle();
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('The agentic web and the next platform shift'),
+      findsOneWidget,
+    );
+    expect(find.text('Pinned'), findsOneWidget); // c1 starts pinned
+
+    final firstPin = find.text('Pin').first;
+    await tester.ensureVisible(firstPin);
+    await tester.pumpAndSettle();
+    await tester.tap(firstPin);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pinned'), findsNWidgets(2));
   });
 }

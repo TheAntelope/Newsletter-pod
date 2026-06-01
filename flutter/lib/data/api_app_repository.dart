@@ -20,4 +20,16 @@ class ApiAppRepository implements AppRepository {
 
   @override
   Future<EpisodesEnvelope> fetchEpisodes() => _client.fetchEpisodes(_token);
+
+  @override
+  Future<NextEpisodeQueueEnvelope> fetchNextEpisodeQueue() =>
+      _client.fetchNextEpisodeQueue(_token);
+
+  @override
+  Future<void> pinNextEpisodeItem(String dedupeKey) =>
+      _client.pinNextEpisodeItem(_token, dedupeKey);
+
+  @override
+  Future<void> excludeNextEpisodeItem(String dedupeKey) =>
+      _client.excludeNextEpisodeItem(_token, dedupeKey);
 }

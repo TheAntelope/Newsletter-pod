@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
+import 'next_episode_queue_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -64,6 +65,22 @@ class _Dashboard extends StatelessWidget {
         ),
         const SizedBox(height: DesignTokens.spacingM),
         _ScheduleCard(schedule: me.schedule),
+        const SizedBox(height: DesignTokens.spacingM),
+        Card(
+          child: ListTile(
+            title: Text('What’s in your next pod', style: text.titleMedium),
+            subtitle: Text(
+              'Preview & pin the stories',
+              style: text.labelMedium?.copyWith(color: DesignTokens.colorMuted),
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const NextEpisodeQueueScreen(),
+              ),
+            ),
+          ),
+        ),
         const SizedBox(height: DesignTokens.spacingL),
         SizedBox(
           width: double.infinity,

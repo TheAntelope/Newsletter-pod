@@ -10,4 +10,7 @@ abstract interface class AppRepository {
   Future<RunStartEnvelope> generateNow();
   Future<SourcesEnvelope> fetchSources();
   Future<EpisodesEnvelope> fetchEpisodes();
+  Future<NextEpisodeQueueEnvelope> fetchNextEpisodeQueue();
+  Future<void> pinNextEpisodeItem(String dedupeKey);
+  Future<void> excludeNextEpisodeItem(String dedupeKey);
 }
