@@ -18,6 +18,14 @@ DEFAULT_WIDTH = 720
 DEFAULT_HEIGHT = 720
 WAVEFORM_RATE = 15  # frames/sec — static cover doesn't need higher.
 
+# Hard ceiling on output duration. X rejects video uploads above the
+# brand account's tier limit (currently 2 min on Premium basic — see
+# the 403 surfaced in admin /admin/broadcast/loops/eu-morning on
+# 2026-06-01). 110s leaves a comfortable margin under that ceiling
+# even if the upstream LLM produces a longer-than-asked-for episode.
+# Increase this when you upgrade the X tier or want longer episodes.
+MAX_OUTPUT_SECONDS = 110
+
 
 class FfmpegUnavailable(RuntimeError):
     pass
@@ -81,6 +89,10 @@ def render_waveform_video(
             "-r", str(WAVEFORM_RATE),
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
             "-shortest",
+            # MAX_OUTPUT_SECONDS truncates both streams once the cap is
+            # hit, regardless of audio length. -shortest stays in place
+            # so the normal "audio ends first" path still works.
+            "-t", str(MAX_OUTPUT_SECONDS),
             "-movflags", "+faststart",
             str(output_path),
         ]

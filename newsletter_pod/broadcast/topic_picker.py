@@ -134,11 +134,13 @@ class BroadcastTopicPicker:
             topic=topic,
             audience_hint=loop.audience_persona,
             prior_feedback_summary=prior_feedback,
-            # 2-minute episodes for now: stays well under X's standard tweet
-            # video duration ceiling and within ElevenLabs char budgets even
-            # on slow days. Bump later (or make per-loop) once we've seen a
-            # successful end-to-end run.
-            desired_minutes=2,
+            # 1-minute episodes: the eu-morning X account is on a tier
+            # that caps video uploads at 2 minutes (HTTP 403 above), and
+            # an LLM asked for "2 minutes" routinely produces 2:10-2:30.
+            # Asking for 1 minute pushes realized length to ~1:00-1:30,
+            # comfortably under the cap. video.py also enforces a 110s
+            # hard ceiling at encode time as a safety net.
+            desired_minutes=1,
         )
         return topic, brief
 
