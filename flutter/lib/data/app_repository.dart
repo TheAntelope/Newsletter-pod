@@ -8,4 +8,6 @@ import '../api/models.dart';
 abstract interface class AppRepository {
   Future<MeEnvelope> fetchMe();
   Future<RunStartEnvelope> generateNow();
+  Future<SourcesEnvelope> fetchSources();
+  Future<EpisodesEnvelope> fetchEpisodes();
 }

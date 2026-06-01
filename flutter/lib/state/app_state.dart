@@ -10,6 +10,10 @@ class AppState extends ChangeNotifier {
 
   final AppRepository _repository;
 
+  /// Exposed so list screens can fetch their own data (sources, episodes, …)
+  /// without funnelling every collection through this store.
+  AppRepository get repository => _repository;
+
   bool _signedIn = false;
   bool get signedIn => _signedIn;
 

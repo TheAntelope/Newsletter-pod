@@ -14,4 +14,10 @@ class ApiAppRepository implements AppRepository {
 
   @override
   Future<RunStartEnvelope> generateNow() => _client.generateNow(_token);
+
+  @override
+  Future<SourcesEnvelope> fetchSources() => _client.fetchSources(_token);
+
+  @override
+  Future<EpisodesEnvelope> fetchEpisodes() => _client.fetchEpisodes(_token);
 }

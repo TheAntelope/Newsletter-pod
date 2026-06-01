@@ -34,16 +34,7 @@ class FakeAppRepository implements AppRepository {
         tier: 'free',
         status: 'active',
       ),
-      entitlements: EntitlementsDto(
-        tier: 'free',
-        maxDeliveryDays: 7,
-        minDurationMinutes: 3,
-        maxDurationMinutes: 5,
-        maxItemsPerEpisode: 25,
-        premiumPodsPerWeek: 1,
-        isInTrial: true,
-        trialPremiumPodsRemaining: 5,
-      ),
+      entitlements: _demoEntitlements(),
     );
   }
 
@@ -61,4 +52,81 @@ class FakeAppRepository implements AppRepository {
       started: true,
     );
   }
+
+  @override
+  Future<SourcesEnvelope> fetchSources() async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    return SourcesEnvelope(
+      sources: [
+        UserSourceDto(
+          id: 's1',
+          sourceId: 'stratechery',
+          name: 'Stratechery',
+          rssUrl: 'https://stratechery.com/feed/',
+          isCustom: false,
+          enabled: true,
+        ),
+        UserSourceDto(
+          id: 's2',
+          sourceId: 'platformer',
+          name: 'Platformer',
+          rssUrl: 'https://www.platformer.news/rss/',
+          isCustom: false,
+          enabled: true,
+        ),
+        UserSourceDto(
+          id: 's3',
+          sourceId: 'custom-1',
+          name: 'My Substack',
+          rssUrl: 'https://my.substack.com/feed',
+          isCustom: true,
+          enabled: false,
+        ),
+      ],
+      entitlements: _demoEntitlements(),
+    );
+  }
+
+  @override
+  Future<EpisodesEnvelope> fetchEpisodes() async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    final now = DateTime.now();
+    return EpisodesEnvelope(
+      episodes: [
+        LibraryEpisodeDto(
+          id: 'e1',
+          title: 'Your Tuesday Briefing',
+          description: 'AI agents, the chip race, and a quiet week in fintech.',
+          publishedAt: now.subtract(const Duration(days: 1)),
+          durationSeconds: 312,
+          processedItemCount: 11,
+          droppedItemCount: 2,
+          capHit: false,
+          sourceItemRefs: const [],
+        ),
+        LibraryEpisodeDto(
+          id: 'e2',
+          title: 'Your Monday Briefing',
+          description: 'Earnings season kicks off and two big product launches.',
+          publishedAt: now.subtract(const Duration(days: 2)),
+          durationSeconds: 287,
+          processedItemCount: 9,
+          droppedItemCount: 0,
+          capHit: false,
+          sourceItemRefs: const [],
+        ),
+      ],
+    );
+  }
+
+  EntitlementsDto _demoEntitlements() => EntitlementsDto(
+        tier: 'free',
+        maxDeliveryDays: 7,
+        minDurationMinutes: 3,
+        maxDurationMinutes: 5,
+        maxItemsPerEpisode: 25,
+        premiumPodsPerWeek: 1,
+        isInTrial: true,
+        trialPremiumPodsRemaining: 5,
+      );
 }
