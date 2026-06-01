@@ -209,11 +209,17 @@ class ScheduledBroadcastRunner:
     @staticmethod
     def _default_tweet_text(*, topic: str, title: str) -> str:
         # Twitter limit is 280; topic is the load-bearing portion, so
-        # we shape around it and leave room for the implicit video card.
+        # we shape around it and leave room for the implicit video card
+        # plus the iOS-app CTA. X counts any URL as 23 chars (t.co
+        # shortening) — we use the actual URL length here because Python
+        # doesn't know about t.co; the realized tweet will be a little
+        # shorter than the local budget calculation suggests, which is
+        # fine.
         prefix = "New episode: "
-        cta = " — replies welcome 🎙️"
-        budget = 280 - len(prefix) - len(cta)
-        return f"{prefix}{topic[:budget].rstrip()}{cta}"
+        ios_cta = "\n\nGet your own daily briefing on iOS → theclawcast.com/listeners"
+        replies_cta = "\n\nReplies welcome 🎙️"
+        budget = 280 - len(prefix) - len(ios_cta) - len(replies_cta)
+        return f"{prefix}{topic[:budget].rstrip()}{ios_cta}{replies_cta}"
 
 
 def _normalize_feedback_intent(value: Optional[str]) -> Optional[str]:

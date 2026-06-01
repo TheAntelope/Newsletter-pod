@@ -195,8 +195,14 @@ def test_run_uses_default_tweet_text_when_no_override(tmp_path):
 
     runner.run("us-morning")
 
-    assert "Proposed topic" in x.video_calls[0]["text"]
-    assert x.video_calls[0]["text"].startswith("New episode: ")
+    text = x.video_calls[0]["text"]
+    assert "Proposed topic" in text
+    assert text.startswith("New episode: ")
+    # iOS-app CTA: must be in the default tweet so every scheduled
+    # post promotes the app, and must stay under the 280-char cap.
+    assert "theclawcast.com/listeners" in text
+    assert "iOS" in text
+    assert len(text) <= 280
 
 
 def test_run_uses_tweet_text_override(tmp_path):
