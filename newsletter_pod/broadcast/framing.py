@@ -12,6 +12,15 @@ INTRO = (
     "and newsletters you actually follow, read to you by AI voices in about "
     "five minutes."
 )
+# Spoken App-Store CTA. Slots between the intro and the topic body so the
+# pitch lands before listeners get absorbed in the deep dive. Mirrors the
+# tweet CTA in runner._default_tweet_text — a listener landing in the
+# audio gets the same message as one landing in the X feed.
+APP_CTA = (
+    "If you want your very own podcast made just for you — covering the "
+    "writers, newsletters, and topics you actually follow — download "
+    "Claw Cast on the App Store."
+)
 FEEDBACK = (
     "Enjoying the show? We'd love to hear from you — leave a comment to tell "
     "us what you think and what you'd like us to cover next."
@@ -49,6 +58,6 @@ def build_framing(*, topic: str, feedback_text: Optional[str] = None) -> Episode
         feedback_line = feedback_text.strip()
 
     return EpisodeFraming(
-        lead=[GREETING, intro],
+        lead=[GREETING, intro, APP_CTA],
         tail=[feedback_line, OUTRO],
     )

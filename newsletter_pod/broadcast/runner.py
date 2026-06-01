@@ -216,7 +216,13 @@ class ScheduledBroadcastRunner:
         # shorter than the local budget calculation suggests, which is
         # fine.
         prefix = "New episode: "
-        ios_cta = "\n\nGet your own daily briefing on iOS → https://www.theclawcast.com/"
+        # Mirrors the spoken APP_CTA in framing.py so listeners landing in
+        # the X feed get the same offer as listeners landing in the audio.
+        ios_cta = (
+            "\n\nWant your own podcast made just for you, from the writers and "
+            "newsletters you actually follow? Get Claw Cast on the App Store "
+            "→ https://www.theclawcast.com/"
+        )
         replies_cta = "\n\nReplies welcome 🎙️"
         budget = 280 - len(prefix) - len(ios_cta) - len(replies_cta)
         return f"{prefix}{topic[:budget].rstrip()}{ios_cta}{replies_cta}"
