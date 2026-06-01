@@ -198,10 +198,13 @@ def test_run_uses_default_tweet_text_when_no_override(tmp_path):
     text = x.video_calls[0]["text"]
     assert "Proposed topic" in text
     assert text.startswith("New episode: ")
-    # iOS-app CTA: must be in the default tweet so every scheduled
-    # post promotes the app, and must stay under the 280-char cap.
+    # App-Store CTA: must be in the default tweet so every scheduled post
+    # promotes the app and matches the spoken APP_CTA inside framing.py.
+    # Total tweet length must stay under the 280-char cap.
     assert "https://www.theclawcast.com/" in text
-    assert "iOS" in text
+    assert "App Store" in text
+    # Brand is "The Claw Cast" — "The" intentional.
+    assert "The Claw Cast" in text
     assert len(text) <= 280
 
 
