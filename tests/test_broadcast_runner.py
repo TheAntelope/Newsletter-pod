@@ -17,7 +17,7 @@ from newsletter_pod.broadcast.runner import (
 )
 from newsletter_pod.broadcast.service import BroadcastService, BroadcastSettings
 from newsletter_pod.broadcast.topic_picker import BroadcastTopicPicker
-from newsletter_pod.broadcast.x_client import XPostResult
+from newsletter_pod.broadcast.x_client import ReplyItem, XPostResult, XReadFailed
 from newsletter_pod.models import AudioSegment, GeneratedEpisode, SourceItem
 from newsletter_pod.storage import InMemoryAudioStorage
 
@@ -92,9 +92,12 @@ class _FakePodcastClient:
 
 
 class _FakeXClient:
-    def __init__(self) -> None:
+    def __init__(self, *, replies=None, raise_on_fetch=None) -> None:
         self.video_calls: list[dict] = []
         self.reply_calls: list[dict] = []
+        self.fetch_calls: list[dict] = []
+        self._replies = replies or []
+        self._raise_on_fetch = raise_on_fetch
 
     def post_video_tweet(self, *, video_bytes, text, in_reply_to_tweet_id=None):
         self.video_calls.append({"text": text, "in_reply_to_tweet_id": in_reply_to_tweet_id})
@@ -103,6 +106,30 @@ class _FakeXClient:
     def post_reply(self, *, text, in_reply_to_tweet_id):
         self.reply_calls.append({"text": text, "in_reply_to_tweet_id": in_reply_to_tweet_id})
         return XPostResult(tweet_id="101", tweet_url="https://x.com/i/status/101")
+
+    def fetch_conversation_replies(self, *, conversation_id, max_results=100):
+        self.fetch_calls.append({"conversation_id": conversation_id, "max_results": max_results})
+        if self._raise_on_fetch is not None:
+            raise self._raise_on_fetch
+        return list(self._replies)
+
+
+class _FakeSummarizer:
+    """Deterministic stand-in for OpenAIFeedbackSummarizer. summary_for can
+    map a topic to a canned output (or None) so tests can simulate the
+    summarizer returning nothing useful. raise_on_call lets us assert
+    runner-level graceful handling."""
+
+    def __init__(self, *, summary="audience wants more on X", raise_on_call=None) -> None:
+        self.calls: list[dict] = []
+        self._summary = summary
+        self._raise = raise_on_call
+
+    def summarize(self, *, replies_text, topic):
+        self.calls.append({"replies_text": replies_text, "topic": topic})
+        if self._raise is not None:
+            raise self._raise
+        return self._summary
 
 
 class _FakeProposer:
@@ -135,6 +162,9 @@ def _build_runner(
     *,
     source_item_provider=None,
     podcast_client=None,
+    x_client: Optional[_FakeXClient] = None,
+    feedback_summarizer=None,
+    proposer=None,
 ) -> tuple[ScheduledBroadcastRunner, InMemoryBroadcastRepository, _FakeXClient]:
     cover = tmp_path / "cover.png"
     cover.write_bytes(b"cover")
@@ -155,9 +185,11 @@ def _build_runner(
         renderer=_fake_renderer,
         episode_id_factory=lambda: "deadbeefdeadbeef",
     )
-    x = _FakeXClient()
+    x = x_client or _FakeXClient()
     publisher = BroadcastPublisher(storage=storage, x_client=x)
-    picker = BroadcastTopicPicker(proposer=_FakeProposer(), repository=repo)
+    picker = BroadcastTopicPicker(
+        proposer=proposer or _FakeProposer(), repository=repo,
+    )
     runner = ScheduledBroadcastRunner(
         repository=repo,
         topic_picker=picker,
@@ -165,6 +197,8 @@ def _build_runner(
         publisher=publisher,
         source_item_provider=source_item_provider,
         run_date_factory=lambda loop: date(2026, 5, 30),
+        x_client=x if feedback_summarizer is not None else None,
+        feedback_summarizer=feedback_summarizer,
     )
     return runner, repo, x
 
@@ -294,3 +328,200 @@ def test_run_skips_provider_when_loop_has_no_source_ids(tmp_path):
     runner.run("us-morning")
 
     assert calls == []
+
+
+# ---- auto-poll of yesterday's replies before topic pick -------------------
+
+
+def _prior_episode(
+    *,
+    episode_id="aaaaaaaaaaaaaaaa",
+    loop_id="us-morning",
+    tweet_id="900",
+    feedback_pasted_at=None,
+    topic="yesterday's topic",
+) -> "BroadcastEpisodeRecord":
+    from newsletter_pod.broadcast.models import BroadcastEpisodeRecord
+    return BroadcastEpisodeRecord(
+        episode_id=episode_id,
+        loop_id=loop_id,
+        run_date=date(2026, 5, 29),
+        topic_used=topic,
+        title="t",
+        show_notes="n",
+        audio_object_name=f"broadcast/{episode_id}.mp3",
+        video_object_name=f"broadcast/{episode_id}.mp4",
+        episode_tweet_id=tweet_id,
+        episode_tweet_url=f"https://x.com/i/status/{tweet_id}" if tweet_id else None,
+        feedback_pasted_at=feedback_pasted_at,
+        created_at=datetime(2026, 5, 29, tzinfo=timezone.utc),
+    )
+
+
+class _CapturingProposer:
+    """Mirrors _FakeProposer but exposes the audience signal the picker
+    passed it — so we can assert the auto-poll wrote feedback BEFORE the
+    pick read it."""
+
+    def __init__(self, topic="Proposed topic") -> None:
+        self.calls: list[dict] = []
+        self._topic = topic
+
+    def propose(self, *, audience_persona, prior_feedback_summary, seed_topics):
+        self.calls.append({
+            "audience_persona": audience_persona,
+            "prior_feedback_summary": prior_feedback_summary,
+            "seed_topics": list(seed_topics),
+        })
+        return self._topic
+
+
+def test_auto_poll_persists_summary_before_topic_picker_reads_it(tmp_path):
+    # Happy path: X returns replies, summarizer condenses them, the prior
+    # episode is updated with feedback_summary, and the topic-picker's
+    # next propose() call sees that summary as prior_feedback_summary.
+    xclient = _FakeXClient(replies=[
+        ReplyItem(tweet_id="r1", author_username="Reader", text="more on Opus 4.8 please"),
+    ])
+    summarizer = _FakeSummarizer(summary="audience wants Opus 4.8 deep dive")
+    proposer = _CapturingProposer(topic="Opus 4.8 deep dive")
+    runner, repo, _ = _build_runner(
+        tmp_path,
+        x_client=xclient,
+        feedback_summarizer=summarizer,
+        proposer=proposer,
+    )
+    repo.save_loop(_loop())
+    repo.save_episode(_prior_episode())
+
+    runner.run("us-morning")
+
+    # Auto-poll hit the right conversation_id...
+    assert xclient.fetch_calls[-1]["conversation_id"] == "900"
+    # ...and summarizer got the formatted reply text + prior topic.
+    assert summarizer.calls[-1]["topic"] == "yesterday's topic"
+    assert "@Reader: more on Opus 4.8 please" in summarizer.calls[-1]["replies_text"]
+    # Prior episode now carries the summary.
+    refreshed_prior = repo.get_episode("aaaaaaaaaaaaaaaa")
+    assert refreshed_prior.feedback_summary == "audience wants Opus 4.8 deep dive"
+    assert refreshed_prior.feedback_pasted_at is not None
+    # And the topic-picker saw it.
+    assert proposer.calls[-1]["prior_feedback_summary"] == "audience wants Opus 4.8 deep dive"
+
+
+def test_auto_poll_skipped_when_no_prior_episode(tmp_path):
+    # First-run case for a loop: no episodes yet, auto-poll is a no-op.
+    xclient = _FakeXClient(replies=[ReplyItem(tweet_id="r", author_username="x", text="hi")])
+    summarizer = _FakeSummarizer()
+    runner, repo, _ = _build_runner(
+        tmp_path, x_client=xclient, feedback_summarizer=summarizer,
+    )
+    repo.save_loop(_loop())
+
+    runner.run("us-morning")
+
+    assert xclient.fetch_calls == []
+    assert summarizer.calls == []
+
+
+def test_auto_poll_skipped_when_prior_has_no_tweet_id(tmp_path):
+    # Prior episode publish failed (no tweet_id) — nothing to poll against.
+    xclient = _FakeXClient(replies=[ReplyItem(tweet_id="r", author_username="x", text="hi")])
+    summarizer = _FakeSummarizer()
+    runner, repo, _ = _build_runner(
+        tmp_path, x_client=xclient, feedback_summarizer=summarizer,
+    )
+    repo.save_loop(_loop())
+    repo.save_episode(_prior_episode(tweet_id=None))
+
+    runner.run("us-morning")
+
+    assert xclient.fetch_calls == []
+
+
+def test_auto_poll_skipped_when_prior_already_has_feedback(tmp_path):
+    # Operator-pasted (or a previous run already auto-polled). Don't
+    # overwrite — feedback_pasted_at is the idempotency marker.
+    xclient = _FakeXClient(replies=[ReplyItem(tweet_id="r", author_username="x", text="hi")])
+    summarizer = _FakeSummarizer()
+    runner, repo, _ = _build_runner(
+        tmp_path, x_client=xclient, feedback_summarizer=summarizer,
+    )
+    repo.save_loop(_loop())
+    repo.save_episode(_prior_episode(feedback_pasted_at=datetime(2026, 5, 29, 23, tzinfo=timezone.utc)))
+
+    runner.run("us-morning")
+
+    assert xclient.fetch_calls == []
+
+
+def test_auto_poll_handles_x_read_failure_without_failing_run(tmp_path):
+    # Rate limit / network blip on the read MUST not stop the run.
+    xclient = _FakeXClient(raise_on_fetch=XReadFailed("rate limited"))
+    summarizer = _FakeSummarizer()
+    runner, repo, _ = _build_runner(
+        tmp_path, x_client=xclient, feedback_summarizer=summarizer,
+    )
+    repo.save_loop(_loop())
+    repo.save_episode(_prior_episode())
+
+    result = runner.run("us-morning")  # must not raise
+
+    assert result.episode_id == "deadbeefdeadbeef"
+    # Prior record untouched — no write attempted after the read failed.
+    assert repo.get_episode("aaaaaaaaaaaaaaaa").feedback_summary is None
+    assert summarizer.calls == []
+
+
+def test_auto_poll_skipped_when_no_replies(tmp_path):
+    # X returned an empty result set — no write so we don't clobber an
+    # existing summary on a follow-up run.
+    xclient = _FakeXClient(replies=[])
+    summarizer = _FakeSummarizer()
+    runner, repo, _ = _build_runner(
+        tmp_path, x_client=xclient, feedback_summarizer=summarizer,
+    )
+    repo.save_loop(_loop())
+    repo.save_episode(_prior_episode())
+
+    runner.run("us-morning")
+
+    assert xclient.fetch_calls[-1]["conversation_id"] == "900"
+    assert summarizer.calls == []
+    assert repo.get_episode("aaaaaaaaaaaaaaaa").feedback_summary is None
+    assert repo.get_episode("aaaaaaaaaaaaaaaa").feedback_pasted_at is None
+
+
+def test_auto_poll_persists_raw_even_when_summarizer_raises(tmp_path):
+    # Summarizer exception is non-fatal: persist raw text + None summary so
+    # the operator can still see what came in, and tomorrow's picker falls
+    # back to round-robin seeds.
+    xclient = _FakeXClient(replies=[
+        ReplyItem(tweet_id="r1", author_username="Reader", text="meaningful reply"),
+    ])
+    summarizer = _FakeSummarizer(raise_on_call=RuntimeError("LLM outage"))
+    runner, repo, _ = _build_runner(
+        tmp_path, x_client=xclient, feedback_summarizer=summarizer,
+    )
+    repo.save_loop(_loop())
+    repo.save_episode(_prior_episode())
+
+    runner.run("us-morning")  # must not raise
+
+    refreshed = repo.get_episode("aaaaaaaaaaaaaaaa")
+    assert refreshed.feedback_summary is None
+    assert "@Reader: meaningful reply" in refreshed.feedback_raw
+    assert refreshed.feedback_pasted_at is not None
+
+
+def test_auto_poll_skipped_when_deps_not_wired(tmp_path):
+    # Backward-compat path: original test setups that don't pass auto-poll
+    # deps must not silently start hitting X.
+    xclient = _FakeXClient(replies=[ReplyItem(tweet_id="r", author_username="x", text="hi")])
+    runner, repo, _ = _build_runner(tmp_path, x_client=xclient)  # no summarizer
+    repo.save_loop(_loop())
+    repo.save_episode(_prior_episode())
+
+    runner.run("us-morning")
+
+    assert xclient.fetch_calls == []
