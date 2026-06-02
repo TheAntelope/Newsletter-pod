@@ -8,8 +8,8 @@ import '../widgets/editorial.dart';
 import '../widgets/onboarding_progress_dots.dart';
 import '../widgets/voice_choice_card.dart';
 
-/// 8-step onboarding wizard (welcome → name → sources → Substack → voice →
-/// schedule → weather → done). Editorial rebuild on the shared `OnboardingStepShell`
+/// Onboarding wizard (welcome → name → sources → Substack → show format → voices
+/// → schedule → weather → done). Editorial rebuild on the shared step-shell
 /// pattern from iOS: serif display title, body subtitle, a scrollable content
 /// well, and a bottom amber primary / outlined-back button pair, with the
 /// progress dots up top. Collected values are local in this build; finishing
@@ -22,7 +22,7 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  static const _stepCount = 8;
+  static const _stepCount = 9;
   static const _weekdays = [
     ('mon', 'M'),
     ('tue', 'T'),
@@ -33,15 +33,27 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     ('sun', 'S'),
   ];
 
+  static const _showPresets = [
+    ('solo_host', 'Solo host', 'One voice walks through the day.'),
+    ('two_hosts', 'Two hosts', 'An anchor and a co-host trade off. Recommended.'),
+    ('rotating_guest', 'Rotating guest',
+        'An anchor plus a different guest voice each day.'),
+  ];
+
   int _step = 0;
   final _nameController = TextEditingController();
   final _weatherController = TextEditingController();
-  String? _voiceId;
+  String _showPreset = 'two_hosts';
+  String? _anchorVoiceId;
+  String? _commentatorVoiceId;
   bool _includeWeather = false;
   final Set<String> _selectedDays = {'mon', 'tue', 'wed', 'thu', 'fri'};
   TimeOfDay _deliveryTime = const TimeOfDay(hour: 7, minute: 0);
 
   Future<VoiceCatalogEnvelope>? _voices;
+
+  bool get _isTwoHost => _showPreset == 'two_hosts';
+  bool get _isRotating => _showPreset == 'rotating_guest';
 
   @override
   void dispose() {
@@ -121,9 +133,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           subtitle:
               'A daily briefing podcast, built from the sources you choose. '
               "Let's set up your show — it takes about a minute.",
-          children: const [
-            _WelcomePoints(),
-          ],
+          children: const [_WelcomePoints()],
         );
       case 1:
         return _shell(
@@ -143,9 +153,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           subtitle:
               'Start from a curated catalog of tech and business newsletters — '
               'you can fine-tune it any time from the Sources tab.',
-          children: const [
-            _SourcePreview(),
-          ],
+          children: const [_SourcePreview()],
         );
       case 3:
         return _shell(
@@ -153,17 +161,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           subtitle:
               'Forward Substack subscriptions to your private ClawCast address '
               'and they fold into your pod automatically.',
-          children: const [
-            _InboundAddressCard(),
-          ],
+          children: const [_InboundAddressCard()],
         );
       case 4:
         return _shell(
-          title: 'Choose a voice',
-          subtitle: 'Pick who reads your briefing. You can change this later.',
-          children: [_voiceGrid()],
+          title: 'Choose a format',
+          subtitle: 'How should your briefing be hosted?',
+          children: [_showStep()],
         );
       case 5:
+        return _shell(
+          title: _isTwoHost ? 'Choose your voices' : 'Choose a voice',
+          subtitle: _isTwoHost
+              ? 'Pick an anchor and a co-host. You can change these later.'
+              : 'Pick who reads your briefing. You can change this later.',
+          children: [_voiceStep()],
+        );
+      case 6:
         return _shell(
           title: 'Set your schedule',
           subtitle:
@@ -171,7 +185,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               'at 07:00.',
           children: [_scheduleEditor()],
         );
-      case 6:
+      case 7:
         return _shell(
           title: 'Add a weather note?',
           subtitle:
@@ -184,9 +198,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           subtitle:
               "We'll generate your first pod shortly. You can change everything "
               'later from the app.',
-          children: const [
-            _WelcomePoints(allChecked: true),
-          ],
+          children: const [_WelcomePoints(allChecked: true)],
         );
     }
   }
@@ -224,7 +236,24 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  Widget _voiceGrid() {
+  Widget _showStep() {
+    return EditorialCard(
+      spacing: 0,
+      children: [
+        for (var i = 0; i < _showPresets.length; i++) ...[
+          if (i > 0) const EditorialDivider(),
+          _ShowPresetRow(
+            title: _showPresets[i].$2,
+            subtitle: _showPresets[i].$3,
+            selected: _showPreset == _showPresets[i].$1,
+            onTap: () => setState(() => _showPreset = _showPresets[i].$1),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _voiceStep() {
     _voices ??= AppScope.of(context).repository.fetchVoiceCatalog();
     return FutureBuilder<VoiceCatalogEnvelope>(
       future: _voices,
@@ -237,15 +266,37 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         }
         final voices = snapshot.data?.voices ?? const [];
         return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            _FieldLabel(_isTwoHost ? 'Anchor' : 'Voice'),
+            const SizedBox(height: DesignTokens.spacingS),
             for (final v in voices) ...[
               VoiceChoiceCard(
                 voice: v,
-                selected: _voiceId == v.id,
-                onSelect: () => setState(() => _voiceId = v.id),
+                selected: _anchorVoiceId == v.id,
+                onSelect: () => setState(() => _anchorVoiceId = v.id),
               ),
               const SizedBox(height: DesignTokens.spacingM),
             ],
+            if (_isTwoHost) ...[
+              const SizedBox(height: DesignTokens.spacingS),
+              const _FieldLabel('Co-host'),
+              const SizedBox(height: DesignTokens.spacingS),
+              for (final v in voices) ...[
+                VoiceChoiceCard(
+                  voice: v,
+                  selected: _commentatorVoiceId == v.id,
+                  onSelect: () => setState(() => _commentatorVoiceId = v.id),
+                ),
+                const SizedBox(height: DesignTokens.spacingM),
+              ],
+            ] else if (_isRotating)
+              Text(
+                'A different guest voice joins your anchor each day, drawn from '
+                'the full catalog.',
+                style: DesignTokens.typographyCallout
+                    .copyWith(color: DesignTokens.colorMuted),
+              ),
           ],
         );
       },
@@ -328,6 +379,75 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   String _formatTime(TimeOfDay t) =>
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+}
+
+class _FieldLabel extends StatelessWidget {
+  const _FieldLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: DesignTokens.typographyCalloutStrong
+          .copyWith(color: DesignTokens.colorMuted),
+    );
+  }
+}
+
+class _ShowPresetRow extends StatelessWidget {
+  const _ShowPresetRow({
+    required this.title,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: DesignTokens.spacingM),
+        child: Row(
+          children: [
+            Icon(
+              selected
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_unchecked,
+              color: selected
+                  ? DesignTokens.colorAmber
+                  : DesignTokens.colorMuted,
+            ),
+            const SizedBox(width: DesignTokens.spacingM),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: DesignTokens.typographyBodyStrong
+                        .copyWith(color: DesignTokens.colorInk),
+                  ),
+                  Text(
+                    subtitle,
+                    style: DesignTokens.typographyCallout
+                        .copyWith(color: DesignTokens.colorMuted),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _WelcomePoints extends StatelessWidget {

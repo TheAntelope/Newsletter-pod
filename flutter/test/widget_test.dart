@@ -197,8 +197,7 @@ void main() {
     expect(find.textContaining('coming soon'), findsOneWidget); // stub snackbar
   });
 
-  testWidgets('onboarding wizard advances 8 steps to the dashboard',
-      (tester) async {
+  testWidgets('onboarding wizard advances to the dashboard', (tester) async {
     _useTallViewport(tester);
     final appState = AppState(FakeAppRepository());
     await tester.pumpWidget(
@@ -211,7 +210,8 @@ void main() {
     // Onboarding (not the dashboard) shows first.
     expect(find.text('Welcome to ClawCast'), findsOneWidget);
 
-    for (var i = 0; i < 7; i++) {
+    // Advance through every step until only Finish remains (step count varies).
+    for (var guard = 0; guard < 20 && find.text('Next').evaluate().isNotEmpty; guard++) {
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
     }
