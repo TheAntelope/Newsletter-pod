@@ -69,7 +69,7 @@ void main() {
 
     await tester.tap(find.text('Sources'));
     await tester.pumpAndSettle();
-    expect(find.text('Stratechery'), findsOneWidget);
+    expect(find.text('News'), findsOneWidget); // a catalog topic group header
 
     await tester.tap(find.text('Library'));
     await tester.pumpAndSettle();
@@ -151,10 +151,15 @@ void main() {
     await tester.tap(find.text('Sources'));
     await tester.pumpAndSettle();
 
-    // Topic group headers (expanded by default) with their catalog sources.
+    // The real ~90-source catalog renders as collapsible topic groups.
+    expect(find.text('News'), findsOneWidget);
     expect(find.text('Tech'), findsOneWidget);
     expect(find.text('Business'), findsOneWidget);
-    expect(find.text('Stratechery'), findsOneWidget); // a Tech source
+
+    // Expanding a group reveals its sources.
+    await tester.tap(find.text('Tech'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Stratechery'), findsOneWidget);
   });
 
   testWidgets('substack add lists intents and discovers candidates',

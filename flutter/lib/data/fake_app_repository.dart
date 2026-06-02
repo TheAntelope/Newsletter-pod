@@ -1,6 +1,9 @@
+import 'dart:convert';
+
 import '../api/api_client.dart' show SourcePayload;
 import '../api/models.dart';
 import 'app_repository.dart';
+import 'demo_catalog_data.dart';
 
 /// In-memory demo data so the UI runs end-to-end without a backend, Firebase, or
 /// accounts. Swapped for [ApiAppRepository] once sign-in returns a real session.
@@ -90,26 +93,11 @@ class FakeAppRepository implements AppRepository {
 
   @override
   Future<CatalogEnvelope> fetchCatalog() async {
-    await Future<void>.delayed(const Duration(milliseconds: 150));
-    CatalogSourceDto s(String id, String name, String url, String topic) =>
-        CatalogSourceDto(
-          sourceId: id,
-          name: name,
-          rssUrl: url,
-          enabled: true,
-          topic: topic,
-        );
-    return CatalogEnvelope(
-      sources: [
-        s('stratechery', 'Stratechery', 'https://stratechery.com/feed/', 'Tech'),
-        s('platformer', 'Platformer', 'https://www.platformer.news/rss/', 'Tech'),
-        s('benedict', 'Benedict Evans', 'https://www.ben-evans.com/benedictevans?format=rss', 'Tech'),
-        s('matt-levine', 'Money Stuff', 'https://www.bloomberg.com/money-stuff.rss', 'Business'),
-        s('lenny', "Lenny's Newsletter", 'https://www.lennysnewsletter.com/feed', 'Business'),
-        s('the-pudding', 'The Pudding', 'https://pudding.cool/feed/index.xml', 'Culture'),
-        s('quanta', 'Quanta Magazine', 'https://www.quantamagazine.org/feed/', 'Science'),
-      ],
-    );
+    // The real production catalog (~90 sources across 14 topics), embedded as a
+    // Dart constant (see demo_catalog_data.dart for why not rootBundle). The
+    // live ApiAppRepository fetches the same public endpoint once auth lands.
+    return CatalogEnvelope.fromJson(
+        jsonDecode(kDemoSourcesCatalogJson) as Map<String, dynamic>);
   }
 
   @override
@@ -410,25 +398,11 @@ class FakeAppRepository implements AppRepository {
 
   @override
   Future<VoiceCatalogEnvelope> fetchVoiceCatalog() async {
-    await Future<void>.delayed(const Duration(milliseconds: 120));
-    return VoiceCatalogEnvelope(
-      voices: [
-        CatalogVoiceDto(
-          id: 'vinnie',
-          name: 'Vinnie Chase',
-          gender: 'male',
-          description: 'Warm, conversational anchor.',
-          previewUrl: 'assets/audio/sample.wav',
-        ),
-        CatalogVoiceDto(
-          id: 'demi',
-          name: 'Demi Dreams',
-          gender: 'female',
-          description: 'Bright, energetic co-host.',
-          previewUrl: 'assets/audio/sample.wav',
-        ),
-      ],
-    );
+    // Real voice catalog with public GCS preview MP3s, so "Hear a sample" plays
+    // the actual ElevenLabs voices (Vinnie Chase, Demi Dreams, …). Embedded as a
+    // Dart constant (see demo_catalog_data.dart) rather than a bundled asset.
+    return VoiceCatalogEnvelope.fromJson(
+        jsonDecode(kDemoVoicesCatalogJson) as Map<String, dynamic>);
   }
 
   @override
@@ -574,7 +548,7 @@ class FakeAppRepository implements AppRepository {
         hostSecondaryName: 'Demi',
         guestNames: const [],
         desiredDurationMinutes: 5,
-        voiceId: 'vinnie',
+        voiceId: 'suMMgpGbVcnihP1CcgFS', // Vinnie Chase (real catalog id)
       );
 
   DeliveryScheduleDto _demoSchedule() => DeliveryScheduleDto(

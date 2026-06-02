@@ -204,7 +204,8 @@ class _CatalogGroup extends StatefulWidget {
 }
 
 class _CatalogGroupState extends State<_CatalogGroup> {
-  bool _expanded = true;
+  // Collapsed by default — the real catalog has ~90 sources across 14 topics.
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
