@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api/models.dart';
 import '../design_tokens.dart';
+import '../services/dictation_controller.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
 import '../widgets/generation_progress_bar.dart';
@@ -496,32 +497,69 @@ class _FeedbackComposer extends StatefulWidget {
 
 class _FeedbackComposerState extends State<_FeedbackComposer> {
   final _controller = TextEditingController();
+  final _dictation = DictationController();
   bool _submitting = false;
   bool _sent = false;
+  String _source = 'text';
+  String _dictationBase = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _dictation.addListener(_onDictation);
+  }
 
   @override
   void dispose() {
+    _dictation.removeListener(_onDictation);
+    _dictation.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _onDictation() {
+    if (_dictation.listening || _dictation.transcript.isNotEmpty) {
+      final sep = (_dictationBase.isEmpty || _dictationBase.endsWith(' '))
+          ? ''
+          : ' ';
+      _controller.text = '$_dictationBase$sep${_dictation.transcript}';
+    }
+    setState(() {});
+  }
+
+  Future<void> _toggleDictation() async {
+    if (_dictation.listening) {
+      await _dictation.stop();
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    _dictationBase = _controller.text;
+    _source = 'voice';
+    final ok = await _dictation.start();
+    if (!ok) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text("Dictation isn't available here.")),
+      );
+    }
   }
 
   Future<void> _submit() async {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
+    final repo = AppScope.of(context).repository;
+    final messenger = ScaffoldMessenger.of(context);
+    if (_dictation.listening) await _dictation.stop();
     setState(() => _submitting = true);
     try {
-      await AppScope.of(context).repository.submitFeedback(
-            text: text,
-            source: 'text',
-          );
+      await repo.submitFeedback(text: text, source: _source);
       if (!mounted) return;
       setState(() {
         _sent = true;
         _controller.clear();
+        _source = 'text';
       });
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -529,6 +567,7 @@ class _FeedbackComposerState extends State<_FeedbackComposer> {
 
   @override
   Widget build(BuildContext context) {
+    final listening = _dictation.listening;
     return EditorialCard(
       children: [
         const MetaLabel('Send feedback'),
@@ -546,14 +585,22 @@ class _FeedbackComposerState extends State<_FeedbackComposer> {
               hintText: "What's working, what's not, what would you change?",
             ),
           ),
-          Align(
-            alignment: Alignment.centerRight,
-            child: AmberButton.filled(
-              label: 'Submit',
-              expand: false,
-              loading: _submitting,
-              onPressed: _submitting ? null : _submit,
-            ),
+          Row(
+            children: [
+              AmberButton.outlined(
+                label: listening ? 'Stop' : 'Dictate',
+                icon: listening ? Icons.stop : Icons.mic,
+                expand: false,
+                onPressed: _submitting ? null : _toggleDictation,
+              ),
+              const Spacer(),
+              AmberButton.filled(
+                label: 'Submit',
+                expand: false,
+                loading: _submitting,
+                onPressed: _submitting || listening ? null : _submit,
+              ),
+            ],
           ),
         ],
       ],
