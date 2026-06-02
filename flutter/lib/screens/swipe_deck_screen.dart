@@ -5,11 +5,14 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
+import '../widgets/editorial.dart';
 
 /// Interest-learning swipe deck. The top card follows the drag with a clamped
-/// rotation; past the threshold it flies off (right = keep / +1, left = skip /
-/// -1) and submitSwipe is sent, otherwise it springs back. Skip/Keep buttons do
-/// the same without a drag.
+/// rotation and edge "decision" labels; past the threshold it flies off (right
+/// = keep / +1, left = skip / -1) and submitSwipe is sent, otherwise it springs
+/// back. The two cards behind it peek through, scaled and offset. Pass/Keep
+/// buttons drive the same commit without a drag. Matches the iOS `SwipeDeckView`
+/// stack (depth 3) and physics.
 class SwipeDeckScreen extends StatefulWidget {
   const SwipeDeckScreen({super.key});
 
@@ -21,7 +24,8 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen>
     with SingleTickerProviderStateMixin {
   static const double _threshold = 110;
   static const double _flyOff = 600;
-  static const double _maxAngle = math.pi / 12; // ±15°
+  static const double _maxAngleDeg = 15;
+  static const int _stackDepth = 3;
 
   late final AppState _app;
   bool _initialized = false;
@@ -38,10 +42,8 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen>
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 280),
-    )..addListener(() => setState(() {}));
+    _controller = AnimationController(vsync: this)
+      ..addListener(() => setState(() {}));
   }
 
   @override
@@ -81,8 +83,15 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen>
 
   Offset get _offset => _anim?.value ?? _drag;
 
-  double get _angle =>
-      ((_offset.dx / 320) * _maxAngle).clamp(-_maxAngle, _maxAngle);
+  /// Rotation tracks horizontal drag at ~1° per 18pt, clamped to ±15° — the
+  /// iOS feel (`dragOffset.width / 18`).
+  double get _angleRadians {
+    final deg = (_offset.dx / 18).clamp(-_maxAngleDeg, _maxAngleDeg);
+    return deg * math.pi / 180;
+  }
+
+  double get _likeOpacity => (_offset.dx / _threshold).clamp(0.0, 1.0);
+  double get _passOpacity => (-_offset.dx / _threshold).clamp(0.0, 1.0);
 
   void _onPanUpdate(DragUpdateDetails d) {
     if (_controller.isAnimating) return;
@@ -95,21 +104,28 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen>
     } else if (_drag.dx < -_threshold) {
       _dismiss(-1);
     } else {
-      _animate(Offset.zero, dismiss: false);
+      _springBack();
     }
+  }
+
+  void _springBack() {
+    _dismissing = false;
+    _anim = Tween<Offset>(begin: _drag, end: Offset.zero).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOutBack),
+    );
+    _controller.duration = const Duration(milliseconds: 350);
+    _controller.forward(from: 0).whenComplete(_finish);
   }
 
   void _dismiss(int direction) {
     if (_cards.isEmpty || _controller.isAnimating) return;
     _direction = direction;
-    _animate(Offset(direction * _flyOff, _drag.dy), dismiss: true);
-  }
-
-  void _animate(Offset target, {required bool dismiss}) {
-    _dismissing = dismiss;
-    _anim = Tween<Offset>(begin: _drag, end: target).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
-    );
+    _dismissing = true;
+    _anim = Tween<Offset>(
+      begin: _drag,
+      end: Offset(direction * _flyOff, _drag.dy),
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
+    _controller.duration = const Duration(milliseconds: 250);
     _controller.forward(from: 0).whenComplete(_finish);
   }
 
@@ -131,7 +147,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Discover')),
+      appBar: AppBar(title: const Text('Tune your pod')),
       body: SafeArea(child: _body()),
     );
   }
@@ -139,33 +155,53 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen>
   Widget _body() {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null) return Center(child: Text(_error!));
-    if (_cards.isEmpty) {
-      return Center(
-        child: Text(
-          'You’re all caught up.',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-      );
-    }
+    if (_cards.isEmpty) return const _EmptyState();
+
     final busy = _controller.isAnimating;
+    final depth = math.min(_stackDepth, _cards.length);
+
     return Column(
       children: [
         Expanded(
           child: Padding(
             padding: const EdgeInsets.all(DesignTokens.spacingL),
             child: Stack(
-              fit: StackFit.expand,
+              alignment: Alignment.center,
               children: [
-                if (_cards.length > 1)
-                  Transform.scale(scale: 0.96, child: _cardSurface(_cards[1])),
+                // Background cards, furthest first.
+                for (var i = depth - 1; i >= 1; i--)
+                  _BackgroundCard(card: _cards[i], depth: i),
+                // Top, draggable card.
                 GestureDetector(
                   onPanUpdate: _onPanUpdate,
                   onPanEnd: _onPanEnd,
                   child: Transform.translate(
                     offset: _offset,
                     child: Transform.rotate(
-                      angle: _angle,
-                      child: _cardSurface(_cards[0]),
+                      angle: _angleRadians,
+                      child: Stack(
+                        children: [
+                          _CardChrome(card: _cards[0]),
+                          Positioned(
+                            top: DesignTokens.spacingL,
+                            left: DesignTokens.spacingL,
+                            child: _DecisionLabel(
+                              text: 'MORE LIKE THIS',
+                              color: const Color(0xFF2E7D32),
+                              opacity: _likeOpacity,
+                            ),
+                          ),
+                          Positioned(
+                            top: DesignTokens.spacingL,
+                            right: DesignTokens.spacingL,
+                            child: _DecisionLabel(
+                              text: 'PASS',
+                              color: const Color(0xFFC62828),
+                              opacity: _passOpacity,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -181,17 +217,20 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen>
             DesignTokens.spacingL,
           ),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              OutlinedButton.icon(
+              _ActionButton(
+                icon: Icons.close,
+                filled: false,
                 onPressed: busy ? null : () => _dismiss(-1),
-                icon: const Icon(Icons.close),
-                label: const Text('Skip'),
+                semanticLabel: 'Skip',
               ),
-              ElevatedButton.icon(
+              const SizedBox(width: DesignTokens.spacingXl),
+              _ActionButton(
+                icon: Icons.favorite,
+                filled: true,
                 onPressed: busy ? null : () => _dismiss(1),
-                icon: const Icon(Icons.favorite),
-                label: const Text('Keep'),
+                semanticLabel: 'Keep',
               ),
             ],
           ),
@@ -199,24 +238,194 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen>
       ],
     );
   }
+}
 
-  Widget _cardSurface(SwipeDeckCardDto card) {
-    final text = Theme.of(context).textTheme;
-    return Card(
+class _CardChrome extends StatelessWidget {
+  const _CardChrome({required this.card});
+
+  final SwipeDeckCardDto card;
+
+  static const _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final d = card.publishedAt.toLocal();
+    final date = '${_months[d.month - 1]} ${d.day}, ${d.year}';
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 340),
+      child: EditorialCard(
+        children: [
+          MetaLabel(card.sourceName),
+          Text(
+            card.title,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: DesignTokens.typographyTitle
+                .copyWith(color: DesignTokens.colorInk),
+          ),
+          Text(
+            card.displaySummary,
+            maxLines: 6,
+            overflow: TextOverflow.ellipsis,
+            style: DesignTokens.typographyCallout
+                .copyWith(color: DesignTokens.colorInkSoft),
+          ),
+          const SizedBox(height: DesignTokens.spacingS),
+          Row(
+            children: [
+              const Icon(Icons.calendar_today_outlined,
+                  size: 14, color: DesignTokens.colorMuted),
+              const SizedBox(width: 4),
+              Text(
+                date,
+                style: DesignTokens.typographyCallout
+                    .copyWith(color: DesignTokens.colorMuted),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BackgroundCard extends StatelessWidget {
+  const _BackgroundCard({required this.card, required this.depth});
+
+  final SwipeDeckCardDto card;
+  final int depth;
+
+  @override
+  Widget build(BuildContext context) {
+    final scale = math.max(0.85, 1.0 - depth * 0.05);
+    final yOffset = depth * 12.0;
+    final opacity = math.max(0.4, 1.0 - depth * 0.2);
+    return IgnorePointer(
+      child: Transform.translate(
+        offset: Offset(0, yOffset),
+        child: Transform.scale(
+          scale: scale,
+          child: Opacity(opacity: opacity, child: _CardChrome(card: card)),
+        ),
+      ),
+    );
+  }
+}
+
+class _DecisionLabel extends StatelessWidget {
+  const _DecisionLabel({
+    required this.text,
+    required this.color,
+    required this.opacity,
+  });
+
+  final String text;
+  final Color color;
+  final double opacity;
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: opacity,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: color, width: 3),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: color,
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 2,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({
+    required this.icon,
+    required this.filled,
+    required this.onPressed,
+    required this.semanticLabel,
+  });
+
+  final IconData icon;
+  final bool filled;
+  final VoidCallback? onPressed;
+  final String semanticLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: semanticLabel,
+      button: true,
+      child: SizedBox(
+        width: 64,
+        height: 64,
+        child: filled
+            ? ElevatedButton(
+                onPressed: onPressed,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: DesignTokens.colorAmber,
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: DesignTokens.colorRule,
+                  elevation: 0,
+                  shape: const CircleBorder(),
+                  padding: EdgeInsets.zero,
+                ),
+                child: Icon(icon, size: 24),
+              )
+            : OutlinedButton(
+                onPressed: onPressed,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: DesignTokens.colorAmberDeep,
+                  side: const BorderSide(
+                      color: DesignTokens.colorAmber, width: 1.5),
+                  shape: const CircleBorder(),
+                  padding: EdgeInsets.zero,
+                ),
+                child: Icon(icon, size: 24),
+              ),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
       child: Padding(
-        padding: const EdgeInsets.all(DesignTokens.spacingL),
+        padding: const EdgeInsets.all(DesignTokens.spacingXl),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
+            const Icon(Icons.verified_outlined,
+                size: 44, color: DesignTokens.colorAmberDeep),
+            const SizedBox(height: DesignTokens.spacingM),
             Text(
-              card.sourceName.toUpperCase(),
-              style: text.labelSmall?.copyWith(color: DesignTokens.colorMuted),
+              'All caught up',
+              style: DesignTokens.typographyTitle
+                  .copyWith(color: DesignTokens.colorInk),
             ),
             const SizedBox(height: DesignTokens.spacingS),
-            Text(card.title, style: text.titleLarge),
-            const SizedBox(height: DesignTokens.spacingM),
-            Expanded(
-              child: Text(card.displaySummary, style: text.bodyMedium),
+            Text(
+              "You've swiped through everything we've pulled in for your "
+              'sources. Check back after your next briefing.',
+              textAlign: TextAlign.center,
+              style: DesignTokens.typographyCallout
+                  .copyWith(color: DesignTokens.colorInkSoft),
             ),
           ],
         ),

@@ -125,20 +125,17 @@ void main() {
     await tester.tap(find.text('Discover'));
     await tester.pumpAndSettle();
 
+    // Depth-3 stack: the top card and the two behind it all render.
     expect(find.text('The state of open-source LLMs'), findsOneWidget); // top
-    expect(
-      find.text('A field guide to agent frameworks'),
-      findsNothing, // 3rd card not rendered yet (only top + 1 behind)
-    );
+    expect(find.text('Why latency is the new moat'), findsOneWidget); // peeking
 
-    await tester.tap(find.text('Keep'));
+    // Keep is the filled heart action button (icon-only, like iOS).
+    await tester.tap(find.byIcon(Icons.favorite));
     await tester.pumpAndSettle();
 
+    // Top card flew off; the deck advanced.
     expect(find.text('The state of open-source LLMs'), findsNothing); // swiped
-    expect(
-      find.text('A field guide to agent frameworks'),
-      findsOneWidget, // now the card behind the new top
-    );
+    expect(find.text('Why latency is the new moat'), findsOneWidget); // new top
   });
 
   testWidgets('substack add lists intents and discovers candidates',
