@@ -9,6 +9,7 @@ import '../data/api_app_repository.dart';
 import '../data/app_repository.dart';
 import '../services/auth_controller.dart';
 import '../services/messaging_controller.dart';
+import '../services/purchases_controller.dart';
 
 /// Single observable app-state store (the Flutter analogue of iOS AppViewModel).
 /// Holds session + the `/v1/me` snapshot and drives the screens via [AppScope].
@@ -91,6 +92,21 @@ class AppState extends ChangeNotifier {
     // Best-effort: register this device for FCM push. Fire-and-forget so a
     // denied permission or messaging hiccup never blocks the signed-in UI.
     unawaited(_registerForPush());
+    // Best-effort: identify the user to RevenueCat so purchases + the billing
+    // webhook line up on our backend user id.
+    unawaited(_configurePurchases());
+  }
+
+  /// Configures RevenueCat with our backend user id. No-ops unless the
+  /// purchases flag + Android key are set; never throws into the sign-in flow.
+  Future<void> _configurePurchases() async {
+    final userId = _me?.user.id;
+    if (userId == null) return;
+    try {
+      await PurchasesController.configureAndLogin(userId);
+    } catch (_) {
+      // Best-effort; billing init must never block the signed-in UI.
+    }
   }
 
   /// Requests notification permission and registers the FCM token with the
@@ -164,6 +180,8 @@ class AppState extends ChangeNotifier {
     if (FeatureFlags.googleSignIn) {
       unawaited(AuthController().signOut());
     }
+    // No-ops unless the purchases flag + key are set.
+    unawaited(PurchasesController.logOut());
     _signedIn = false;
     _onboardingComplete = false;
     _me = null;

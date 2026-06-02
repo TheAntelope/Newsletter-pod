@@ -271,6 +271,27 @@ class Settings(BaseSettings):
         default="com.newsletterpod.max.annual", alias="APP_STORE_MAX_ANNUAL_PRODUCT_ID"
     )
 
+    # RevenueCat (Android / Play Billing). The webhook auth secret is the
+    # Authorization header value configured in the RevenueCat dashboard; the
+    # webhook verifies it with a constant-time compare. Product ids map the
+    # RevenueCat/Play products → tier (mirrors the App Store ids above). When
+    # the secret is unset the webhook 503s, so this ships safely ahead of setup.
+    revenuecat_webhook_auth_secret: Optional[str] = Field(
+        default=None, alias="REVENUECAT_WEBHOOK_AUTH_SECRET"
+    )
+    revenuecat_pro_monthly_product_id: str = Field(
+        default="pro_monthly", alias="REVENUECAT_PRO_MONTHLY_PRODUCT_ID"
+    )
+    revenuecat_pro_annual_product_id: str = Field(
+        default="pro_annual", alias="REVENUECAT_PRO_ANNUAL_PRODUCT_ID"
+    )
+    revenuecat_max_monthly_product_id: str = Field(
+        default="max_monthly", alias="REVENUECAT_MAX_MONTHLY_PRODUCT_ID"
+    )
+    revenuecat_max_annual_product_id: str = Field(
+        default="max_annual", alias="REVENUECAT_MAX_ANNUAL_PRODUCT_ID"
+    )
+
     # App Store Server Notifications V2 signed-payload verification.
     # - bundle_id: must match what's registered in App Store Connect.
     # - environment: "sandbox" or "production" (Apple uses different cert
@@ -391,6 +412,9 @@ class Settings(BaseSettings):
         # internal newlines (json.loads is whitespace-tolerant either way).
         settings.fcm_service_account_json = _normalize_secret_value(
             _resolve_secret_reference(settings.fcm_service_account_json)
+        )
+        settings.revenuecat_webhook_auth_secret = _normalize_secret_value(
+            _resolve_secret_reference(settings.revenuecat_webhook_auth_secret)
         )
         settings.session_signing_secret = _normalize_secret_value(
             _resolve_secret_reference(settings.session_signing_secret)

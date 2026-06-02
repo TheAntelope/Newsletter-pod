@@ -45,21 +45,34 @@ Legend: **[you]** = console/account/portal work only you can do · **[code]** = 
 
 ## 2. RevenueCat billing (Google Play Billing)
 
-**[you] — Play Console + RevenueCat**
-- [ ] Google Play Console: create the app, then create the **in-app products / subscriptions** matching the launch-lock pricing:
-  - Pro **$19.99/mo**, **$179.99/yr**
-  - Max **$29.99/mo**, **$269.99/yr**
-  - (Free trial: 5 pods → 1 premium/wk month 1 → 1 default/wk forever — model the trial in the product config.)
-- [ ] Create a **RevenueCat** project, add the Play Store app, paste the **Play service-account JSON** so RC can read purchases.
-- [ ] Map the Play products to RevenueCat **entitlements** (e.g. `pro`, `max`) and **offerings**.
-- [ ] Grab the RevenueCat **public SDK key** (Android) and the **webhook signing secret**.
+> **Status 2026-06-02 — code DONE, blocked on Play/RevenueCat setup + secret.**
+> Backend: `POST /webhooks/revenuecat` (constant-time Authorization-header check
+> against `REVENUECAT_WEBHOOK_AUTH_SECRET`; 503 until set, 401 on mismatch) →
+> `apply_revenuecat_event` maps RC events to the existing subscription mutation
+> (INITIAL_PURCHASE/RENEWAL/PRODUCT_CHANGE/UNCANCELLATION → activate,
+> EXPIRATION → revoke; CANCELLATION keeps access until expiry), resolving tier
+> from RC product ids (config) with an entitlement-id fallback; records a
+> BillingEventRecord + reuses `_log_subscription_mutation`. Config gained the
+> webhook secret + 4 RC product-id settings. Flutter: `purchases_flutter`,
+> `PurchasesController` (configure/logIn/logOut/purchase), paywall "Choose" runs
+> a real purchase + `loadMe()` (behind `ENABLE_PURCHASES_REVENUECAT`, default
+> off → stub "coming soon" preserved). Tests: `tests/test_revenuecat_webhook.py`
+> (auth, activate via product-id + entitlement fallback, revoke, keep-on-cancel,
+> unknown-user) + paywall widget test. RevenueCat's `app_user_id` must be our
+> backend user id — the client calls `Purchases.logIn(userId)` after sign-in.
 
-**[code] — Flutter + backend**
-- [ ] Add `purchases_flutter`; init with the public key after sign-in (identify the RC user by the Firebase uid).
-- [ ] Replace the stubbed "Choose Pro/Max" handlers in `paywall_screen.dart` with `Purchases.purchasePackage(...)`; gate premium features on the active entitlement.
-- [ ] Backend: add a **RevenueCat webhook** endpoint (`/v1/webhooks/revenuecat` or similar) that verifies the signing secret and updates the user's plan/entitlement in Firestore. (There is no billing webhook today — this is net-new.)
+**[you] — Play Console + RevenueCat (the remaining work)**
+- [ ] Google Play Console: create the app + **subscriptions** for the launch pricing:
+  Pro **$19.99/mo + $179.99/yr**, Max **$29.99/mo + $269.99/yr** (trial: 5 pods → 1 premium/wk month 1 → 1 default/wk).
+- [ ] RevenueCat project: add the Play app + the **Play service-account JSON**; create entitlements named **`pro`** and **`max`**; build an **offering** whose packages are identified `pro_monthly`/`pro_annual`/`max_monthly`/`max_annual` (or set the matching `REVENUECAT_*_PRODUCT_ID` env vars to your Play product ids).
+- [ ] Grab the **Android public SDK key** (`goog_…`) and set a **webhook Authorization header value** in RevenueCat → Integrations → Webhooks.
+- [ ] Hand me the SDK key + the webhook secret value. I'll then: create Secret Manager secret `revenuecat-webhook-auth-secret`, add it to `cloudbuild.yaml` `--update-secrets`, set it on Cloud Run, and build the app with `--dart-define=ENABLE_PURCHASES_REVENUECAT=true --dart-define=REVENUECAT_ANDROID_KEY=goog_…`.
 
-**Acceptance:** a test purchase on Android flips the user's plan server-side and unlocks premium generation cadence.
+> ⚠️ Don't add the `revenuecat-webhook-auth-secret` binding to `cloudbuild.yaml` until the secret exists (a deploy would fail on the missing binding — same rule as APNs/X/FCM).
+
+**[code] — DONE** (per the status block). The webhook 503s and the paywall stays stubbed until the secret + flag/key are set, so this shipped safely ahead of setup.
+
+**Acceptance:** with the secret + flag/key set, a test purchase on Android flips the user's plan server-side (webhook → SubscriptionRecord) and the paywall reflects it after `loadMe()`.
 
 ---
 

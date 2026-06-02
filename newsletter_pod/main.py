@@ -1537,6 +1537,38 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
             )
 
+    @app.post("/webhooks/revenuecat")
+    async def receive_revenuecat_webhook(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        """RevenueCat webhook (Android / Play Billing subscription events).
+
+        RevenueCat authenticates by sending the exact Authorization header
+        value configured in its dashboard; we compare it constant-time against
+        REVENUECAT_WEBHOOK_AUTH_SECRET. 503 until that secret is set (so this
+        ships ahead of the RevenueCat project), 401 on mismatch.
+        """
+        assert container.control_plane is not None
+        secret = container.settings.revenuecat_webhook_auth_secret
+        if not secret:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="RevenueCat webhook is not configured",
+            )
+        if not authorization or not secrets.compare_digest(authorization, secret):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid authorization",
+            )
+        payload = await request.json()
+        try:
+            return container.control_plane.apply_revenuecat_event(payload)
+        except ControlPlaneError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
+
     @app.post("/webhooks/mailgun/inbound")
     async def receive_mailgun_inbound(request: Request) -> dict:
         assert container.control_repository is not None

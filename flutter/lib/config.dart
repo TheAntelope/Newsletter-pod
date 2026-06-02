@@ -17,6 +17,13 @@ class AppConfig {
   /// `theclawcast-9a045`.
   static const String googleServerClientId =
       '650971509352-gjk0vjlo6e24slghbkpp53il7vbo30ra.apps.googleusercontent.com';
+
+  /// RevenueCat **Android public SDK key** (non-secret; restricted by app +
+  /// store). Provide at build time:
+  /// `--dart-define=REVENUECAT_ANDROID_KEY=goog_xxx`. Empty → purchases stay
+  /// inert even with the flag on.
+  static const String revenueCatAndroidKey =
+      String.fromEnvironment('REVENUECAT_ANDROID_KEY', defaultValue: '');
 }
 
 /// Compile-time feature flags (set via `--dart-define`).
@@ -30,4 +37,12 @@ class FeatureFlags {
   /// `--dart-define=ENABLE_GOOGLE_SIGN_IN=true`.
   static const bool googleSignIn =
       bool.fromEnvironment('ENABLE_GOOGLE_SIGN_IN', defaultValue: false);
+
+  /// When true, the paywall runs real RevenueCat (Play Billing) purchases and
+  /// the app configures the SDK after sign-in. Defaults **false** so the demo
+  /// build + widget tests keep the stubbed "coming soon" paywall and never
+  /// touch a billing platform channel. Enable with
+  /// `--dart-define=ENABLE_PURCHASES_REVENUECAT=true`.
+  static const bool purchasesRevenueCat =
+      bool.fromEnvironment('ENABLE_PURCHASES_REVENUECAT', defaultValue: false);
 }

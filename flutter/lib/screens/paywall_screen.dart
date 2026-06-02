@@ -1,16 +1,22 @@
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
+import '../config.dart';
 import '../design_tokens.dart';
+import '../services/purchases_controller.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
 
-/// Presentational paywall. Mirrors the launch tier model (see billing memo): Free
-/// / Pro / Max. Editorial rebuild of the iOS `PaywallView` (header + trial-status
-/// + plan cards). Purchases are stubbed until RevenueCat is wired (Phase 2
-/// billing); the "Choose" buttons explain that rather than charging.
-class PaywallScreen extends StatelessWidget {
+/// Paywall. Mirrors the launch tier model (see billing memo): Free / Pro / Max.
+/// Editorial rebuild of the iOS `PaywallView` (header + trial-status + plan
+/// cards). With [FeatureFlags.purchasesRevenueCat] off (default) the "Choose"
+/// buttons show a "coming soon" note; with it on they run a real RevenueCat
+/// (Play Billing) purchase and refresh `/v1/me`.
+class PaywallScreen extends StatefulWidget {
   const PaywallScreen({super.key});
+
+  @override
+  State<PaywallScreen> createState() => _PaywallScreenState();
 
   static const _plans = [
     _Plan(
@@ -47,6 +53,40 @@ class PaywallScreen extends StatelessWidget {
     ),
   ];
 
+}
+
+class _PaywallScreenState extends State<PaywallScreen> {
+  String? _busyTier;
+
+  Future<void> _choose(AppState app, String tier) async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (!FeatureFlags.purchasesRevenueCat) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Purchases arrive with RevenueCat — coming soon.'),
+        ),
+      );
+      return;
+    }
+    setState(() => _busyTier = tier);
+    try {
+      final ok = await PurchasesController.purchase(tier);
+      if (ok) {
+        await app.loadMe(); // backend reconciles the plan from the webhook
+        messenger.showSnackBar(
+          SnackBar(content: Text("You're on $tier — enjoy!")),
+        );
+      }
+      // ok == false → cancelled or no offering; stay quiet.
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Purchase failed. Please try again.')),
+      );
+    } finally {
+      if (mounted) setState(() => _busyTier = null);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
@@ -79,17 +119,23 @@ class PaywallScreen extends StatelessWidget {
               _TrialStatusCard(entitlements: entitlements),
               const SizedBox(height: DesignTokens.spacingL),
             ],
-            for (final plan in _plans) ...[
-              _PlanCard(plan: plan, current: plan.tier == currentTier),
+            for (final plan in PaywallScreen._plans) ...[
+              _PlanCard(
+                plan: plan,
+                current: plan.tier == currentTier,
+                busy: _busyTier == plan.tier,
+                onChoose: () => _choose(app, plan.tier),
+              ),
               const SizedBox(height: DesignTokens.spacingM),
             ],
             const SizedBox(height: DesignTokens.spacingS),
-            Text(
-              'Subscriptions are handled by your app store via RevenueCat — '
-              'wiring in once the project is set up.',
-              style: DesignTokens.typographyMeta
-                  .copyWith(color: DesignTokens.colorMuted),
-            ),
+            if (!FeatureFlags.purchasesRevenueCat)
+              Text(
+                'Subscriptions are handled by Google Play via RevenueCat — '
+                'wiring in once the project is set up.',
+                style: DesignTokens.typographyMeta
+                    .copyWith(color: DesignTokens.colorMuted),
+              ),
           ],
         ),
       ),
@@ -165,10 +211,17 @@ class _TrialStatusCard extends StatelessWidget {
 }
 
 class _PlanCard extends StatelessWidget {
-  const _PlanCard({required this.plan, required this.current});
+  const _PlanCard({
+    required this.plan,
+    required this.current,
+    required this.busy,
+    required this.onChoose,
+  });
 
   final _Plan plan;
   final bool current;
+  final bool busy;
+  final VoidCallback onChoose;
 
   @override
   Widget build(BuildContext context) {
@@ -230,13 +283,10 @@ class _PlanCard extends StatelessWidget {
         current
             ? const AmberButton.outlined(label: 'Current plan')
             : AmberButton.filled(
-                label: 'Choose ${plan.name}',
-                onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content:
-                        Text('Purchases arrive with RevenueCat — coming soon.'),
-                  ),
-                ),
+                label: busy ? 'Purchasing…' : 'Choose ${plan.name}',
+                onPressed: () {
+                  if (!busy) onChoose();
+                },
               ),
       ],
     );
