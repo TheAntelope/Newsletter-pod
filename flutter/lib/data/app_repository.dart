@@ -8,7 +8,36 @@ import '../api/models.dart';
 /// and exercised before Firebase auth and the external accounts exist.
 abstract interface class AppRepository {
   Future<MeEnvelope> fetchMe();
+
+  /// Update the display name / timezone (`PATCH /v1/me`). Returns the fresh `me`.
+  Future<MeEnvelope> updateProfile({
+    required String displayName,
+    required String timezone,
+  });
+
+  /// Wipe sources/schedule/profile/swipes and re-run onboarding server-side
+  /// (`POST /v1/me/reset`). Account, feed token, subscription, episodes are kept.
+  Future<void> resetAlgorithm();
+
+  /// Delete the account (`DELETE /v1/me`).
+  Future<void> deleteAccount();
+
   Future<RunStartEnvelope> generateNow();
+
+  /// The private RSS feed URL/token + latest episode/run (`GET /v1/me/feed`).
+  Future<FeedEnvelope> fetchFeed();
+
+  /// The full topic-tagged source catalog (`GET /v1/sources/catalog`).
+  Future<CatalogEnvelope> fetchCatalog();
+
+  /// Recently-ingested forwarded newsletters (`GET /v1/me/inbound-items`).
+  Future<InboundItemsEnvelope> fetchInboundItems();
+
+  /// Submit free-text/voice feedback (`POST /v1/me/feedback`).
+  Future<void> submitFeedback({required String text, required String source});
+
+  /// Remove a Substack subscription intent (`DELETE /v1/me/substack/intents/{id}`).
+  Future<void> deleteSubstackIntent(String intentId);
   Future<SourcesEnvelope> fetchSources();
 
   /// Persist the full set of enabled sources (catalog ids + custom RSS urls);

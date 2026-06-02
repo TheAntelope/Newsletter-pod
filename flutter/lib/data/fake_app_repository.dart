@@ -5,17 +5,23 @@ import 'app_repository.dart';
 /// In-memory demo data so the UI runs end-to-end without a backend, Firebase, or
 /// accounts. Swapped for [ApiAppRepository] once sign-in returns a real session.
 class FakeAppRepository implements AppRepository {
+  // Mutable profile bits so updateProfile / reset reflect in-session.
+  String _displayName = 'Vince Martin';
+  String _timezone = 'Europe/Copenhagen';
+
+  UserDto _user() => UserDto(
+        id: 'demo-user',
+        email: 'demo@theclawcast.com',
+        displayName: _displayName,
+        timezone: _timezone,
+        inboundAddress: 'demo@theclawcast.com',
+      );
+
   @override
   Future<MeEnvelope> fetchMe() async {
     await Future<void>.delayed(const Duration(milliseconds: 150));
     return MeEnvelope(
-      user: UserDto(
-        id: 'demo-user',
-        email: 'demo@theclawcast.com',
-        displayName: 'Vince Martin',
-        timezone: 'Europe/Copenhagen',
-        inboundAddress: 'demo@theclawcast.com',
-      ),
+      user: _user(),
       profile: _demoProfile(),
       schedule: _demoSchedule(),
       subscription: SubscriptionDto(
@@ -25,6 +31,130 @@ class FakeAppRepository implements AppRepository {
       ),
       entitlements: _demoEntitlements(),
     );
+  }
+
+  @override
+  Future<MeEnvelope> updateProfile({
+    required String displayName,
+    required String timezone,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    _displayName = displayName;
+    _timezone = timezone;
+    return fetchMe();
+  }
+
+  @override
+  Future<void> resetAlgorithm() async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+  }
+
+  @override
+  Future<void> deleteAccount() async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+  }
+
+  @override
+  Future<FeedEnvelope> fetchFeed() async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    final now = DateTime.now();
+    return FeedEnvelope(
+      feedUrl: 'https://theclawcast.com/feeds/6hk6266a.xml',
+      token: '6hk6266a',
+      latestEpisode: UserEpisodeDto(
+        id: 'e1',
+        title: 'Your Tuesday Briefing',
+        description: 'AI agents, the chip race, and a quiet week in fintech.',
+        publishedAt: now.subtract(const Duration(days: 1)),
+        durationSeconds: 312,
+        processedItemCount: 11,
+        droppedItemCount: 2,
+        capHit: false,
+      ),
+      latestRun: UserRunDto(
+        id: 'run-1',
+        status: 'completed',
+        message: 'Published “Your Tuesday Briefing” (11 items).',
+        candidateCount: 13,
+        capHit: false,
+        publishedEpisodeId: 'e1',
+      ),
+      subscription: SubscriptionDto(
+        userId: 'demo-user',
+        tier: 'free',
+        status: 'active',
+      ),
+      entitlements: _demoEntitlements(),
+    );
+  }
+
+  @override
+  Future<CatalogEnvelope> fetchCatalog() async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    CatalogSourceDto s(String id, String name, String url, String topic) =>
+        CatalogSourceDto(
+          sourceId: id,
+          name: name,
+          rssUrl: url,
+          enabled: true,
+          topic: topic,
+        );
+    return CatalogEnvelope(
+      sources: [
+        s('stratechery', 'Stratechery', 'https://stratechery.com/feed/', 'Tech'),
+        s('platformer', 'Platformer', 'https://www.platformer.news/rss/', 'Tech'),
+        s('benedict', 'Benedict Evans', 'https://www.ben-evans.com/benedictevans?format=rss', 'Tech'),
+        s('matt-levine', 'Money Stuff', 'https://www.bloomberg.com/money-stuff.rss', 'Business'),
+        s('lenny', "Lenny's Newsletter", 'https://www.lennysnewsletter.com/feed', 'Business'),
+        s('the-pudding', 'The Pudding', 'https://pudding.cool/feed/index.xml', 'Culture'),
+        s('quanta', 'Quanta Magazine', 'https://www.quantamagazine.org/feed/', 'Science'),
+      ],
+    );
+  }
+
+  @override
+  Future<InboundItemsEnvelope> fetchInboundItems() async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    final now = DateTime.now();
+    return InboundItemsEnvelope(
+      inboundAddress: 'demo@theclawcast.com',
+      items: [
+        InboundItemDto(
+          id: 'in1',
+          fromEmail: 'casey@platformer.news',
+          fromName: 'Platformer',
+          senderDomain: 'platformer.news',
+          subject: 'The trust & safety reorg, explained',
+          articleUrl: 'https://platformer.news/x',
+          receivedAt: now.subtract(const Duration(hours: 3)),
+        ),
+        InboundItemDto(
+          id: 'in2',
+          fromEmail: 'lenny@substack.com',
+          fromName: "Lenny's Newsletter",
+          senderDomain: 'substack.com',
+          subject: 'How the best PMs run discovery',
+          receivedAt: now.subtract(const Duration(hours: 20)),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Future<void> submitFeedback({
+    required String text,
+    required String source,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+  }
+
+  final Set<String> _deletedIntentIds = {};
+
+  @override
+  Future<void> deleteSubstackIntent(String intentId) async {
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    _deletedIntentIds.add(intentId);
+    _createdIntents.removeWhere((i) => i.id == intentId);
   }
 
   @override
@@ -343,7 +473,9 @@ class FakeAppRepository implements AppRepository {
     await Future<void>.delayed(const Duration(milliseconds: 150));
     return SubstackIntentsEnvelope(
       inboundAddress: 'demo@theclawcast.com',
-      intents: [..._baseIntents(), ..._createdIntents],
+      intents: [..._baseIntents(), ..._createdIntents]
+          .where((i) => !_deletedIntentIds.contains(i.id))
+          .toList(),
     );
   }
 

@@ -13,7 +13,39 @@ class ApiAppRepository implements AppRepository {
   Future<MeEnvelope> fetchMe() => _client.fetchMe(_token);
 
   @override
+  Future<MeEnvelope> updateProfile({
+    required String displayName,
+    required String timezone,
+  }) =>
+      _client.updateProfile(_token,
+          displayName: displayName, timezone: timezone);
+
+  @override
+  Future<void> resetAlgorithm() => _client.resetAlgorithm(_token);
+
+  @override
+  Future<void> deleteAccount() => _client.deleteAccount(_token);
+
+  @override
   Future<RunStartEnvelope> generateNow() => _client.generateNow(_token);
+
+  @override
+  Future<FeedEnvelope> fetchFeed() => _client.fetchFeed(_token);
+
+  @override
+  Future<CatalogEnvelope> fetchCatalog() => _client.fetchCatalog();
+
+  @override
+  Future<InboundItemsEnvelope> fetchInboundItems() =>
+      _client.fetchInboundItems(_token);
+
+  @override
+  Future<void> submitFeedback({required String text, required String source}) =>
+      _client.submitFeedback(_token, text: text, source: source);
+
+  @override
+  Future<void> deleteSubstackIntent(String intentId) =>
+      _client.deleteSubstackIntent(_token, intentId);
 
   @override
   Future<SourcesEnvelope> fetchSources() => _client.fetchSources(_token);

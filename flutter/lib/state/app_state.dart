@@ -54,6 +54,13 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Re-run the onboarding wizard (after a server-side algorithm reset) without
+  /// signing the user out.
+  void restartOnboarding() {
+    _onboardingComplete = false;
+    notifyListeners();
+  }
+
   Future<void> loadMe() async {
     _loading = true;
     _error = null;
