@@ -261,10 +261,14 @@ _(Update as work proceeds.)_
     `FakeAppRepository` (in-memory demo data, used now + in tests) and `ApiAppRepository`
     (wraps `ApiClient`). First flow shipped: `SignInScreen` (stubbed) → `HomeScreen` dashboard
     (greeting + plan/schedule cards + Generate now) via `RootView`. Widget test covers it.
-  - **Built so far (committed):** sign-in stub; tabbed shell (Today / Sources / Library /
-    Discover); dashboard; Sources + Library; next-episode queue (pin/exclude); podcast setup +
-    schedule editor; swipe deck (bespoke drag physics + Skip/Keep); Substack add (discover →
-    add intent, existing subs with live verification code); paywall (Free/Pro/Max, purchase
-    stubbed for RevenueCat). Navigable, themed, 21 tests green.
-  - **Remaining screen:** the 8-step onboarding wizard. Then real auth/billing/push once the
-    user creates Firebase / RevenueCat / Play.
+  - **Local screens COMPLETE (committed), 22 tests green:** sign-in → 8-step onboarding wizard
+    (gated for new sign-ins) → tabbed shell (Today / Sources / Library / Discover); dashboard;
+    Sources + Library; next-episode queue (pin/exclude); podcast setup + schedule editor; swipe
+    deck (bespoke drag physics + Skip/Keep); Substack add (discover → add intent, existing subs
+    with live verification code); paywall (Free/Pro/Max, purchase stubbed for RevenueCat). All
+    over the swappable `AppRepository` (Fake now / Api when auth lands), editorial theme.
+  - **Remaining for Phase 2 (needs the user's accounts):** wire real **Firebase Auth + Google
+    Sign-In** (swap the sign-in stub → `signInWithFirebase` → `ApiAppRepository`), **RevenueCat**
+    billing + backend webhook, **FCM** push + backend FCM branch, and the path-filtered Codemagic
+    workflow → Play Store internal track. Prereqs: Firebase project (+ `FIREBASE_PROJECT_ID` on
+    Cloud Run), Google Play Console ($25), RevenueCat account.

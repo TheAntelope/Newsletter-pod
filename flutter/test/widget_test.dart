@@ -21,6 +21,9 @@ Future<void> _signIn(WidgetTester tester) async {
   );
   await tester.tap(find.text('Get started'));
   await tester.pumpAndSettle();
+  // Skip the onboarding wizard for dashboard-focused tests.
+  appState.completeOnboarding();
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -36,6 +39,9 @@ void main() {
     expect(find.text('Get started'), findsOneWidget);
 
     await tester.tap(find.text('Get started'));
+    await tester.pumpAndSettle();
+
+    appState.completeOnboarding(); // skip the wizard
     await tester.pumpAndSettle();
 
     // Today tab: greeting + generate.
@@ -165,5 +171,33 @@ void main() {
     await tester.tap(choosePro);
     await tester.pumpAndSettle();
     expect(find.textContaining('coming soon'), findsOneWidget); // stub snackbar
+  });
+
+  testWidgets('onboarding wizard advances 8 steps to the dashboard',
+      (tester) async {
+    _useTallViewport(tester);
+    final appState = AppState(FakeAppRepository());
+    await tester.pumpWidget(
+      AppScope(notifier: appState, child: const ClawcastApp()),
+    );
+
+    await tester.tap(find.text('Get started'));
+    await tester.pumpAndSettle();
+
+    // Onboarding (not the dashboard) shows first.
+    expect(find.text('Welcome to ClawCast'), findsOneWidget);
+
+    for (var i = 0; i < 7; i++) {
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+    }
+    expect(find.textContaining('all set'), findsOneWidget); // final step
+    expect(find.text('Next'), findsNothing);
+
+    await tester.tap(find.text('Finish'));
+    await tester.pumpAndSettle();
+
+    // Lands on the dashboard.
+    expect(find.text('Generate now'), findsOneWidget);
   });
 }

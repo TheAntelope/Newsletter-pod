@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
 import 'dashboard_scaffold.dart';
+import 'onboarding_screen.dart';
 import 'sign_in_screen.dart';
 
-/// Top-level router: signed-in → tabbed dashboard, otherwise the sign-in screen.
+/// Top-level router: sign-in → onboarding (new sign-in) → tabbed dashboard.
 /// Rebuilds automatically when [AppState] notifies (via [AppScope]).
 class RootView extends StatelessWidget {
   const RootView({super.key});
@@ -12,6 +13,8 @@ class RootView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    return app.signedIn ? const DashboardScaffold() : const SignInScreen();
+    if (!app.signedIn) return const SignInScreen();
+    if (!app.onboardingComplete) return const OnboardingScreen();
+    return const DashboardScaffold();
   }
 }

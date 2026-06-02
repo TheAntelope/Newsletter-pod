@@ -17,6 +17,9 @@ class AppState extends ChangeNotifier {
   bool _signedIn = false;
   bool get signedIn => _signedIn;
 
+  bool _onboardingComplete = false;
+  bool get onboardingComplete => _onboardingComplete;
+
   MeEnvelope? _me;
   MeEnvelope? get me => _me;
 
@@ -34,8 +37,14 @@ class AppState extends ChangeNotifier {
   /// it flips signed-in and loads `me` from the injected (fake) repository.
   Future<void> signIn() async {
     _signedIn = true;
+    _onboardingComplete = false; // new sign-in runs the onboarding wizard
     notifyListeners();
     await loadMe();
+  }
+
+  void completeOnboarding() {
+    _onboardingComplete = true;
+    notifyListeners();
   }
 
   Future<void> loadMe() async {
@@ -65,6 +74,7 @@ class AppState extends ChangeNotifier {
 
   void signOut() {
     _signedIn = false;
+    _onboardingComplete = false;
     _me = null;
     _lastRunMessage = null;
     _error = null;
