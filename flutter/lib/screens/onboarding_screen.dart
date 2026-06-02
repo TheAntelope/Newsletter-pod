@@ -7,6 +7,7 @@ import '../widgets/day_toggle.dart';
 import '../widgets/editorial.dart';
 import '../widgets/onboarding_progress_dots.dart';
 import '../widgets/voice_choice_card.dart';
+import 'swipe_deck_screen.dart';
 
 /// Onboarding wizard (welcome → name → sources → Substack → show format → voices
 /// → schedule → weather → done). Editorial rebuild on the shared step-shell
@@ -22,7 +23,7 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  static const _stepCount = 9;
+  static const _stepCount = 10;
   static const _weekdays = [
     ('mon', 'M'),
     ('tue', 'T'),
@@ -157,19 +158,29 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         );
       case 3:
         return _shell(
+          title: 'Tune your pod',
+          subtitle:
+              "Swipe right on stories you'd want to hear more about, left to "
+              'skip. Optional — your picker learns from every card.',
+          children: const [
+            SizedBox(height: 460, child: SwipeDeck()),
+          ],
+        );
+      case 4:
+        return _shell(
           title: 'Add your Substacks',
           subtitle:
               'Forward Substack subscriptions to your private ClawCast address '
               'and they fold into your pod automatically.',
           children: const [_InboundAddressCard()],
         );
-      case 4:
+      case 5:
         return _shell(
           title: 'Choose a format',
           subtitle: 'How should your briefing be hosted?',
           children: [_showStep()],
         );
-      case 5:
+      case 6:
         return _shell(
           title: _isTwoHost ? 'Choose your voices' : 'Choose a voice',
           subtitle: _isTwoHost
@@ -177,7 +188,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               : 'Pick who reads your briefing. You can change this later.',
           children: [_voiceStep()],
         );
-      case 6:
+      case 7:
         return _shell(
           title: 'Set your schedule',
           subtitle:
@@ -185,7 +196,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               'at 07:00.',
           children: [_scheduleEditor()],
         );
-      case 7:
+      case 8:
         return _shell(
           title: 'Add a weather note?',
           subtitle:

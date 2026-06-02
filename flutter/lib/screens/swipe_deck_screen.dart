@@ -13,14 +13,29 @@ import '../widgets/editorial.dart';
 /// back. The two cards behind it peek through, scaled and offset. Pass/Keep
 /// buttons drive the same commit without a drag. Matches the iOS `SwipeDeckView`
 /// stack (depth 3) and physics.
-class SwipeDeckScreen extends StatefulWidget {
+/// Full-screen Discover tab: the swipe deck under an editorial app bar.
+class SwipeDeckScreen extends StatelessWidget {
   const SwipeDeckScreen({super.key});
 
   @override
-  State<SwipeDeckScreen> createState() => _SwipeDeckScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Tune your pod')),
+      body: const SafeArea(child: SwipeDeck()),
+    );
+  }
 }
 
-class _SwipeDeckScreenState extends State<SwipeDeckScreen>
+/// The reusable deck (card stack + action bar + load/empty/error states).
+/// Used full-screen by [SwipeDeckScreen] and inline in the onboarding wizard.
+class SwipeDeck extends StatefulWidget {
+  const SwipeDeck({super.key});
+
+  @override
+  State<SwipeDeck> createState() => _SwipeDeckState();
+}
+
+class _SwipeDeckState extends State<SwipeDeck>
     with SingleTickerProviderStateMixin {
   static const double _threshold = 110;
   static const double _flyOff = 600;
@@ -145,12 +160,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen>
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Tune your pod')),
-      body: SafeArea(child: _body()),
-    );
-  }
+  Widget build(BuildContext context) => _body();
 
   Widget _body() {
     if (_loading) return const Center(child: CircularProgressIndicator());
