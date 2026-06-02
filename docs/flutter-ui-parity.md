@@ -10,6 +10,30 @@
 [flutter-migration-plan.md](flutter-migration-plan.md) (master plan) and
 [android-strategy-assessment.md](android-strategy-assessment.md) §1 (Swift component inventory).
 
+## ✅ Parity pass complete (2026-06-02)
+
+The editorial component library is built under [flutter/lib/widgets/](../flutter/lib/widgets/)
+and **every screen below has been rebuilt on top of it.** `flutter analyze` is clean, the
+22 widget tests are green, and `flutter build web` compiles. Committed per-screen on
+`feature/phase2-flutter-android`.
+
+- **Components ported** → `flutter/lib/widgets/`: `EditorialCard`, `MetaLabel`,
+  `EditorialDivider`, `ChecklistRow`, `AmberButton` (filled/outlined),
+  `GenerationProgressBar` (timer-driven, 95% cap), `OnboardingProgressDots`,
+  `VoiceChoiceCard`, `DayToggle`. `HeroEpisodeCard` / `SetupChecklistCard` live as private
+  widgets inside `home_screen.dart` (screen-specific). Theme gained flat cream
+  AppBar/NavigationBar/input chrome.
+- **Repository:** added `replaceSources` (interface + Fake + Api → `PUT /v1/me/sources`) so
+  the Sources toggles persist.
+- **Still deferred** (unchanged): audio preview (`just_audio`), speech-to-text dictation,
+  `AccountSheet` + `FeedAccessView`, and all account-gated wiring (Firebase auth, RevenueCat,
+  FCM, Play CI). The cutoff-time control is shown **read-only** — the `/v1/me/schedule` PATCH
+  body (both clients) doesn't accept a cutoff.
+- **Test deltas:** the generate test now pumps fixed steps + tears down the tree (the live
+  progress bar never settles); the swipe test asserts the depth-3 stack + icon action buttons.
+
+Original punch-list below is kept for reference.
+
 ## How to resume (toolchain)
 
 - Flutter 3.44.1 lives at `C:\flutter` (not on PATH). Invoke `C:\flutter\bin\flutter.bat`.

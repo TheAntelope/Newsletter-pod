@@ -281,3 +281,17 @@ _(Update as work proceeds.)_
      user creating those accounts.
   Resume context (toolchain, run/test commands, layout) is in flutter-ui-parity.md and the
   `flutter_phase2_env` memory.
+- 2026-06-02 — **Phase 2 UI parity pass COMPLETE** (track 1 of the two above). Built the
+  editorial component library under `flutter/lib/widgets/` (EditorialCard, MetaLabel,
+  EditorialDivider, ChecklistRow, AmberButton, GenerationProgressBar, OnboardingProgressDots,
+  VoiceChoiceCard, DayToggle) + flat cream AppBar/Nav/input theme chrome, then **rebuilt all
+  10 screens** on top of it (sign-in, Today/home with HeroEpisodeCard + SetupChecklistCard +
+  live GenerationProgressBar, 8-step onboarding, sources with persisting toggles, library with
+  source-item refs, swipe deck at Swift physics/depth-3, next-pod queue with shared-item
+  highlighting, podcast setup with voice cards + day-circle schedule, paywall, Substack add).
+  Added `replaceSources` to the repository layer (`PUT /v1/me/sources`). `flutter analyze`
+  clean, **22 tests green**, `flutter build web` compiles. Committed per-screen on
+  `feature/phase2-flutter-android`. Punch-list updated in flutter-ui-parity.md.
+  - **Still deferred (unchanged):** audio preview, speech-to-text dictation, AccountSheet +
+    FeedAccessView, and the account-gated wiring (Firebase auth / RevenueCat / FCM / Play CI),
+    which is the remaining Phase 2 work and needs the user's external accounts.
