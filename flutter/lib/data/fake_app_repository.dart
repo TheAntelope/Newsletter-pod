@@ -122,7 +122,20 @@ class FakeAppRepository implements AppRepository {
           processedItemCount: 11,
           droppedItemCount: 2,
           capHit: false,
-          sourceItemRefs: const [],
+          sourceItemRefs: [
+            SourceItemRefDto(
+              sourceId: 'stratechery',
+              sourceName: 'Stratechery',
+              title: 'The agentic web and the next platform shift',
+              link: 'https://stratechery.com/x',
+            ),
+            SourceItemRefDto(
+              sourceId: 'platformer',
+              sourceName: 'Platformer',
+              title: 'Inside the latest trust & safety reorg',
+              link: 'https://platformer.news/x',
+            ),
+          ],
         ),
         LibraryEpisodeDto(
           id: 'e2',
