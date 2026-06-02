@@ -369,6 +369,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
             voice: v,
             selected: _voiceId == v.id,
             onSelect: () => setState(() => _voiceId = v.id),
+            previewSource: v.previewUrl,
           ),
           const SizedBox(height: DesignTokens.spacingM),
         ],

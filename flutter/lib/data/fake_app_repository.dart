@@ -418,12 +418,14 @@ class FakeAppRepository implements AppRepository {
           name: 'Vinnie Chase',
           gender: 'male',
           description: 'Warm, conversational anchor.',
+          previewUrl: 'assets/audio/sample.wav',
         ),
         CatalogVoiceDto(
           id: 'demi',
           name: 'Demi Dreams',
           gender: 'female',
           description: 'Bright, energetic co-host.',
+          previewUrl: 'assets/audio/sample.wav',
         ),
       ],
     );

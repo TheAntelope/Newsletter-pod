@@ -2,30 +2,29 @@ import 'package:flutter/material.dart';
 
 import '../api/models.dart';
 import '../design_tokens.dart';
+import '../services/audio_controller.dart';
 import 'editorial.dart';
 
 /// Selectable voice card used in the onboarding voice step and podcast setup.
 ///
 /// The Flutter client picks a single voice (`profile.voiceId`) rather than the
 /// iOS anchor/commentator role assignment, so this is a single-select tile: tap
-/// to choose, amber 2pt ring when selected. The "Hear a sample" affordance only
-/// appears when an [onPreview] callback is supplied (audio preview is wired
-/// later — see the UI-parity punch-list).
+/// to choose, amber 2pt ring when selected. When [previewSource] is non-null a
+/// "Hear a sample" affordance plays it through the shared [AudioController]
+/// (network URL or bundled asset path).
 class VoiceChoiceCard extends StatelessWidget {
   const VoiceChoiceCard({
     super.key,
     required this.voice,
     required this.selected,
     required this.onSelect,
-    this.onPreview,
-    this.isPlaying = false,
+    this.previewSource,
   });
 
   final CatalogVoiceDto voice;
   final bool selected;
   final VoidCallback onSelect;
-  final VoidCallback? onPreview;
-  final bool isPlaying;
+  final String? previewSource;
 
   @override
   Widget build(BuildContext context) {
@@ -54,29 +53,9 @@ class VoiceChoiceCard extends StatelessWidget {
                           .copyWith(color: DesignTokens.colorInkSoft),
                     ),
                   ],
-                  if (onPreview != null) ...[
+                  if (previewSource != null) ...[
                     const SizedBox(height: DesignTokens.spacingS),
-                    InkWell(
-                      onTap: onPreview,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            isPlaying
-                                ? Icons.volume_up
-                                : Icons.play_circle_fill,
-                            size: 16,
-                            color: DesignTokens.colorAmberDeep,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            isPlaying ? 'Playing…' : 'Hear a sample',
-                            style: DesignTokens.typographyCalloutStrong
-                                .copyWith(color: DesignTokens.colorAmberDeep),
-                          ),
-                        ],
-                      ),
-                    ),
+                    _SampleButton(id: voice.id, source: previewSource!),
                   ],
                 ],
               ),
@@ -91,6 +70,43 @@ class VoiceChoiceCard extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+class _SampleButton extends StatelessWidget {
+  const _SampleButton({required this.id, required this.source});
+
+  final String id;
+  final String source;
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = AudioController.instance;
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final playing = controller.isPlaying(id);
+        return InkWell(
+          onTap: () => controller.toggle(id, source),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                playing ? Icons.stop_circle : Icons.play_circle_fill,
+                size: 16,
+                color: DesignTokens.colorAmberDeep,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                playing ? 'Playing…' : 'Hear a sample',
+                style: DesignTokens.typographyCalloutStrong
+                    .copyWith(color: DesignTokens.colorAmberDeep),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
