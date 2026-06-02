@@ -1717,11 +1717,18 @@ class ControlPlaneService:
         rc_type = str(event.get("type") or "").upper()
         app_user_id = event.get("app_user_id") or event.get("original_app_user_id")
         product_id = event.get("product_id")
-        entitlement_ids = event.get("entitlement_ids") or []
+        product_id = str(product_id) if product_id is not None else None
+        raw_entitlements = event.get("entitlement_ids")
+        entitlement_ids = raw_entitlements if isinstance(raw_entitlements, list) else []
         expiration_at_ms = event.get("expiration_at_ms")
+        if not isinstance(expiration_at_ms, (int, float)):
+            expiration_at_ms = None
 
+        # Use RevenueCat's own event id as the record id so a retried/duplicate
+        # webhook collapses onto one audit record instead of stacking.
+        rc_event_id = event.get("id")
         billing_event = BillingEventRecord(
-            id=uuid4().hex,
+            id=str(rc_event_id) if rc_event_id else uuid4().hex,
             user_id=app_user_id,
             notification_type=rc_type or "unknown",
             product_id=product_id,
@@ -1737,16 +1744,30 @@ class ControlPlaneService:
             logger.warning("RevenueCat event %s for unknown user: %s", rc_type, app_user_id)
             return {"accepted": True, "event_id": billing_event.id, "warning": "user not found"}
 
+        subscription = self._get_subscription(app_user_id)
+
         if rc_type in self._REVENUECAT_ACTIVATE_TYPES:
             internal_type = "SUBSCRIBED"
         elif rc_type in self._REVENUECAT_REVOKE_TYPES:
+            # Guard against out-of-order delivery: an EXPIRATION whose expiry
+            # predates the current known expiry (e.g. arriving after a RENEWAL)
+            # must not revoke an already-renewed subscription.
+            if (
+                expiration_at_ms is not None
+                and subscription.expires_at is not None
+                and expiration_at_ms < subscription.expires_at.timestamp() * 1000
+            ):
+                logger.info(
+                    "Ignoring stale RevenueCat EXPIRATION (event expiry < current) for user=%s",
+                    app_user_id,
+                )
+                return {"accepted": True, "event_id": billing_event.id, "stale": True}
             internal_type = "EXPIRED"
         else:
             # CANCELLATION / BILLING_ISSUE / SUBSCRIPTION_PAUSED / TEST / etc. —
             # recorded for audit, but entitlement is unchanged until EXPIRATION.
             return {"accepted": True, "event_id": billing_event.id}
 
-        subscription = self._get_subscription(app_user_id)
         previous_tier = subscription.tier
         previous_status = subscription.status
         self._mutate_subscription_from_notification(

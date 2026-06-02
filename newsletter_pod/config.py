@@ -271,11 +271,12 @@ class Settings(BaseSettings):
         default="com.newsletterpod.max.annual", alias="APP_STORE_MAX_ANNUAL_PRODUCT_ID"
     )
 
-    # RevenueCat (Android / Play Billing). The webhook auth secret is the
-    # Authorization header value configured in the RevenueCat dashboard; the
-    # webhook verifies it with a constant-time compare. Product ids map the
-    # RevenueCat/Play products → tier (mirrors the App Store ids above). When
-    # the secret is unset the webhook 503s, so this ships safely ahead of setup.
+    # RevenueCat (Android / Play Billing). The webhook auth secret is the BARE
+    # token from the Authorization value configured in the RevenueCat dashboard
+    # (store it WITHOUT any "Bearer " prefix — the webhook strips that prefix
+    # off the incoming header before a constant-time compare). Product ids map
+    # the RevenueCat/Play products → tier (mirrors the App Store ids above).
+    # When the secret is unset the webhook 503s, so this ships safely ahead of setup.
     revenuecat_webhook_auth_secret: Optional[str] = Field(
         default=None, alias="REVENUECAT_WEBHOOK_AUTH_SECRET"
     )

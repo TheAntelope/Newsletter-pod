@@ -179,3 +179,79 @@ def test_revenuecat_unknown_user_recorded_not_applied():
     )
     assert resp.status_code == 200
     assert resp.json().get("warning") == "user not found"
+
+
+def test_revenuecat_accepts_bearer_prefixed_authorization():
+    # RevenueCat conventionally sends "Bearer <token>"; the bare secret is stored.
+    _, client = _build_app()
+    uid, headers = _auth(client)
+    resp = client.post(
+        "/webhooks/revenuecat",
+        headers={"Authorization": f"Bearer {SECRET}"},
+        json=_event(type="INITIAL_PURCHASE", app_user_id=uid, product_id="pro_monthly", entitlement_ids=["pro"]),
+    )
+    assert resp.status_code == 200
+    assert _tier(client, headers) == "pro"
+
+
+def test_revenuecat_product_change_upgrades_pro_to_max():
+    _, client = _build_app()
+    uid, headers = _auth(client)
+    client.post(
+        "/webhooks/revenuecat",
+        headers={"Authorization": SECRET},
+        json=_event(type="INITIAL_PURCHASE", app_user_id=uid, product_id="pro_monthly", entitlement_ids=["pro"]),
+    )
+    assert _tier(client, headers) == "pro"
+    resp = client.post(
+        "/webhooks/revenuecat",
+        headers={"Authorization": SECRET},
+        json=_event(type="PRODUCT_CHANGE", app_user_id=uid, product_id="max_monthly", entitlement_ids=["max"]),
+    )
+    assert resp.status_code == 200
+    assert _tier(client, headers) == "max"
+
+
+def test_revenuecat_ignores_stale_out_of_order_expiration():
+    _, client = _build_app()
+    uid, headers = _auth(client)
+    future_ms = 2_000_000_000_000  # ~2033
+    client.post(
+        "/webhooks/revenuecat",
+        headers={"Authorization": SECRET},
+        json=_event(
+            type="INITIAL_PURCHASE",
+            app_user_id=uid,
+            product_id="pro_monthly",
+            entitlement_ids=["pro"],
+            expiration_at_ms=future_ms,
+        ),
+    )
+    assert _tier(client, headers) == "pro"
+    # An EXPIRATION for an earlier period (out-of-order) must not revoke.
+    resp = client.post(
+        "/webhooks/revenuecat",
+        headers={"Authorization": SECRET},
+        json=_event(type="EXPIRATION", app_user_id=uid, product_id="pro_monthly", expiration_at_ms=1_000_000_000_000),
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("stale") is True
+    assert _tier(client, headers) == "pro"
+
+
+def test_revenuecat_duplicate_event_id_collapses_to_one_record():
+    container, client = _build_app()
+    uid, _ = _auth(client)
+    body = _event(
+        id="rc-evt-123",
+        type="INITIAL_PURCHASE",
+        app_user_id=uid,
+        product_id="pro_monthly",
+        entitlement_ids=["pro"],
+    )
+    headers = {"Authorization": SECRET}
+    client.post("/webhooks/revenuecat", headers=headers, json=body)
+    client.post("/webhooks/revenuecat", headers=headers, json=body)
+    # Sign-in creates no billing events, so the retried webhook must leave
+    # exactly one record (keyed on the RevenueCat event id).
+    assert list(container.control_repository._billing_events.keys()) == ["rc-evt-123"]

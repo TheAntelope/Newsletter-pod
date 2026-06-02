@@ -1556,7 +1556,14 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="RevenueCat webhook is not configured",
             )
-        if not authorization or not secrets.compare_digest(authorization, secret):
+        # RevenueCat sends the dashboard-configured Authorization value verbatim.
+        # That value is conventionally "Bearer <token>"; accept either form by
+        # stripping an optional Bearer prefix, then constant-time compare against
+        # the bare secret.
+        provided = (authorization or "").strip()
+        if provided.startswith("Bearer "):
+            provided = provided[len("Bearer ") :].strip()
+        if not provided or not secrets.compare_digest(provided, secret):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="invalid authorization",
