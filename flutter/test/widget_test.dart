@@ -145,6 +145,18 @@ void main() {
     expect(find.text('Why latency is the new moat'), findsOneWidget); // new top
   });
 
+  testWidgets('sources shows the catalog grouped by topic', (tester) async {
+    await _signIn(tester);
+
+    await tester.tap(find.text('Sources'));
+    await tester.pumpAndSettle();
+
+    // Topic group headers (expanded by default) with their catalog sources.
+    expect(find.text('Tech'), findsOneWidget);
+    expect(find.text('Business'), findsOneWidget);
+    expect(find.text('Stratechery'), findsOneWidget); // a Tech source
+  });
+
   testWidgets('substack add lists intents and discovers candidates',
       (tester) async {
     await _signIn(tester);
