@@ -272,3 +272,12 @@ _(Update as work proceeds.)_
     billing + backend webhook, **FCM** push + backend FCM branch, and the path-filtered Codemagic
     workflow → Play Store internal track. Prereqs: Firebase project (+ `FIREBASE_PROJECT_ID` on
     Cloud Run), Google Play Console ($25), RevenueCat account.
+- 2026-06-02 — Ran the app on web (`flutter run -d chrome`) — full flow verified visually. Two
+  tracks of remaining Phase 2 work, both **deferred to a new session**:
+  1. **UI parity with the SwiftUI app** — the screens are functional but simplified (plain
+     Material cards). Punch-list + per-screen gaps + the editorial component library to port are
+     in **[flutter-ui-parity.md](flutter-ui-parity.md)**. **Start here next session.**
+  2. **Account-dependent wiring** (Firebase auth / RevenueCat / FCM / Play CI) — blocked on the
+     user creating those accounts.
+  Resume context (toolchain, run/test commands, layout) is in flutter-ui-parity.md and the
+  `flutter_phase2_env` memory.
