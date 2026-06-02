@@ -35,10 +35,19 @@ class AudioController extends ChangeNotifier {
 
   /// Start [source] for [id], or stop if it's already the one playing. [source]
   /// is a network URL (`http…`) or a bundled asset path (`assets/…`).
+  ///
+  /// Always stops the current clip before loading a new source: swapping the
+  /// source on a player that's still loading/playing the previous one is
+  /// unreliable (especially on web — the new `setUrl` gets aborted and the old
+  /// element keeps playing), which made every card play whichever sample was
+  /// heard first. The `_playingId != id` guard after the await drops a load that
+  /// a newer tap has already superseded.
   Future<void> toggle(String id, String source) async {
     final player = _ensurePlayer();
-    if (_playingId == id) {
-      await player.stop();
+    final wasPlaying = _playingId;
+    await player.stop();
+    if (wasPlaying == id) {
+      // Tapped the one that was already playing → just stop (toggle off).
       _playingId = null;
       notifyListeners();
       return;
@@ -51,10 +60,13 @@ class AudioController extends ChangeNotifier {
       } else {
         await player.setAsset(source);
       }
+      if (_playingId != id) return; // a newer toggle won the race
       unawaited(player.play());
     } catch (_) {
-      _playingId = null;
-      notifyListeners();
+      if (_playingId == id) {
+        _playingId = null;
+        notifyListeners();
+      }
     }
   }
 
