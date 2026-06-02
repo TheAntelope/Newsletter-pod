@@ -27,9 +27,9 @@ class DesignTokens {
   static const double radiusCard = 18;
 
   // Typography
-  static const TextStyle typographyDisplay = TextStyle(fontSize: 32, fontWeight: FontWeight.w700, fontFamily: 'serif');
-  static const TextStyle typographyTitle = TextStyle(fontSize: 22, fontWeight: FontWeight.w600, fontFamily: 'serif');
-  static const TextStyle typographySubtitle = TextStyle(fontSize: 17, fontWeight: FontWeight.w600, fontFamily: 'serif');
+  static const TextStyle typographyDisplay = TextStyle(fontSize: 32, fontWeight: FontWeight.w700, fontFamily: 'Spectral');
+  static const TextStyle typographyTitle = TextStyle(fontSize: 22, fontWeight: FontWeight.w600, fontFamily: 'Spectral');
+  static const TextStyle typographySubtitle = TextStyle(fontSize: 17, fontWeight: FontWeight.w600, fontFamily: 'Spectral');
   static const TextStyle typographyBody = TextStyle(fontSize: 15, fontWeight: FontWeight.w400);
   static const TextStyle typographyBodyStrong = TextStyle(fontSize: 15, fontWeight: FontWeight.w600);
   static const TextStyle typographyCallout = TextStyle(fontSize: 13, fontWeight: FontWeight.w400);
