@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
+import '../widgets/day_toggle.dart';
 import '../widgets/editorial.dart';
 import '../widgets/onboarding_progress_dots.dart';
 import '../widgets/voice_choice_card.dart';
@@ -259,7 +260,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             for (final day in _weekdays)
-              _DayToggle(
+              DayToggle(
                 initial: day.$2,
                 selected: _selectedDays.contains(day.$1),
                 onTap: () => setState(() {
@@ -327,44 +328,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   String _formatTime(TimeOfDay t) =>
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-}
-
-class _DayToggle extends StatelessWidget {
-  const _DayToggle({
-    required this.initial,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String initial;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 36,
-        height: 36,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: selected ? DesignTokens.colorAmber : Colors.transparent,
-          border: Border.all(
-            color: selected ? DesignTokens.colorAmber : DesignTokens.colorRule,
-            width: 1.5,
-          ),
-        ),
-        child: Text(
-          initial,
-          style: DesignTokens.typographySubtitle.copyWith(
-            color: selected ? Colors.white : DesignTokens.colorInk,
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _WelcomePoints extends StatelessWidget {

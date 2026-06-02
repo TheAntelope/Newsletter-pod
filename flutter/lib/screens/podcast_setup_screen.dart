@@ -3,15 +3,20 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
+import '../widgets/day_toggle.dart';
+import '../widgets/editorial.dart';
+import '../widgets/voice_choice_card.dart';
 
 const _weekdayOptions = [
-  ('mon', 'Mon'), ('tue', 'Tue'), ('wed', 'Wed'), ('thu', 'Thu'),
-  ('fri', 'Fri'), ('sat', 'Sat'), ('sun', 'Sun'),
+  ('mon', 'M'), ('tue', 'T'), ('wed', 'W'), ('thu', 'T'), //
+  ('fri', 'F'), ('sat', 'S'), ('sun', 'S'),
 ];
 
-/// Podcast setup + schedule editor. Loads the current config, schedule and voice
-/// catalog, lets the user edit the common fields, and saves via updatePodcastConfig
-/// + updateSchedule (carrying over the untouched profile fields).
+/// Podcast setup + schedule editor. Editorial rebuild of the iOS `PodcastSetupView`
+/// + `ScheduleSection`: show fields, a stepper length control, VoiceChoiceCards
+/// (replacing the plain dropdown), and a day-circle schedule editor with a
+/// delivery-time picker and a read-only cutoff line. Saves via updatePodcastConfig
+/// + updateSchedule, carrying over the untouched profile fields.
 class PodcastSetupScreen extends StatefulWidget {
   const PodcastSetupScreen({super.key});
 
@@ -33,6 +38,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
   String? _voiceId;
   final Set<String> _weekdays = {};
   String _localTime = '07:00';
+  String _cutoffTime = '23:00';
   String _timezone = 'UTC';
 
   PodcastProfileDto? _loadedProfile;
@@ -70,6 +76,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
           ..clear()
           ..addAll(s.weekdays);
         _localTime = s.localTime;
+        _cutoffTime = s.cutoffTime;
         _timezone = s.timezone;
         _loading = false;
       });
@@ -144,8 +151,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
           .showSnackBar(const SnackBar(content: Text('Saved')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -153,7 +159,6 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Podcast & schedule')),
       body: SafeArea(
@@ -161,114 +166,128 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
             ? const Center(child: CircularProgressIndicator())
             : _error != null
                 ? Center(child: Text(_error!))
-                : _buildForm(text),
+                : _buildForm(),
       ),
     );
   }
 
-  Widget _buildForm(TextTheme text) {
+  Widget _buildForm() {
     final ent = _entitlements;
     final minM = ent?.minDurationMinutes ?? 3;
     final maxM = ent?.maxDurationMinutes ?? 5;
 
-    Widget label(String s) => Padding(
-          padding: const EdgeInsets.only(bottom: DesignTokens.spacingS),
-          child: Text(s,
-              style: text.labelSmall?.copyWith(color: DesignTokens.colorMuted)),
-        );
-
     return ListView(
       padding: const EdgeInsets.all(DesignTokens.spacingL),
       children: [
-        label('SHOW'),
-        TextField(
-          controller: _titleController,
-          decoration: const InputDecoration(labelText: 'Title'),
-        ),
+        const MetaLabel('Show'),
         const SizedBox(height: DesignTokens.spacingM),
-        TextField(
-          controller: _hostPrimaryController,
-          decoration: const InputDecoration(labelText: 'Primary host'),
-        ),
-        const SizedBox(height: DesignTokens.spacingM),
-        TextField(
-          controller: _hostSecondaryController,
-          decoration:
-              const InputDecoration(labelText: 'Secondary host (optional)'),
-        ),
-        const SizedBox(height: DesignTokens.spacingL),
-        label('LENGTH'),
-        Row(
+        EditorialCard(
           children: [
-            IconButton.filledTonal(
-              onPressed: _durationMinutes > minM
-                  ? () => setState(() => _durationMinutes--)
-                  : null,
-              icon: const Icon(Icons.remove),
+            TextField(
+              controller: _titleController,
+              decoration: const InputDecoration(labelText: 'Title'),
             ),
-            const SizedBox(width: DesignTokens.spacingM),
-            Text('$_durationMinutes min', style: text.titleLarge),
-            const SizedBox(width: DesignTokens.spacingM),
-            IconButton.filledTonal(
-              onPressed: _durationMinutes < maxM
-                  ? () => setState(() => _durationMinutes++)
-                  : null,
-              icon: const Icon(Icons.add),
+            TextField(
+              controller: _hostPrimaryController,
+              decoration: const InputDecoration(labelText: 'Primary host'),
+            ),
+            TextField(
+              controller: _hostSecondaryController,
+              decoration:
+                  const InputDecoration(labelText: 'Secondary host (optional)'),
             ),
           ],
         ),
         const SizedBox(height: DesignTokens.spacingL),
-        label('VOICE'),
-        DropdownButton<String?>(
-          value: _voiceId,
-          isExpanded: true,
-          items: [
-            const DropdownMenuItem<String?>(value: null, child: Text('Default')),
-            ..._voices.map(
-              (v) => DropdownMenuItem<String?>(value: v.id, child: Text(v.name)),
+        const MetaLabel('Length'),
+        const SizedBox(height: DesignTokens.spacingM),
+        EditorialCard(
+          children: [
+            Row(
+              children: [
+                IconButton.filledTonal(
+                  onPressed: _durationMinutes > minM
+                      ? () => setState(() => _durationMinutes--)
+                      : null,
+                  icon: const Icon(Icons.remove),
+                ),
+                Expanded(
+                  child: Center(
+                    child: Text(
+                      '$_durationMinutes min',
+                      style: DesignTokens.typographyTitle
+                          .copyWith(color: DesignTokens.colorInk),
+                    ),
+                  ),
+                ),
+                IconButton.filledTonal(
+                  onPressed: _durationMinutes < maxM
+                      ? () => setState(() => _durationMinutes++)
+                      : null,
+                  icon: const Icon(Icons.add),
+                ),
+              ],
+            ),
+            Text(
+              'Your plan allows $minM–$maxM minute episodes.',
+              style: DesignTokens.typographyCallout
+                  .copyWith(color: DesignTokens.colorMuted),
             ),
           ],
-          onChanged: (v) => setState(() => _voiceId = v),
         ),
         const SizedBox(height: DesignTokens.spacingL),
-        label('SCHEDULE'),
-        Wrap(
-          spacing: DesignTokens.spacingS,
-          children: _weekdayOptions.map((opt) {
-            return FilterChip(
-              label: Text(opt.$2),
-              selected: _weekdays.contains(opt.$1),
-              onSelected: (on) => setState(() {
-                if (on) {
-                  _weekdays.add(opt.$1);
-                } else {
-                  _weekdays.remove(opt.$1);
-                }
-              }),
-            );
-          }).toList(),
-        ),
+        const MetaLabel('Voice'),
         const SizedBox(height: DesignTokens.spacingM),
-        Row(
+        for (final v in _voices) ...[
+          VoiceChoiceCard(
+            voice: v,
+            selected: _voiceId == v.id,
+            onSelect: () => setState(() => _voiceId = v.id),
+          ),
+          const SizedBox(height: DesignTokens.spacingM),
+        ],
+        const SizedBox(height: DesignTokens.spacingS),
+        const MetaLabel('Schedule'),
+        const SizedBox(height: DesignTokens.spacingM),
+        EditorialCard(
           children: [
-            Text('Delivered at', style: text.bodyMedium),
-            const SizedBox(width: DesignTokens.spacingS),
-            OutlinedButton(onPressed: _pickTime, child: Text(_localTime)),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                for (final opt in _weekdayOptions)
+                  DayToggle(
+                    initial: opt.$2,
+                    selected: _weekdays.contains(opt.$1),
+                    onTap: () => setState(() {
+                      if (!_weekdays.remove(opt.$1)) _weekdays.add(opt.$1);
+                    }),
+                  ),
+              ],
+            ),
+            const EditorialDivider(),
+            Row(
+              children: [
+                Text(
+                  'Delivered at',
+                  style: DesignTokens.typographyBody
+                      .copyWith(color: DesignTokens.colorInk),
+                ),
+                const Spacer(),
+                OutlinedButton(onPressed: _pickTime, child: Text(_localTime)),
+              ],
+            ),
+            Text(
+              'Stories must arrive before $_cutoffTime to make that day’s pod.',
+              style: DesignTokens.typographyCallout
+                  .copyWith(color: DesignTokens.colorMuted),
+            ),
           ],
         ),
         const SizedBox(height: DesignTokens.spacingXl),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: _saving ? null : _save,
-            child: _saving
-                ? const SizedBox(
-                    height: 18,
-                    width: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Save'),
-          ),
+        AmberButton.filled(
+          label: 'Save',
+          loading: _saving,
+          onPressed: _saving ? null : _save,
         ),
       ],
     );
