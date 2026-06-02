@@ -87,4 +87,16 @@ class ApiAppRepository implements AppRepository {
   @override
   Future<void> submitSwipe(String dedupeKey, int direction) =>
       _client.submitSwipe(_token, dedupeKey: dedupeKey, direction: direction);
+
+  @override
+  Future<SubstackIntentsEnvelope> fetchSubstackIntents() =>
+      _client.fetchSubstackIntents(_token);
+
+  @override
+  Future<SubstackDiscoveryEnvelope> discoverSubstacks(String query) =>
+      _client.discoverSubstacks(_token, query);
+
+  @override
+  Future<SubstackIntentEnvelope> createSubstackIntent(String pubUrl) =>
+      _client.createSubstackIntent(_token, pubUrl);
 }

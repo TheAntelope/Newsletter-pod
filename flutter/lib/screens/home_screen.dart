@@ -4,6 +4,7 @@ import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
 import 'next_episode_queue_screen.dart';
+import 'paywall_screen.dart';
 import 'podcast_setup_screen.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -125,27 +126,45 @@ class _PlanCard extends StatelessWidget {
     final tier = subscription.tier.toUpperCase();
 
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(DesignTokens.spacingM),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('PLAN', style: text.labelSmall?.copyWith(color: DesignTokens.colorMuted)),
-            const SizedBox(height: DesignTokens.spacingXs),
-            Text('$tier · ${subscription.status}', style: text.titleLarge),
-            const SizedBox(height: DesignTokens.spacingS),
-            if (entitlements.isInTrial)
-              Text(
-                'Trial: ${entitlements.trialPremiumPodsRemaining} premium pods left',
-                style: text.bodyMedium,
-              )
-            else
-              Text(
-                '${entitlements.premiumPodsRemainingThisWeek} of '
-                '${entitlements.premiumPodsPerWeek} premium pods left this week',
-                style: text.bodyMedium,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(DesignTokens.radiusCard),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const PaywallScreen()),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(DesignTokens.spacingM),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('PLAN',
+                  style:
+                      text.labelSmall?.copyWith(color: DesignTokens.colorMuted)),
+              const SizedBox(height: DesignTokens.spacingXs),
+              Text('$tier · ${subscription.status}', style: text.titleLarge),
+              const SizedBox(height: DesignTokens.spacingS),
+              if (entitlements.isInTrial)
+                Text(
+                  'Trial: ${entitlements.trialPremiumPodsRemaining} premium pods left',
+                  style: text.bodyMedium,
+                )
+              else
+                Text(
+                  '${entitlements.premiumPodsRemainingThisWeek} of '
+                  '${entitlements.premiumPodsPerWeek} premium pods left this week',
+                  style: text.bodyMedium,
+                ),
+              const SizedBox(height: DesignTokens.spacingS),
+              Row(
+                children: [
+                  Text('See plans',
+                      style: text.labelLarge
+                          ?.copyWith(color: DesignTokens.colorAmberDeep)),
+                  const Icon(Icons.chevron_right,
+                      size: 18, color: DesignTokens.colorAmberDeep),
+                ],
               ),
-          ],
+            ],
+          ),
         ),
       ),
     );

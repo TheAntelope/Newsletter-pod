@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
+import 'substack_add_screen.dart';
 
 class SourcesScreen extends StatefulWidget {
   const SourcesScreen({super.key});
@@ -24,7 +25,18 @@ class _SourcesScreenState extends State<SourcesScreen> {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Sources')),
+      appBar: AppBar(
+        title: const Text('Sources'),
+        actions: [
+          IconButton(
+            tooltip: 'Add Substack',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SubstackAddScreen()),
+            ),
+            icon: const Icon(Icons.add),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: FutureBuilder<SourcesEnvelope>(
           future: _future,

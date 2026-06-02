@@ -5,7 +5,16 @@ import 'package:app/data/fake_app_repository.dart';
 import 'package:app/main.dart';
 import 'package:app/state/app_state.dart';
 
+/// Tall viewport so long ListView-based screens fully build (avoids lazy-list
+/// cache-extent flakiness when tapping items near the bottom).
+void _useTallViewport(WidgetTester tester) {
+  tester.view.physicalSize = const Size(1000, 2200);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+}
+
 Future<void> _signIn(WidgetTester tester) async {
+  _useTallViewport(tester);
   final appState = AppState(FakeAppRepository());
   await tester.pumpWidget(
     AppScope(notifier: appState, child: const ClawcastApp()),
@@ -16,6 +25,7 @@ Future<void> _signIn(WidgetTester tester) async {
 
 void main() {
   testWidgets('stub sign-in routes to the dashboard and generates', (tester) async {
+    _useTallViewport(tester);
     final appState = AppState(FakeAppRepository());
     await tester.pumpWidget(
       AppScope(notifier: appState, child: const ClawcastApp()),
@@ -79,11 +89,6 @@ void main() {
   });
 
   testWidgets('podcast setup loads, edits length, and saves', (tester) async {
-    // Tall viewport so the whole form (incl. Save) fits without scrolling.
-    tester.view.physicalSize = const Size(1000, 2400);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
-
     await _signIn(tester);
 
     await tester.tap(find.byIcon(Icons.tune));
@@ -122,5 +127,43 @@ void main() {
       find.text('A field guide to agent frameworks'),
       findsOneWidget, // now the card behind the new top
     );
+  });
+
+  testWidgets('substack add lists intents and discovers candidates',
+      (tester) async {
+    await _signIn(tester);
+
+    await tester.tap(find.text('Sources'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Add Substack'), findsOneWidget); // app bar
+    expect(find.text('The Pragmatic Engineer'), findsOneWidget); // existing intent
+    expect(find.textContaining('481920'), findsOneWidget); // live code
+
+    await tester.enterText(find.byType(TextField), 'tech');
+    await tester.tap(find.text('Find'));
+    await tester.pumpAndSettle();
+    expect(find.text('Platformer'), findsOneWidget); // discovered candidate
+  });
+
+  testWidgets('paywall shows plans and stubs purchase', (tester) async {
+    await _signIn(tester);
+
+    await tester.tap(find.text('See plans'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Choose your plan'), findsOneWidget);
+    expect(find.text('Pro'), findsOneWidget);
+    expect(find.text('Max'), findsOneWidget);
+    expect(find.text('Current plan'), findsOneWidget); // free is current
+
+    final choosePro = find.text('Choose Pro');
+    await tester.ensureVisible(choosePro);
+    await tester.pumpAndSettle();
+    await tester.tap(choosePro);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('coming soon'), findsOneWidget); // stub snackbar
   });
 }

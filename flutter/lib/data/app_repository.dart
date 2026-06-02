@@ -25,4 +25,8 @@ abstract interface class AppRepository {
   Future<VoiceCatalogEnvelope> fetchVoiceCatalog();
   Future<SwipeDeckEnvelope> fetchSwipeDeck();
   Future<void> submitSwipe(String dedupeKey, int direction);
+
+  Future<SubstackIntentsEnvelope> fetchSubstackIntents();
+  Future<SubstackDiscoveryEnvelope> discoverSubstacks(String query);
+  Future<SubstackIntentEnvelope> createSubstackIntent(String pubUrl);
 }

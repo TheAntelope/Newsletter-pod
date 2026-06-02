@@ -278,6 +278,94 @@ class FakeAppRepository implements AppRepository {
   @override
   Future<void> submitSwipe(String dedupeKey, int direction) async {}
 
+  final List<SubstackIntentDto> _createdIntents = [];
+
+  @override
+  Future<SubstackIntentsEnvelope> fetchSubstackIntents() async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    return SubstackIntentsEnvelope(
+      inboundAddress: 'demo@theclawcast.com',
+      intents: [..._baseIntents(), ..._createdIntents],
+    );
+  }
+
+  @override
+  Future<SubstackDiscoveryEnvelope> discoverSubstacks(String query) async {
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    return SubstackDiscoveryEnvelope(
+      candidates: [
+        SubstackCandidateDto(
+          pubUrl: 'https://www.platformer.news',
+          pubHost: 'www.platformer.news',
+          title: 'Platformer',
+          author: 'Casey Newton',
+          hasPaidTier: true,
+          feedUrl: 'https://www.platformer.news/rss',
+          why: 'Tech & policy reporting that matches your interests.',
+        ),
+        SubstackCandidateDto(
+          pubUrl: 'https://importai.substack.com',
+          pubHost: 'importai.substack.com',
+          title: 'Import AI',
+          author: 'Jack Clark',
+          hasPaidTier: false,
+          feedUrl: 'https://importai.substack.com/feed',
+          why: 'A weekly AI research roundup.',
+        ),
+      ],
+    );
+  }
+
+  @override
+  Future<SubstackIntentEnvelope> createSubstackIntent(String pubUrl) async {
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    final host = Uri.tryParse(pubUrl)?.host ?? pubUrl;
+    final intent = SubstackIntentDto(
+      id: 'new-${_createdIntents.length + 1}',
+      userId: 'demo-user',
+      pubUrl: pubUrl,
+      pubHost: host,
+      pubTitle: host,
+      hasPaidTier: false,
+      aliasEmail: 'demo@theclawcast.com',
+      createdAt: DateTime.now(),
+      status: SubstackIntentStatus.pending,
+    );
+    _createdIntents.add(intent);
+    return SubstackIntentEnvelope(intent: intent);
+  }
+
+  List<SubstackIntentDto> _baseIntents() {
+    final now = DateTime.now();
+    return [
+      SubstackIntentDto(
+        id: 'int1',
+        userId: 'demo-user',
+        pubUrl: 'https://newsletter.pragmaticengineer.com',
+        pubHost: 'newsletter.pragmaticengineer.com',
+        pubTitle: 'The Pragmatic Engineer',
+        hasPaidTier: true,
+        aliasEmail: 'demo@theclawcast.com',
+        createdAt: now.subtract(const Duration(days: 2)),
+        confirmedAt: now.subtract(const Duration(days: 1)),
+        status: SubstackIntentStatus.confirmed,
+      ),
+      SubstackIntentDto(
+        id: 'int2',
+        userId: 'demo-user',
+        pubUrl: 'https://www.lennysnewsletter.com',
+        pubHost: 'www.lennysnewsletter.com',
+        pubTitle: "Lenny's Newsletter",
+        hasPaidTier: true,
+        aliasEmail: 'demo@theclawcast.com',
+        createdAt: now.subtract(const Duration(minutes: 10)),
+        status: SubstackIntentStatus.pending,
+        pendingVerificationCode: '481920',
+        pendingVerificationExpiresAt: now.add(const Duration(minutes: 12)),
+      ),
+    ];
+  }
+
   PodcastProfileDto _demoProfile() => PodcastProfileDto(
         title: 'ClawCast',
         formatPreset: 'two_hosts',
