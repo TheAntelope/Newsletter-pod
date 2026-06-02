@@ -1105,9 +1105,14 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             (request_payload.bundle_id or "").strip()
             or container.settings.apns_bundle_id
         )
-        # Idempotent on (user_id, token): re-registering the same device
-        # refreshes last_seen_at and clears any prior invalidated_at marker.
-        token_id = hashlib.sha256(f"{user.id}:{token}".encode("utf-8")).hexdigest()[:32]
+        # Idempotent on (user_id, platform, token): re-registering the same
+        # device refreshes last_seen_at and clears any prior invalidated_at
+        # marker. platform is in the key so an iOS and an Android token that
+        # happen to normalize to the same string get distinct records (and so a
+        # platform never silently flips on an existing record).
+        token_id = hashlib.sha256(
+            f"{user.id}:{platform}:{token}".encode("utf-8")
+        ).hexdigest()[:32]
         now = utc_now()
         existing = container.control_repository.get_device_token(token_id)
         if existing is not None:
