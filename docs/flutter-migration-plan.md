@@ -306,3 +306,11 @@ _(Update as work proceeds.)_
   **Now genuinely deferred:** audio preview (`just_audio`), STT dictation, the embedded
   onboarding swipe step, the Apple-Podcasts deep link (Android pastes URL), and the
   account-gated wiring (Firebase/RevenueCat/FCM/Play CI) — the real remaining Phase 2 work.
+- 2026-06-02 — **Phase 2 UI parity — device-feature pass (24 tests green).** Added the
+  deferred items that just needed plugins (`just_audio`, `speech_to_text`, `url_launcher`,
+  all compile for web): voice-sample **audio preview** (shared AudioController + bundled demo
+  WAV), **dictation** (DictationController + mic in the feedback composer, Android RECORD_AUDIO
+  added), **real link opening** (FeedAccess/legal/hero via url_launcher), and the **embedded
+  onboarding swipe step** (deck extracted to a reusable `SwipeDeck`; onboarding is 10 steps).
+  Committed per-unit. **Only the account-gated wiring remains** (Firebase auth / RevenueCat /
+  FCM / Play CI), plus the optional standalone OnboardingVoiceIntakeStep (submitVoiceIntake).

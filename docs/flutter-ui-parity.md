@@ -48,11 +48,30 @@ The "free wins + repo-backed" gaps from the §"what else to port" review are now
 - **Sources depth:** catalog grouped by topic (collapsible, per-source toggles + N-of-M),
   Custom RSS add/remove, Recent Newsletters list.
 
-**Still deferred (genuinely platform-/account-gated):** audio preview (`just_audio` — voice
-samples + episode playback), speech-to-text dictation (`OnboardingVoiceIntakeStep` + the
-feedback mic), the "Open in Apple Podcasts" deep link (Android pastes the URL instead), the
-embedded onboarding swipe step, and the account-gated wiring (Firebase auth, RevenueCat, FCM,
-Play CI). Cutoff-time is shown **read-only** — the `/v1/me/schedule` PATCH body doesn't accept it.
+### Third pass — the deferred device features (2026-06-02)
+
+Added the non-account-gated items that needed plugins (`just_audio`,
+`speech_to_text`, `url_launcher` — all compile for web; 24 tests green):
+
+- **Voice-sample audio preview** — a shared single-stream `AudioController`
+  (`lib/services/audio_controller.dart`) over just_audio; VoiceChoiceCard's "Hear
+  a sample" plays the voice `previewUrl` (a bundled demo WAV in the Fake). Lazy
+  player init so headless tests don't touch the channel.
+- **Dictation** — `DictationController` (`lib/services/dictation_controller.dart`)
+  over speech_to_text; a Dictate/Stop mic in the feedback composer streams the
+  transcript into the field (tags source `voice`), degrading to text where
+  recognition is unavailable. Android `RECORD_AUDIO` + queries added.
+- **Real link opening** (`lib/services/link_launcher.dart`) — FeedAccess "Open
+  feed", Account legal links, and the hero route to the feed.
+- **Embedded onboarding swipe step** — the deck is now a reusable `SwipeDeck`
+  widget embedded in the wizard (10 steps).
+
+**Still deferred:** the **account-gated wiring** (Firebase auth, RevenueCat, FCM,
+Play CI) which needs the external accounts, and the standalone
+`OnboardingVoiceIntakeStep` (dictation-to-seed-interests via `submitVoiceIntake`)
+— dictation itself is now demonstrated in the feedback composer. The
+"Open in Apple Podcasts" deep link stays Android-generic (open/paste the feed URL).
+Cutoff-time is shown **read-only** — the `/v1/me/schedule` PATCH body doesn't accept it.
 
 Original punch-list below is kept for reference.
 
