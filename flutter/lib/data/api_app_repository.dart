@@ -19,6 +19,10 @@ class ApiAppRepository implements AppRepository {
   Future<SourcesEnvelope> fetchSources() => _client.fetchSources(_token);
 
   @override
+  Future<SourcesEnvelope> replaceSources(List<SourcePayload> sources) =>
+      _client.replaceSources(_token, sources);
+
+  @override
   Future<EpisodesEnvelope> fetchEpisodes() => _client.fetchEpisodes(_token);
 
   @override

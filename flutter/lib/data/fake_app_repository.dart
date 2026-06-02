@@ -1,3 +1,4 @@
+import '../api/api_client.dart' show SourcePayload;
 import '../api/models.dart';
 import 'app_repository.dart';
 
@@ -41,36 +42,67 @@ class FakeAppRepository implements AppRepository {
     );
   }
 
+  /// Mutable so [replaceSources] toggles survive within a session (the demo has
+  /// no backend to round-trip through).
+  final List<UserSourceDto> _sources = [
+    UserSourceDto(
+      id: 's1',
+      sourceId: 'stratechery',
+      name: 'Stratechery',
+      rssUrl: 'https://stratechery.com/feed/',
+      isCustom: false,
+      enabled: true,
+    ),
+    UserSourceDto(
+      id: 's2',
+      sourceId: 'platformer',
+      name: 'Platformer',
+      rssUrl: 'https://www.platformer.news/rss/',
+      isCustom: false,
+      enabled: true,
+    ),
+    UserSourceDto(
+      id: 's3',
+      sourceId: 'custom-1',
+      name: 'My Substack',
+      rssUrl: 'https://my.substack.com/feed',
+      isCustom: true,
+      enabled: false,
+    ),
+  ];
+
   @override
   Future<SourcesEnvelope> fetchSources() async {
     await Future<void>.delayed(const Duration(milliseconds: 150));
     return SourcesEnvelope(
-      sources: [
-        UserSourceDto(
-          id: 's1',
-          sourceId: 'stratechery',
-          name: 'Stratechery',
-          rssUrl: 'https://stratechery.com/feed/',
-          isCustom: false,
-          enabled: true,
-        ),
-        UserSourceDto(
-          id: 's2',
-          sourceId: 'platformer',
-          name: 'Platformer',
-          rssUrl: 'https://www.platformer.news/rss/',
-          isCustom: false,
-          enabled: true,
-        ),
-        UserSourceDto(
-          id: 's3',
-          sourceId: 'custom-1',
-          name: 'My Substack',
-          rssUrl: 'https://my.substack.com/feed',
-          isCustom: true,
-          enabled: false,
-        ),
-      ],
+      sources: List.unmodifiable(_sources),
+      entitlements: _demoEntitlements(),
+    );
+  }
+
+  @override
+  Future<SourcesEnvelope> replaceSources(List<SourcePayload> sources) async {
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    final enabledCatalog =
+        sources.map((s) => s.sourceId).whereType<String>().toSet();
+    final enabledCustom =
+        sources.map((s) => s.rssUrl).whereType<String>().toSet();
+    for (var i = 0; i < _sources.length; i++) {
+      final s = _sources[i];
+      final enabled = s.isCustom
+          ? enabledCustom.contains(s.rssUrl)
+          : enabledCatalog.contains(s.sourceId);
+      _sources[i] = UserSourceDto(
+        id: s.id,
+        sourceId: s.sourceId,
+        name: s.name,
+        rssUrl: s.rssUrl,
+        isCustom: s.isCustom,
+        enabled: enabled,
+      );
+    }
+    return SourcesEnvelope(
+      sources: List.unmodifiable(_sources),
       entitlements: _demoEntitlements(),
     );
   }

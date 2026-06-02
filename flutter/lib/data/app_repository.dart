@@ -1,3 +1,4 @@
+import '../api/api_client.dart' show SourcePayload;
 import '../api/models.dart';
 
 /// The data layer the screens talk to.
@@ -9,6 +10,12 @@ abstract interface class AppRepository {
   Future<MeEnvelope> fetchMe();
   Future<RunStartEnvelope> generateNow();
   Future<SourcesEnvelope> fetchSources();
+
+  /// Persist the full set of enabled sources (catalog ids + custom RSS urls);
+  /// sources absent from [sources] are disabled server-side. Returns the new
+  /// state. Mirrors `PUT /v1/me/sources`.
+  Future<SourcesEnvelope> replaceSources(List<SourcePayload> sources);
+
   Future<EpisodesEnvelope> fetchEpisodes();
   Future<NextEpisodeQueueEnvelope> fetchNextEpisodeQueue();
   Future<void> pinNextEpisodeItem(String dedupeKey);
