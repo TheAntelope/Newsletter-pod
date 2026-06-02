@@ -12,11 +12,90 @@ const _weekdayOptions = [
   ('fri', 'F'), ('sat', 'S'), ('sun', 'S'),
 ];
 
+const _formatOptions = [
+  ('solo_host', 'Solo host', 'One voice walks through the day.'),
+  ('two_hosts', 'Two hosts', 'An anchor and a co-host trade off.'),
+  ('rotating_guest', 'Rotating guest', 'An anchor plus a different guest each day.'),
+];
+
+const _toneOptions = [
+  ('calm_analyst', 'Calm analyst'),
+  ('warm_friendly', 'Warm & friendly'),
+  ('snappy_news', 'Snappy news'),
+  ('playful', 'Playful'),
+];
+
+const _humorOptions = [
+  ('none', 'None'),
+  ('dry_wit', 'Dry wit'),
+  ('dad_jokes', 'Dad jokes'),
+];
+
+const _guidanceMaxLength = 500;
+
+class _Preset {
+  const _Preset({
+    required this.id,
+    required this.label,
+    required this.tone,
+    required this.humor,
+    required this.keyFindings,
+    required this.greeting,
+    required this.guidance,
+  });
+
+  final String id;
+  final String label;
+  final String tone;
+  final String humor;
+  final int keyFindings;
+  final bool greeting;
+  final String guidance;
+}
+
+const _guidancePresets = [
+  _Preset(
+    id: 'quick_calm',
+    label: 'Quick & Calm',
+    tone: 'calm_analyst',
+    humor: 'none',
+    keyFindings: 3,
+    greeting: true,
+    guidance: 'Prioritize clarity over color.',
+  ),
+  _Preset(
+    id: 'morning_energy',
+    label: 'Morning Energy',
+    tone: 'warm_friendly',
+    humor: 'dad_jokes',
+    keyFindings: 5,
+    greeting: true,
+    guidance: 'Open with a warm greeting and one upbeat sentence about the day.',
+  ),
+  _Preset(
+    id: 'newsroom_brief',
+    label: 'Newsroom Brief',
+    tone: 'snappy_news',
+    humor: 'none',
+    keyFindings: 5,
+    greeting: false,
+    guidance: 'Tight transitions, lead with the lede, no filler.',
+  ),
+  _Preset(
+    id: 'friend_catching_up',
+    label: 'Friend Catching You Up',
+    tone: 'warm_friendly',
+    humor: 'dry_wit',
+    keyFindings: 3,
+    greeting: true,
+    guidance: "Sound like a smart friend explaining over coffee. Use 'you' often.",
+  ),
+];
+
 /// Podcast setup + schedule editor. Editorial rebuild of the iOS `PodcastSetupView`
-/// + `ScheduleSection`: show fields, a stepper length control, VoiceChoiceCards
-/// (replacing the plain dropdown), and a day-circle schedule editor with a
-/// delivery-time picker and a read-only cutoff line. Saves via updatePodcastConfig
-/// + updateSchedule, carrying over the untouched profile fields.
+/// + `ScheduleSection` with the full config surface: show fields, format, voice
+/// cards, length, style (tone / humor / key-takeaways / greeting / takeaways),
+/// custom-guidance presets + free text, weather, and the day-circle schedule.
 class PodcastSetupScreen extends StatefulWidget {
   const PodcastSetupScreen({super.key});
 
@@ -34,8 +113,20 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
   final _titleController = TextEditingController();
   final _hostPrimaryController = TextEditingController();
   final _hostSecondaryController = TextEditingController();
+  final _weatherController = TextEditingController();
+  final _guidanceController = TextEditingController();
+
+  String _formatPreset = 'two_hosts';
   int _durationMinutes = 5;
   String? _voiceId;
+  String _tone = 'calm_analyst';
+  String _humor = 'none';
+  int _keyFindings = 3;
+  bool _greeting = true;
+  bool _topTakeaways = true;
+  bool _includeWeather = false;
+  String? _presetId;
+
   final Set<String> _weekdays = {};
   String _localTime = '07:00';
   String _cutoffTime = '23:00';
@@ -70,8 +161,18 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
         _titleController.text = p.title;
         _hostPrimaryController.text = p.hostPrimaryName;
         _hostSecondaryController.text = p.hostSecondaryName ?? '';
+        _weatherController.text = p.weatherLocation ?? '';
+        _guidanceController.text = p.customGuidance ?? '';
+        _formatPreset = p.formatPreset;
         _durationMinutes = p.desiredDurationMinutes;
         _voiceId = p.voiceId;
+        _tone = p.tone ?? 'calm_analyst';
+        _humor = p.humorStyle ?? 'none';
+        _keyFindings = p.keyFindingsCount ?? 3;
+        _greeting = p.personalizedGreeting ?? true;
+        _topTakeaways = p.includeTopTakeaways ?? true;
+        _includeWeather = p.includeWeather ?? false;
+        _presetId = p.customGuidancePresetId;
         _weekdays
           ..clear()
           ..addAll(s.weekdays);
@@ -94,7 +195,20 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
     _titleController.dispose();
     _hostPrimaryController.dispose();
     _hostSecondaryController.dispose();
+    _weatherController.dispose();
+    _guidanceController.dispose();
     super.dispose();
+  }
+
+  void _applyPreset(_Preset preset) {
+    setState(() {
+      _tone = preset.tone;
+      _humor = preset.humor;
+      _keyFindings = preset.keyFindings;
+      _greeting = preset.greeting;
+      _presetId = preset.id;
+      _guidanceController.text = preset.guidance;
+    });
   }
 
   Future<void> _pickTime() async {
@@ -119,24 +233,26 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
     final title = _titleController.text.trim();
     final hostPrimary = _hostPrimaryController.text.trim();
     final hostSecondary = _hostSecondaryController.text.trim();
+    final weather = _weatherController.text.trim();
+    final guidance = _guidanceController.text.trim();
     final updated = PodcastProfileDto(
       title: title.isEmpty ? loaded.title : title,
-      formatPreset: loaded.formatPreset,
+      formatPreset: _formatPreset,
       hostPrimaryName: hostPrimary.isEmpty ? loaded.hostPrimaryName : hostPrimary,
       hostSecondaryName: hostSecondary.isEmpty ? null : hostSecondary,
       guestNames: loaded.guestNames,
       desiredDurationMinutes: _durationMinutes,
       voiceId: _voiceId,
       secondaryVoiceId: loaded.secondaryVoiceId,
-      tone: loaded.tone,
-      keyFindingsCount: loaded.keyFindingsCount,
-      humorStyle: loaded.humorStyle,
-      personalizedGreeting: loaded.personalizedGreeting,
-      includeTopTakeaways: loaded.includeTopTakeaways,
-      includeWeather: loaded.includeWeather,
-      weatherLocation: loaded.weatherLocation,
-      customGuidance: loaded.customGuidance,
-      customGuidancePresetId: loaded.customGuidancePresetId,
+      tone: _tone,
+      keyFindingsCount: _keyFindings,
+      humorStyle: _humor,
+      personalizedGreeting: _greeting,
+      includeTopTakeaways: _topTakeaways,
+      includeWeather: _includeWeather,
+      weatherLocation: weather.isEmpty ? null : weather,
+      customGuidance: guidance.isEmpty ? null : guidance,
+      customGuidancePresetId: _presetId,
     );
 
     try {
@@ -179,8 +295,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
     return ListView(
       padding: const EdgeInsets.all(DesignTokens.spacingL),
       children: [
-        const MetaLabel('Show'),
-        const SizedBox(height: DesignTokens.spacingM),
+        _section('Show'),
         EditorialCard(
           children: [
             TextField(
@@ -198,9 +313,22 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
             ),
           ],
         ),
-        const SizedBox(height: DesignTokens.spacingL),
-        const MetaLabel('Length'),
-        const SizedBox(height: DesignTokens.spacingM),
+        _section('Format'),
+        EditorialCard(
+          spacing: 0,
+          children: [
+            for (var i = 0; i < _formatOptions.length; i++) ...[
+              if (i > 0) const EditorialDivider(),
+              _RadioRow(
+                title: _formatOptions[i].$2,
+                subtitle: _formatOptions[i].$3,
+                selected: _formatPreset == _formatOptions[i].$1,
+                onTap: () => setState(() => _formatPreset = _formatOptions[i].$1),
+              ),
+            ],
+          ],
+        ),
+        _section('Length'),
         EditorialCard(
           children: [
             Row(
@@ -235,9 +363,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
             ),
           ],
         ),
-        const SizedBox(height: DesignTokens.spacingL),
-        const MetaLabel('Voice'),
-        const SizedBox(height: DesignTokens.spacingM),
+        _section('Voice'),
         for (final v in _voices) ...[
           VoiceChoiceCard(
             voice: v,
@@ -246,9 +372,95 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
           ),
           const SizedBox(height: DesignTokens.spacingM),
         ],
-        const SizedBox(height: DesignTokens.spacingS),
-        const MetaLabel('Schedule'),
-        const SizedBox(height: DesignTokens.spacingM),
+        _section('Style'),
+        EditorialCard(
+          children: [
+            const _FieldLabel('Tone'),
+            _PillGroup(
+              options: _toneOptions,
+              selectedId: _tone,
+              onSelect: (id) => setState(() => _tone = id),
+            ),
+            const _FieldLabel('Humor'),
+            _PillGroup(
+              options: _humorOptions,
+              selectedId: _humor,
+              onSelect: (id) => setState(() => _humor = id),
+            ),
+            const _FieldLabel('Key takeaways'),
+            Row(
+              children: [
+                for (var n = 3; n <= 7; n++)
+                  Padding(
+                    padding: const EdgeInsets.only(right: DesignTokens.spacingS),
+                    child: _NumberPill(
+                      value: n,
+                      selected: _keyFindings == n,
+                      onTap: () => setState(() => _keyFindings = n),
+                    ),
+                  ),
+              ],
+            ),
+            const EditorialDivider(),
+            _SwitchRow(
+              label: 'Greet me by name',
+              value: _greeting,
+              onChanged: (v) => setState(() => _greeting = v),
+            ),
+            _SwitchRow(
+              label: 'Include top takeaways',
+              value: _topTakeaways,
+              onChanged: (v) => setState(() => _topTakeaways = v),
+            ),
+          ],
+        ),
+        _section('Custom guidance'),
+        EditorialCard(
+          children: [
+            Wrap(
+              spacing: DesignTokens.spacingS,
+              runSpacing: DesignTokens.spacingS,
+              children: [
+                for (final p in _guidancePresets)
+                  _ChoicePill(
+                    label: p.label,
+                    selected: _presetId == p.id,
+                    onTap: () => _applyPreset(p),
+                  ),
+              ],
+            ),
+            TextField(
+              controller: _guidanceController,
+              maxLines: 3,
+              maxLength: _guidanceMaxLength,
+              decoration: const InputDecoration(
+                hintText:
+                    'Tell the hosts how the show should feel — e.g. “Lean '
+                    'technical, skip background.”',
+              ),
+              onChanged: (_) => setState(() => _presetId = null),
+            ),
+          ],
+        ),
+        _section('Weather'),
+        EditorialCard(
+          children: [
+            _SwitchRow(
+              label: 'Open with a local weather note',
+              value: _includeWeather,
+              onChanged: (v) => setState(() => _includeWeather = v),
+            ),
+            if (_includeWeather)
+              TextField(
+                controller: _weatherController,
+                decoration: const InputDecoration(
+                  labelText: 'City',
+                  hintText: 'e.g. Copenhagen',
+                ),
+              ),
+          ],
+        ),
+        _section('Schedule'),
         EditorialCard(
           children: [
             Row(
@@ -289,6 +501,216 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
           loading: _saving,
           onPressed: _saving ? null : _save,
         ),
+      ],
+    );
+  }
+
+  Widget _section(String label) => Padding(
+        padding: const EdgeInsets.fromLTRB(
+          0,
+          DesignTokens.spacingL,
+          0,
+          DesignTokens.spacingM,
+        ),
+        child: MetaLabel(label),
+      );
+}
+
+class _FieldLabel extends StatelessWidget {
+  const _FieldLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: DesignTokens.typographyCalloutStrong
+          .copyWith(color: DesignTokens.colorMuted),
+    );
+  }
+}
+
+class _RadioRow extends StatelessWidget {
+  const _RadioRow({
+    required this.title,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: DesignTokens.spacingM),
+        child: Row(
+          children: [
+            Icon(
+              selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+              color: selected
+                  ? DesignTokens.colorAmber
+                  : DesignTokens.colorMuted,
+            ),
+            const SizedBox(width: DesignTokens.spacingM),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: DesignTokens.typographyBodyStrong
+                        .copyWith(color: DesignTokens.colorInk),
+                  ),
+                  Text(
+                    subtitle,
+                    style: DesignTokens.typographyCallout
+                        .copyWith(color: DesignTokens.colorMuted),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PillGroup extends StatelessWidget {
+  const _PillGroup({
+    required this.options,
+    required this.selectedId,
+    required this.onSelect,
+  });
+
+  final List<(String, String)> options;
+  final String selectedId;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: DesignTokens.spacingS,
+      runSpacing: DesignTokens.spacingS,
+      children: [
+        for (final opt in options)
+          _ChoicePill(
+            label: opt.$2,
+            selected: selectedId == opt.$1,
+            onTap: () => onSelect(opt.$1),
+          ),
+      ],
+    );
+  }
+}
+
+class _ChoicePill extends StatelessWidget {
+  const _ChoicePill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: DesignTokens.spacingM,
+          vertical: DesignTokens.spacingS,
+        ),
+        decoration: BoxDecoration(
+          color: selected ? DesignTokens.colorAmber : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? DesignTokens.colorAmber : DesignTokens.colorRule,
+            width: 1.5,
+          ),
+        ),
+        child: Text(
+          label,
+          style: DesignTokens.typographyCalloutStrong.copyWith(
+            color: selected ? Colors.white : DesignTokens.colorInk,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NumberPill extends StatelessWidget {
+  const _NumberPill({
+    required this.value,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final int value;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: selected ? DesignTokens.colorAmber : Colors.transparent,
+          border: Border.all(
+            color: selected ? DesignTokens.colorAmber : DesignTokens.colorRule,
+            width: 1.5,
+          ),
+        ),
+        child: Text(
+          '$value',
+          style: DesignTokens.typographySubtitle.copyWith(
+            color: selected ? Colors.white : DesignTokens.colorInk,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SwitchRow extends StatelessWidget {
+  const _SwitchRow({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: DesignTokens.typographyBody
+                .copyWith(color: DesignTokens.colorInk),
+          ),
+        ),
+        Switch(value: value, onChanged: onChanged),
       ],
     );
   }

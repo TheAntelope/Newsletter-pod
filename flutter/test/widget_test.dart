@@ -114,6 +114,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('4 min'), findsOneWidget);
 
+    // Save sits below the now-longer config form; scroll the outer list to it
+    // (the form's multiline fields add their own Scrollables, so target the first).
+    await tester.scrollUntilVisible(
+      find.text('Save'),
+      400,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
     expect(find.text('Saved'), findsOneWidget);
