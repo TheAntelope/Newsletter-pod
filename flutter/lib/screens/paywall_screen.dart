@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
+import '../widgets/editorial.dart';
 
 /// Presentational paywall. Mirrors the launch tier model (see billing memo): Free
-/// / Pro / Max. Purchases are stubbed until RevenueCat is wired (Phase 2 billing);
-/// the "Choose" buttons explain that rather than charging.
+/// / Pro / Max. Editorial rebuild of the iOS `PaywallView` (header + trial-status
+/// + plan cards). Purchases are stubbed until RevenueCat is wired (Phase 2
+/// billing); the "Choose" buttons explain that rather than charging.
 class PaywallScreen extends StatelessWidget {
   const PaywallScreen({super.key});
 
@@ -14,6 +17,7 @@ class PaywallScreen extends StatelessWidget {
       tier: 'free',
       name: 'Free',
       price: 'Free',
+      recommended: false,
       features: [
         '1 default-voice pod per week',
         'Up to 25 items per episode',
@@ -23,6 +27,7 @@ class PaywallScreen extends StatelessWidget {
       tier: 'pro',
       name: 'Pro',
       price: r'$19.99/mo · $179.99/yr',
+      recommended: true,
       features: [
         '3 premium-voice pods per week',
         'Up to 75 items per episode',
@@ -33,6 +38,7 @@ class PaywallScreen extends StatelessWidget {
       tier: 'max',
       name: 'Max',
       price: r'$29.99/mo · $269.99/yr',
+      recommended: false,
       features: [
         '7 premium-voice pods per week',
         'Everything in Pro',
@@ -43,8 +49,9 @@ class PaywallScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    final currentTier = AppScope.of(context).me?.subscription.tier ?? 'free';
+    final app = AppScope.of(context);
+    final currentTier = app.me?.subscription.tier ?? 'free';
+    final entitlements = app.me?.entitlements;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Plans')),
@@ -52,13 +59,26 @@ class PaywallScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.all(DesignTokens.spacingL),
           children: [
-            Text('Choose your plan', style: text.displayLarge),
-            const SizedBox(height: DesignTokens.spacingS),
-            Text(
-              'Upgrade for more pods a week and premium voices.',
-              style: text.titleMedium?.copyWith(color: DesignTokens.colorMuted),
+            EditorialCard(
+              children: [
+                const MetaLabel('Go further'),
+                Text(
+                  'Choose your plan',
+                  style: DesignTokens.typographyTitle
+                      .copyWith(color: DesignTokens.colorInk),
+                ),
+                Text(
+                  'Upgrade for more pods a week and premium voices.',
+                  style: DesignTokens.typographyBody
+                      .copyWith(color: DesignTokens.colorInkSoft),
+                ),
+              ],
             ),
             const SizedBox(height: DesignTokens.spacingL),
+            if (entitlements != null) ...[
+              _TrialStatusCard(entitlements: entitlements),
+              const SizedBox(height: DesignTokens.spacingL),
+            ],
             for (final plan in _plans) ...[
               _PlanCard(plan: plan, current: plan.tier == currentTier),
               const SizedBox(height: DesignTokens.spacingM),
@@ -67,7 +87,8 @@ class PaywallScreen extends StatelessWidget {
             Text(
               'Subscriptions are handled by your app store via RevenueCat — '
               'wiring in once the project is set up.',
-              style: text.labelMedium?.copyWith(color: DesignTokens.colorMuted),
+              style: DesignTokens.typographyMeta
+                  .copyWith(color: DesignTokens.colorMuted),
             ),
           ],
         ),
@@ -81,13 +102,66 @@ class _Plan {
     required this.tier,
     required this.name,
     required this.price,
+    required this.recommended,
     required this.features,
   });
 
   final String tier;
   final String name;
   final String price;
+  final bool recommended;
   final List<String> features;
+}
+
+class _TrialStatusCard extends StatelessWidget {
+  const _TrialStatusCard({required this.entitlements});
+
+  final EntitlementsDto entitlements;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, headline, body) = _content;
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        MetaLabel(label),
+        Text(
+          headline,
+          style: DesignTokens.typographyCalloutStrong
+              .copyWith(color: DesignTokens.colorInk),
+        ),
+        Text(
+          body,
+          style: DesignTokens.typographyCallout
+              .copyWith(color: DesignTokens.colorInkSoft),
+        ),
+      ],
+    );
+  }
+
+  (String, String, String) get _content {
+    if (entitlements.isInTrial && entitlements.trialPremiumPodsRemaining > 0) {
+      return (
+        'Free trial',
+        '${entitlements.trialPremiumPodsRemaining} premium-voice pods left in your trial',
+        'After your trial, free users get 1 premium-voice pod/week for the first '
+            'month, then 1 default-voice pod/week.',
+      );
+    }
+    if (entitlements.isInFirstMonth) {
+      return (
+        'Free · First month',
+        '${entitlements.premiumPodsRemainingThisWeek} premium-voice pod left this week',
+        'After your first month, free users get 1 default-voice pod/week. '
+            'Upgrade to keep premium voices flowing.',
+      );
+    }
+    return (
+      'Free',
+      '1 default-voice pod/week',
+      'Upgrade for premium voices and more pods a week.',
+    );
+  }
 }
 
 class _PlanCard extends StatelessWidget {
@@ -98,57 +172,73 @@ class _PlanCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(DesignTokens.spacingM),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      borderColor:
+          plan.recommended ? DesignTokens.colorAmber : DesignTokens.colorRule,
+      borderWidth: plan.recommended ? 1.5 : 0.5,
+      children: [
+        Row(
           children: [
-            Row(
-              children: [
-                Expanded(child: Text(plan.name, style: text.titleLarge)),
-                Text(plan.price, style: text.labelLarge),
-              ],
+            Text(
+              plan.name,
+              style: DesignTokens.typographyTitle
+                  .copyWith(color: DesignTokens.colorInk),
             ),
-            const SizedBox(height: DesignTokens.spacingS),
-            for (final f in plan.features)
-              Padding(
-                padding: const EdgeInsets.only(bottom: DesignTokens.spacingXs),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(Icons.check, size: 16,
-                        color: DesignTokens.colorAmber),
-                    const SizedBox(width: DesignTokens.spacingS),
-                    Expanded(child: Text(f, style: text.bodyMedium)),
-                  ],
+            if (plan.recommended) ...[
+              const SizedBox(width: DesignTokens.spacingS),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: DesignTokens.colorAmber,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  'Popular',
+                  style: DesignTokens.typographyMeta.copyWith(color: Colors.white),
                 ),
               ),
-            const SizedBox(height: DesignTokens.spacingS),
-            SizedBox(
-              width: double.infinity,
-              child: current
-                  ? OutlinedButton(
-                      onPressed: null,
-                      child: const Text('Current plan'),
-                    )
-                  : ElevatedButton(
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Purchases arrive with RevenueCat — coming soon.',
-                            ),
-                          ),
-                        );
-                      },
-                      child: Text('Choose ${plan.name}'),
-                    ),
+            ],
+            const Spacer(),
+            Text(
+              plan.price,
+              style: DesignTokens.typographyCallout
+                  .copyWith(color: DesignTokens.colorMuted),
             ),
           ],
         ),
-      ),
+        for (final f in plan.features)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.check,
+                    size: 16, color: DesignTokens.colorAmber),
+                const SizedBox(width: DesignTokens.spacingS),
+                Expanded(
+                  child: Text(
+                    f,
+                    style: DesignTokens.typographyBody
+                        .copyWith(color: DesignTokens.colorInk),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: DesignTokens.spacingXs),
+        current
+            ? const AmberButton.outlined(label: 'Current plan')
+            : AmberButton.filled(
+                label: 'Choose ${plan.name}',
+                onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content:
+                        Text('Purchases arrive with RevenueCat — coming soon.'),
+                  ),
+                ),
+              ),
+      ],
     );
   }
 }
