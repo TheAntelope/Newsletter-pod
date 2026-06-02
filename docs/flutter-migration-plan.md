@@ -295,3 +295,14 @@ _(Update as work proceeds.)_
   - **Still deferred (unchanged):** audio preview, speech-to-text dictation, AccountSheet +
     FeedAccessView, and the account-gated wiring (Firebase auth / RevenueCat / FCM / Play CI),
     which is the remaining Phase 2 work and needs the user's external accounts.
+- 2026-06-02 — **Phase 2 UI parity — depth pass (24 tests green).** Closed the remaining
+  Swift-only surface that didn't need accounts: surfaced 8 more repository methods
+  (updateProfile/reset/delete/fetchFeed/fetchCatalog/fetchInboundItems/submitFeedback/
+  deleteSubstackIntent); PodcastSetup full config (format/tone/humor/key-takeaways/toggles/
+  guidance presets/weather); built **AccountSheet** (home gear) + **FeedAccessView**; richer
+  onboarding (show-format step + anchor/co-host voice roles, 9 steps); home depth
+  (about/sources-summary cards, collapsible hero description + transcript, FeedbackComposer);
+  Sources depth (topic-grouped catalog + custom RSS + recent newsletters). Committed per-unit.
+  **Now genuinely deferred:** audio preview (`just_audio`), STT dictation, the embedded
+  onboarding swipe step, the Apple-Podcasts deep link (Android pastes URL), and the
+  account-gated wiring (Firebase/RevenueCat/FCM/Play CI) — the real remaining Phase 2 work.

@@ -25,12 +25,34 @@ and **every screen below has been rebuilt on top of it.** `flutter analyze` is c
   AppBar/NavigationBar/input chrome.
 - **Repository:** added `replaceSources` (interface + Fake + Api → `PUT /v1/me/sources`) so
   the Sources toggles persist.
-- **Still deferred** (unchanged): audio preview (`just_audio`), speech-to-text dictation,
-  `AccountSheet` + `FeedAccessView`, and all account-gated wiring (Firebase auth, RevenueCat,
-  FCM, Play CI). The cutoff-time control is shown **read-only** — the `/v1/me/schedule` PATCH
-  body (both clients) doesn't accept a cutoff.
 - **Test deltas:** the generate test now pumps fixed steps + tears down the tree (the live
   progress bar never settles); the swipe test asserts the depth-3 stack + icon action buttons.
+
+### Second pass — depth + the two missing screens (2026-06-02)
+
+The "free wins + repo-backed" gaps from the §"what else to port" review are now done too
+(24 tests green):
+
+- **Repository plumbing:** surfaced the endpoints the `ApiClient` already had but
+  `AppRepository` didn't (`updateProfile`, `resetAlgorithm`, `deleteAccount`, `fetchFeed`,
+  `fetchCatalog`, `fetchInboundItems`, `submitFeedback`, `deleteSubstackIntent`); Fake gained
+  demo data for each + mutable profile name.
+- **PodcastSetup full config:** format picker, tone/humor pills, key-takeaways pills,
+  greet/takeaways toggles, custom-guidance presets + free text, weather city.
+- **AccountSheet** (home gear) + **FeedAccessView** (copyable private RSS URL + latest run),
+  with reset/delete confirmation dialogs and sign-out.
+- **Richer onboarding:** Show-format step + anchor/co-host voice roles (9 steps; the test now
+  loops Next→Finish instead of a fixed count).
+- **Home depth:** AboutPodcastCard, SourcesSummaryCard, FeedbackComposer, and a collapsible
+  hero description + Show-transcript disclosure.
+- **Sources depth:** catalog grouped by topic (collapsible, per-source toggles + N-of-M),
+  Custom RSS add/remove, Recent Newsletters list.
+
+**Still deferred (genuinely platform-/account-gated):** audio preview (`just_audio` — voice
+samples + episode playback), speech-to-text dictation (`OnboardingVoiceIntakeStep` + the
+feedback mic), the "Open in Apple Podcasts" deep link (Android pastes the URL instead), the
+embedded onboarding swipe step, and the account-gated wiring (Firebase auth, RevenueCat, FCM,
+Play CI). Cutoff-time is shown **read-only** — the `/v1/me/schedule` PATCH body doesn't accept it.
 
 Original punch-list below is kept for reference.
 
