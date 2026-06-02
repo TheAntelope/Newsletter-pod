@@ -5,6 +5,7 @@ import '../design_tokens.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
 import '../widgets/generation_progress_bar.dart';
+import 'account_screen.dart';
 import 'next_episode_queue_screen.dart';
 import 'paywall_screen.dart';
 import 'podcast_setup_screen.dart';
@@ -86,9 +87,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.tune),
           ),
           IconButton(
-            tooltip: 'Sign out',
-            onPressed: app.signOut,
-            icon: const Icon(Icons.logout),
+            tooltip: 'Account',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const AccountScreen()),
+            ),
+            icon: const Icon(Icons.settings_outlined),
           ),
         ],
       ),

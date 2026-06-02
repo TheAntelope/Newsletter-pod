@@ -164,6 +164,20 @@ void main() {
     expect(find.text('Platformer'), findsOneWidget); // discovered candidate
   });
 
+  testWidgets('account opens and reaches feed access', (tester) async {
+    await _signIn(tester);
+
+    await tester.tap(find.byIcon(Icons.settings_outlined));
+    await tester.pumpAndSettle();
+    expect(find.text('Account'), findsOneWidget); // app bar
+    expect(find.text('Reset my algorithm'), findsOneWidget);
+
+    await tester.tap(find.text('Add your briefings to any podcast app'));
+    await tester.pumpAndSettle();
+    expect(find.text('Feed access'), findsOneWidget); // app bar
+    expect(find.textContaining('theclawcast.com/feeds'), findsOneWidget);
+  });
+
   testWidgets('paywall shows plans and stubs purchase', (tester) async {
     await _signIn(tester);
 
