@@ -65,22 +65,27 @@ Legend: **[you]** = console/account/portal work only you can do · **[code]** = 
 
 ## 3. FCM push (Android counterpart to the existing iOS APNs path)
 
-> Backend reality today: `DeviceTokenRecord` **already has a `platform` field** (defaults `"ios"`),
-> but `POST /v1/me/device-tokens` **hardcodes `platform="ios"`** and **validates an APNs hex token**,
-> and `push.py` is **APNs-only**. So FCM needs both a client and a backend branch.
+> **Status 2026-06-02 — code DONE, blocked on the service-account JSON + flip.**
+> `FcmSender` (HTTP v1) + `build_fcm_sender_from_settings` added to `push.py`;
+> `send_substack_verification_push` now fans out per token (iOS→APNs, Android→FCM);
+> `register_device_token` accepts `platform="android"` and preserves token case
+> (FCM tokens aren't hex); config gained `FCM_ENABLED` + `FCM_SERVICE_ACCOUNT_JSON`.
+> Flutter: `firebase_messaging` added, `POST_NOTIFICATIONS` in the manifest,
+> `MessagingController` + `AppState._registerForPush()` registers the FCM token
+> (`platform: android`) after a real sign-in. Backend + Flutter tests cover it.
 
-**[you] — Firebase / FCM**
-- [ ] In the same Firebase project, FCM is enabled by default — confirm the **Cloud Messaging API (V1)** is on.
-- [ ] Create/download a **service-account key** with FCM send permission for the backend (store in Cloud Run secrets).
+**[you] — Firebase / FCM (the only thing left)**
+- [ ] In Firebase, confirm **Cloud Messaging API (V1)** is on (it is by default).
+- [ ] **Generate the service-account private key** (Project Settings → Service accounts → Generate new private key) and hand it over. I'll then:
+  1. create Secret Manager secret `fcm-service-account` from the JSON,
+  2. add `FCM_SERVICE_ACCOUNT_JSON=fcm-service-account:latest` to `cloudbuild.yaml`'s `--update-secrets` and `FCM_ENABLED=true` to `--update-env-vars`,
+  3. set both on Cloud Run so push goes live.
 
-**[code] — Flutter + backend**
-- [ ] Add `firebase_messaging`; request the Android 13+ `POST_NOTIFICATIONS` runtime permission (reuse the just-in-time pre-prompt pattern already used on the Substack-add screen).
-- [ ] On token grant, call `POST /v1/me/device-tokens` with **`platform: "android"`**.
-- [ ] Backend: relax `register_device_token` to accept `platform="android"` and **skip the APNs-hex validation** for Android tokens (FCM tokens aren't 64-char hex).
-- [ ] Backend: add an **FCM sender branch** in `push.py` (V1 HTTP API w/ the service account) and route Android tokens to it; keep APNs for iOS. The verification-code push + any future pushes should fan out per-platform.
-- [ ] Mirror APNs's 410/`Unregistered` cleanup: FCM's `UNREGISTERED`/`INVALID_ARGUMENT` → mark token inactive.
+> ⚠️ Don't add the `fcm-service-account` secret binding to `cloudbuild.yaml` *before* the secret exists — a deploy would fail on the missing binding (same rule as the APNs/X secrets noted in that file).
 
-**Acceptance:** Substack-verification-code push (the existing trigger) arrives on an Android device.
+**[code] — DONE** (per the status block above). The FCM sender no-ops until `FCM_ENABLED=true` + the JSON are set, so this shipped safely ahead of the key.
+
+**Acceptance:** with the key set + `FCM_ENABLED=true`, a Substack-verification-code push arrives on an Android device.
 
 ---
 

@@ -2831,3 +2831,57 @@ def test_delete_me_anonymizes_billing_events():
     # The billing row survives but is no longer linked to the user.
     assert repo._billing_events["evt-1"].user_id is None
     assert repo._billing_events["evt-1"].notification_type == "SUBSCRIBED"
+
+
+# ---------- device-token registration (APNs + FCM) ----------
+
+
+def test_register_device_token_android_preserves_case_and_platform():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("android-push-user", "ap@example.com")
+    )
+
+    fcm_token = "MixedCaseFCMToken" + "Zz9" * 20  # case-sensitive, >32 chars
+    resp = client.post(
+        "/v1/me/device-tokens",
+        headers=headers,
+        json={"token": fcm_token, "platform": "android"},
+    )
+    assert resp.status_code == 201
+    record = container.control_repository.get_device_token(resp.json()["token_id"])
+    assert record is not None
+    assert record.platform == "android"
+    # FCM tokens are case-sensitive — registration must NOT lowercase them.
+    assert record.token == fcm_token
+
+
+def test_register_device_token_ios_lowercases_hex():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("ios-push-user", "ip@example.com")
+    )
+
+    apns_token = "ABCDEF0123" * 7  # hex-ish, 70 chars
+    resp = client.post(
+        "/v1/me/device-tokens",
+        headers=headers,
+        json={"token": apns_token, "platform": "ios"},
+    )
+    assert resp.status_code == 201
+    record = container.control_repository.get_device_token(resp.json()["token_id"])
+    assert record.platform == "ios"
+    assert record.token == apns_token.lower()
+
+
+def test_register_device_token_rejects_unknown_platform():
+    _, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("bad-plat-user", "bp@example.com")
+    )
+    resp = client.post(
+        "/v1/me/device-tokens",
+        headers=headers,
+        json={"token": "x" * 64, "platform": "windows"},
+    )
+    assert resp.status_code == 400

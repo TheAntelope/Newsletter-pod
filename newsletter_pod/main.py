@@ -74,7 +74,12 @@ from .legal import PRIVACY_HTML, TERMS_HTML
 from .mailer import NoopMailer, SMTPMailer
 from .models import SourceItem
 from .podcast_api import PodcastApiClient, PodcastApiUnavailable
-from .push import PushSender, build_push_sender_from_settings
+from .push import (
+    FcmSender,
+    PushSender,
+    build_fcm_sender_from_settings,
+    build_push_sender_from_settings,
+)
 from .shared_items import MAX_UPLOAD_BYTES as SHARED_MAX_UPLOAD_BYTES, SUPPORTED_KINDS as SHARED_SUPPORTED_KINDS
 from .storage import AudioStorage, GCSAudioStorage, InMemoryAudioStorage
 from .user_models import DeviceTokenRecord
@@ -206,6 +211,7 @@ class RegisterDeviceTokenRequest(BaseModel):
     token: str
     environment: Optional[str] = "production"
     bundle_id: Optional[str] = None
+    platform: Optional[str] = "ios"  # "ios" (APNs) | "android" (FCM)
 
 
 class BroadcastGenerateOnceRequest(BaseModel):
@@ -266,6 +272,9 @@ class ServiceContainer:
     # built once per process so the JWT cache + HTTP/2 client are reused
     # across every push attempt.
     push_sender: PushSender | None = None
+    # FCM sender (Android). Built once so the OAuth token + HTTP client are
+    # reused; None when FCM isn't configured.
+    fcm_sender: FcmSender | None = None
     # Shared OpenAI/ElevenLabs client. Reused by both the per-user generation
     # path (via control_plane) and the broadcast loop, so we configure it
     # once and pass the same instance to both.
@@ -1070,11 +1079,21 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
     ) -> dict:
         user = _require_session_user(container, authorization)
         assert container.control_repository is not None
-        token = (request_payload.token or "").strip().lower()
+        platform = (request_payload.platform or "ios").strip().lower()
+        if platform not in {"ios", "android"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="platform must be 'ios' or 'android'",
+            )
+        # APNs tokens are hex (case-insensitive) — normalize to lowercase for a
+        # stable idempotency key. FCM tokens are case-sensitive, so preserve
+        # case for android.
+        raw_token = (request_payload.token or "").strip()
+        token = raw_token.lower() if platform == "ios" else raw_token
         if not token or len(token) < 32:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid APNs device token",
+                detail="Invalid device token",
             )
         environment = (request_payload.environment or "production").strip().lower()
         if environment not in {"production", "sandbox"}:
@@ -1106,7 +1125,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             id=token_id,
             user_id=user.id,
             token=token,
-            platform="ios",
+            platform=platform,
             environment=environment,
             bundle_id=bundle_id,
             created_at=now,
@@ -1526,6 +1545,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             mailgun_signing_key=container.settings.mailgun_webhook_signing_key,
             embeddings=_build_embedding_provider(container.settings),
             push_sender=container.push_sender,
+            fcm_sender=container.fcm_sender,
         )
         try:
             return handler.handle(payload)
@@ -1699,6 +1719,12 @@ def _build_container(settings: Settings) -> ServiceContainer:
         environment=settings.apns_environment,
     )
 
+    fcm_sender = build_fcm_sender_from_settings(
+        enabled=settings.fcm_enabled,
+        service_account_json=settings.fcm_service_account_json,
+        project_id=settings.firebase_project_id,
+    )
+
     x_client = XClient(
         api_key=settings.x_api_key,
         api_secret=settings.x_api_secret,
@@ -1717,6 +1743,7 @@ def _build_container(settings: Settings) -> ServiceContainer:
         control_repository=control_repository,
         control_plane=control_plane,
         push_sender=push_sender,
+        fcm_sender=fcm_sender,
         podcast_client=podcast_client,
         x_client=x_client,
         broadcast_repository=broadcast_repository,

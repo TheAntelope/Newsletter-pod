@@ -10,7 +10,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from newsletter_pod.push import (
+    FcmSender,
     PushSender,
+    build_fcm_sender_from_settings,
     build_push_sender_from_settings,
     build_substack_verification_payload,
     send_substack_verification_push,
@@ -283,3 +285,177 @@ def test_build_push_sender_enabled_when_fully_configured():
     )
     assert sender is not None
     assert sender.host == "https://api.sandbox.push.apple.com"
+
+
+# ========================= FCM (Android) =========================
+
+
+def _make_fcm_sender(client: _StubClient, token: str = "ya29.test-access-token") -> FcmSender:
+    sender = FcmSender(
+        project_id="theclawcast-9a045",
+        service_account_info={"type": "service_account"},
+        # Bypass google-auth in tests — no real credentials needed.
+        access_token_provider=lambda: token,
+    )
+    sender._http_client = client  # type: ignore[assignment]
+    return sender
+
+
+def _make_android_device_token(user_id: str, token: str) -> DeviceTokenRecord:
+    now = datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc)
+    return DeviceTokenRecord(
+        id=f"id-{token[:8]}",
+        user_id=user_id,
+        token=token,
+        platform="android",
+        environment="production",
+        bundle_id="com.newsletterpod.app",
+        created_at=now,
+        last_seen_at=now,
+    )
+
+
+# ---------- FcmSender.send ----------
+
+
+def test_fcm_sender_send_200_targets_v1_endpoint_with_bearer():
+    client = _StubClient([_StubResponse(200, {"name": "projects/x/messages/1"})])
+    sender = _make_fcm_sender(client, token="ya29.abc")
+    result = sender.send(
+        device_token="d" * 64,
+        notification={"title": "t", "body": "b"},
+        data={"code": "812807"},
+        collapse_key="substack-verify-abcdef12",
+    )
+    assert result.status_code == 200
+    assert result.token_invalid is False
+
+    call = client.calls[0]
+    assert call["url"] == (
+        "https://fcm.googleapis.com/v1/projects/theclawcast-9a045/messages:send"
+    )
+    assert call["headers"]["Authorization"] == "Bearer ya29.abc"
+    message = call["json"]["message"]
+    assert message["token"] == "d" * 64
+    assert message["notification"] == {"title": "t", "body": "b"}
+    assert message["data"]["code"] == "812807"  # values stringified
+    assert message["android"]["priority"] == "high"
+    assert message["android"]["collapse_key"] == "substack-verify-abcdef12"
+
+
+def test_fcm_sender_send_404_unregistered_marks_invalid():
+    client = _StubClient(
+        [_StubResponse(404, {"error": {"status": "NOT_FOUND", "details": [{"errorCode": "UNREGISTERED"}]}})]
+    )
+    sender = _make_fcm_sender(client)
+    result = sender.send(device_token="x" * 64, notification={"title": "t", "body": "b"})
+    assert result.status_code == 404
+    assert result.token_invalid is True
+
+
+def test_fcm_sender_send_invalid_argument_not_marked_invalid():
+    # INVALID_ARGUMENT can mean a malformed message (our bug), not a dead token,
+    # so we must NOT deregister on it.
+    client = _StubClient(
+        [_StubResponse(400, {"error": {"status": "INVALID_ARGUMENT", "details": [{"errorCode": "INVALID_ARGUMENT"}]}})]
+    )
+    sender = _make_fcm_sender(client)
+    result = sender.send(device_token="x" * 64, notification={"title": "t", "body": "b"})
+    assert result.status_code == 400
+    assert result.token_invalid is False
+
+
+# ---------- factory ----------
+
+
+def test_build_fcm_sender_disabled_when_flag_off():
+    assert build_fcm_sender_from_settings(
+        enabled=False, service_account_json='{"type":"service_account"}', project_id="p"
+    ) is None
+
+
+def test_build_fcm_sender_disabled_when_json_missing():
+    assert build_fcm_sender_from_settings(
+        enabled=True, service_account_json=None, project_id="p"
+    ) is None
+
+
+def test_build_fcm_sender_disabled_when_json_invalid():
+    assert build_fcm_sender_from_settings(
+        enabled=True, service_account_json="definitely not json", project_id="p"
+    ) is None
+
+
+def test_build_fcm_sender_enabled_when_configured():
+    sender = build_fcm_sender_from_settings(
+        enabled=True,
+        service_account_json='{"type":"service_account","project_id":"p"}',
+        project_id="theclawcast-9a045",
+    )
+    assert sender is not None
+    assert sender.project_id == "theclawcast-9a045"
+
+
+# ---------- routing in send_substack_verification_push ----------
+
+
+def test_send_substack_push_routes_android_to_fcm_and_ios_to_apns():
+    repo = InMemoryControlPlaneRepository()
+    repo.save_device_token(_make_device_token("u1", "a" * 64))  # ios → APNs
+    repo.save_device_token(
+        _make_android_device_token("u1", "AndroidToken" + "z" * 40)
+    )  # android → FCM
+
+    apns_client = _StubClient([_StubResponse(200)])
+    fcm_client = _StubClient([_StubResponse(200, {"name": "ok"})])
+    result = send_substack_verification_push(
+        sender=_make_sender(apns_client),
+        fcm_sender=_make_fcm_sender(fcm_client),
+        repository=repo,
+        user_id="u1",
+        code="812807",
+        pub_title="Noahpinion",
+        pub_url="https://noahpinion.substack.com",
+    )
+    assert result == {"attempted": 2, "delivered": 2, "deregistered": 0}
+    # Each sender got exactly one call → routed by platform (a misroute would
+    # pop an empty stub queue and raise).
+    assert len(apns_client.calls) == 1
+    assert len(fcm_client.calls) == 1
+    fcm_message = fcm_client.calls[0]["json"]["message"]
+    assert fcm_message["data"]["code"] == "812807"
+    assert fcm_message["data"]["pub_url"] == "https://noahpinion.substack.com"
+
+
+def test_send_substack_push_noops_when_both_senders_none():
+    repo = InMemoryControlPlaneRepository()
+    repo.save_device_token(_make_android_device_token("u1", "AndroidToken" + "z" * 40))
+    result = send_substack_verification_push(
+        sender=None,
+        fcm_sender=None,
+        repository=repo,
+        user_id="u1",
+        code="123456",
+        pub_title="Noahpinion",
+    )
+    assert result == {"attempted": 0, "delivered": 0, "deregistered": 0}
+
+
+def test_send_substack_push_skips_android_when_fcm_sender_none():
+    repo = InMemoryControlPlaneRepository()
+    repo.save_device_token(_make_device_token("u1", "a" * 64))  # ios
+    repo.save_device_token(
+        _make_android_device_token("u1", "AndroidToken" + "z" * 40)
+    )  # android, no FCM sender → skipped
+
+    apns_client = _StubClient([_StubResponse(200)])
+    result = send_substack_verification_push(
+        sender=_make_sender(apns_client),
+        fcm_sender=None,
+        repository=repo,
+        user_id="u1",
+        code="812807",
+        pub_title="Noahpinion",
+    )
+    assert result == {"attempted": 1, "delivered": 1, "deregistered": 0}
+    assert len(apns_client.calls) == 1

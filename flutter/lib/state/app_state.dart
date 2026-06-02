@@ -8,6 +8,7 @@ import '../config.dart';
 import '../data/api_app_repository.dart';
 import '../data/app_repository.dart';
 import '../services/auth_controller.dart';
+import '../services/messaging_controller.dart';
 
 /// Single observable app-state store (the Flutter analogue of iOS AppViewModel).
 /// Holds session + the `/v1/me` snapshot and drives the screens via [AppScope].
@@ -87,6 +88,31 @@ class AppState extends ChangeNotifier {
     _onboardingComplete = !session.isNewUser;
     notifyListeners();
     await loadMe();
+    // Best-effort: register this device for FCM push. Fire-and-forget so a
+    // denied permission or messaging hiccup never blocks the signed-in UI.
+    unawaited(_registerForPush());
+  }
+
+  /// Requests notification permission and registers the FCM token with the
+  /// backend (platform=android). No-ops without a live ApiClient/session, and
+  /// never throws into the sign-in flow.
+  Future<void> _registerForPush() async {
+    final client = _apiClient;
+    final session = _sessionToken;
+    if (client == null || session == null) return;
+    try {
+      final fcmToken = await MessagingController().requestPermissionAndToken();
+      if (fcmToken == null || fcmToken.isEmpty) return;
+      await client.registerDeviceToken(
+        session,
+        deviceToken: fcmToken,
+        environment: 'production',
+        bundleId: 'com.newsletterpod.app',
+        platform: 'android',
+      );
+    } catch (_) {
+      // Push registration is best-effort; ignore failures.
+    }
   }
 
   void completeOnboarding() {

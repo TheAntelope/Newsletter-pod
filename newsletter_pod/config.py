@@ -329,6 +329,16 @@ class Settings(BaseSettings):
     apns_bundle_id: str = Field(default="com.newsletterpod.app", alias="APNS_BUNDLE_ID")
     apns_environment: str = Field(default="production", alias="APNS_ENVIRONMENT")
 
+    # FCM (Firebase Cloud Messaging) — the Android counterpart to APNs. Sends
+    # via the HTTP v1 API authenticated with a Firebase service-account JSON
+    # (FCM_SERVICE_ACCOUNT_JSON, a Secret Manager secret). project_id is reused
+    # from firebase_project_id. When fcm_enabled is False (or the JSON is
+    # unset), the FCM sender no-ops with a single info-log per call.
+    fcm_enabled: bool = Field(default=False, alias="FCM_ENABLED")
+    fcm_service_account_json: Optional[str] = Field(
+        default=None, alias="FCM_SERVICE_ACCOUNT_JSON"
+    )
+
     # Welcome episode: pre-recorded MP3 seeded into every new user's feed at signup.
     # Set object_name + size + duration to enable; leave object_name empty to disable.
     welcome_episode_object_name: Optional[str] = Field(default=None, alias="WELCOME_EPISODE_OBJECT_NAME")
@@ -376,6 +386,11 @@ class Settings(BaseSettings):
         )
         settings.apns_key_id = _normalize_secret_value(
             _resolve_secret_reference(settings.apns_key_id)
+        )
+        # FCM service-account JSON is multiline; _normalize_secret_value keeps
+        # internal newlines (json.loads is whitespace-tolerant either way).
+        settings.fcm_service_account_json = _normalize_secret_value(
+            _resolve_secret_reference(settings.fcm_service_account_json)
         )
         settings.session_signing_secret = _normalize_secret_value(
             _resolve_secret_reference(settings.session_signing_secret)
