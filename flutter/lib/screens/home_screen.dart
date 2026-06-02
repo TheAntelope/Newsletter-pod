@@ -9,6 +9,7 @@ import 'account_screen.dart';
 import 'next_episode_queue_screen.dart';
 import 'paywall_screen.dart';
 import 'podcast_setup_screen.dart';
+import 'sources_screen.dart';
 
 /// The Today / "Your Briefing" dashboard. Editorial rebuild mirroring the iOS
 /// `HomeView`: greeting, a generation banner with progress while a run is
@@ -168,6 +169,13 @@ class _Dashboard extends StatelessWidget {
           _NextEpisodeQueueCard(pinnedCount: pinnedCount),
         ],
         const SizedBox(height: DesignTokens.spacingL),
+        _AboutPodcastCard(profile: me.profile),
+        const SizedBox(height: DesignTokens.spacingL),
+        _SourcesSummaryCard(
+          enabledCount: enabledSourceCount,
+          known: sourcesKnown,
+        ),
+        const SizedBox(height: DesignTokens.spacingL),
         _SetupChecklistCard(
           hasSources: !sourcesKnown || enabledSourceCount > 0,
           hasShow: me.profile.title.isNotEmpty,
@@ -189,6 +197,8 @@ class _Dashboard extends StatelessWidget {
                 .copyWith(color: DesignTokens.colorAmberDeep),
           ),
         ],
+        const SizedBox(height: DesignTokens.spacingL),
+        const _FeedbackComposer(),
       ],
     );
   }
@@ -265,20 +275,31 @@ class _GenerationBanner extends StatelessWidget {
   }
 }
 
-class _HeroEpisodeCard extends StatelessWidget {
+class _HeroEpisodeCard extends StatefulWidget {
   const _HeroEpisodeCard({required this.episode, required this.isGenerating});
 
   final LibraryEpisodeDto? episode;
   final bool isGenerating;
 
   @override
+  State<_HeroEpisodeCard> createState() => _HeroEpisodeCardState();
+}
+
+class _HeroEpisodeCardState extends State<_HeroEpisodeCard> {
+  bool _descExpanded = false;
+  bool _transcriptExpanded = false;
+
+  @override
   Widget build(BuildContext context) {
-    final ep = episode;
+    final ep = widget.episode;
     final badge = ep != null
         ? 'Latest episode'
-        : (isGenerating ? 'Generating now' : 'Coming soon');
+        : (widget.isGenerating ? 'Generating now' : 'Coming soon');
     final title = ep?.title ??
-        (isGenerating ? 'Cooking up your first briefing…' : 'No episode yet');
+        (widget.isGenerating
+            ? 'Cooking up your first briefing…'
+            : 'No episode yet');
+    final transcript = ep?.transcriptText;
 
     return EditorialCard(
       children: [
@@ -290,9 +311,18 @@ class _HeroEpisodeCard extends StatelessWidget {
         if (ep != null) ...[
           Text(
             ep.description,
+            maxLines: _descExpanded ? null : 3,
+            overflow: _descExpanded ? null : TextOverflow.ellipsis,
             style: DesignTokens.typographyBody
                 .copyWith(color: DesignTokens.colorInkSoft),
           ),
+          if (ep.description.length > 140)
+            _Disclosure(
+              expanded: _descExpanded,
+              labelCollapsed: 'Show more',
+              labelExpanded: 'Show less',
+              onTap: () => setState(() => _descExpanded = !_descExpanded),
+            ),
           Wrap(
             spacing: DesignTokens.spacingM,
             runSpacing: DesignTokens.spacingXs,
@@ -312,9 +342,25 @@ class _HeroEpisodeCard extends StatelessWidget {
               ),
             ],
           ),
+          if (transcript != null && transcript.isNotEmpty) ...[
+            const EditorialDivider(),
+            _Disclosure(
+              expanded: _transcriptExpanded,
+              labelCollapsed: 'Show transcript',
+              labelExpanded: 'Hide transcript',
+              onTap: () =>
+                  setState(() => _transcriptExpanded = !_transcriptExpanded),
+            ),
+            if (_transcriptExpanded)
+              Text(
+                transcript,
+                style: DesignTokens.typographyCallout
+                    .copyWith(color: DesignTokens.colorInkSoft, height: 1.5),
+              ),
+          ],
         ] else
           Text(
-            isGenerating
+            widget.isGenerating
                 ? 'Your episode is on its way — it will appear here and in your '
                     'feed when ready.'
                 : 'Tap Generate below to make your first episode now, or wait '
@@ -337,6 +383,183 @@ class _HeroEpisodeCard extends StatelessWidget {
                     ),
                   ),
         ),
+      ],
+    );
+  }
+}
+
+class _Disclosure extends StatelessWidget {
+  const _Disclosure({
+    required this.expanded,
+    required this.labelCollapsed,
+    required this.labelExpanded,
+    required this.onTap,
+  });
+
+  final bool expanded;
+  final String labelCollapsed;
+  final String labelExpanded;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            expanded ? labelExpanded : labelCollapsed,
+            style: DesignTokens.typographyCalloutStrong
+                .copyWith(color: DesignTokens.colorAmberDeep),
+          ),
+          Icon(expanded ? Icons.expand_less : Icons.expand_more,
+              size: 18, color: DesignTokens.colorAmberDeep),
+        ],
+      ),
+    );
+  }
+}
+
+class _AboutPodcastCard extends StatelessWidget {
+  const _AboutPodcastCard({required this.profile});
+
+  final PodcastProfileDto profile;
+
+  String get _format => switch (profile.formatPreset) {
+        'solo_host' => 'Solo host',
+        'rotating_guest' => 'Rotating guest',
+        _ => 'Two hosts',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final hosts = [
+      profile.hostPrimaryName,
+      if ((profile.hostSecondaryName ?? '').isNotEmpty) profile.hostSecondaryName!,
+    ].join(' & ');
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        const MetaLabel('Your show'),
+        Text(
+          profile.title,
+          style: DesignTokens.typographyTitle.copyWith(color: DesignTokens.colorInk),
+        ),
+        Text(
+          '$_format · ${profile.desiredDurationMinutes} min'
+          '${hosts.isEmpty ? '' : ' · $hosts'}',
+          style: DesignTokens.typographyBody.copyWith(color: DesignTokens.colorInkSoft),
+        ),
+      ],
+    );
+  }
+}
+
+class _SourcesSummaryCard extends StatelessWidget {
+  const _SourcesSummaryCard({required this.enabledCount, required this.known});
+
+  final int enabledCount;
+  final bool known;
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const SourcesScreen()),
+      ),
+      children: [
+        Row(
+          children: [
+            const Expanded(child: MetaLabel('Sources')),
+            const Icon(Icons.chevron_right,
+                size: 18, color: DesignTokens.colorMuted),
+          ],
+        ),
+        Text(
+          known ? '$enabledCount active' : 'Manage your sources',
+          style: DesignTokens.typographySubtitle.copyWith(color: DesignTokens.colorInk),
+        ),
+        Text(
+          'Pick the newsletters and feeds your briefing is built from.',
+          style: DesignTokens.typographyCallout
+              .copyWith(color: DesignTokens.colorInkSoft),
+        ),
+      ],
+    );
+  }
+}
+
+class _FeedbackComposer extends StatefulWidget {
+  const _FeedbackComposer();
+
+  @override
+  State<_FeedbackComposer> createState() => _FeedbackComposerState();
+}
+
+class _FeedbackComposerState extends State<_FeedbackComposer> {
+  final _controller = TextEditingController();
+  bool _submitting = false;
+  bool _sent = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    setState(() => _submitting = true);
+    try {
+      await AppScope.of(context).repository.submitFeedback(
+            text: text,
+            source: 'text',
+          );
+      if (!mounted) return;
+      setState(() {
+        _sent = true;
+        _controller.clear();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      children: [
+        const MetaLabel('Send feedback'),
+        if (_sent)
+          Text(
+            'Thanks — we read every note.',
+            style: DesignTokens.typographyBody
+                .copyWith(color: DesignTokens.colorInkSoft),
+          )
+        else ...[
+          TextField(
+            controller: _controller,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              hintText: "What's working, what's not, what would you change?",
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: AmberButton.filled(
+              label: 'Submit',
+              expand: false,
+              loading: _submitting,
+              onPressed: _submitting ? null : _submit,
+            ),
+          ),
+        ],
       ],
     );
   }

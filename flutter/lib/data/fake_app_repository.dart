@@ -266,6 +266,15 @@ class FakeAppRepository implements AppRepository {
               link: 'https://platformer.news/x',
             ),
           ],
+          transcriptText: 'Good morning. Today: AI agents are quietly rewiring '
+              'how software gets distributed, the chip race adds another '
+              'contender, and fintech takes a breather.\n\n'
+              'First up — the agentic web. The argument is that once agents '
+              'mediate what we read and buy, the aggregators that won the last '
+              'era have to fight for a very different kind of attention.\n\n'
+              'Over in trust & safety, a major platform reorganized its team '
+              'after a rough quarter. We unpack what changed and why it matters '
+              'for everyone shipping moderation at scale.',
         ),
         LibraryEpisodeDto(
           id: 'e2',
