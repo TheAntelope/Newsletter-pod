@@ -67,3 +67,26 @@ The Swift app has a bespoke component set ([Theme.swift](../ios/NewsletterPodApp
 Then the account-dependent Phase 2 finish (see migration plan): Firebase Auth + Google Sign-In
 (swap the stub → `signInWithFirebase` + `ApiAppRepository`), RevenueCat billing + backend
 webhook, FCM push + backend branch, and the path-filtered Codemagic → Play Store workflow.
+
+## Kickoff prompt (paste into a new session)
+
+> Resuming the ClawCast Flutter migration (Phase 2). The Flutter Android app is functionally
+> complete on branch `feature/phase2-flutter-android` (10 screens, 22 tests green, pushed) but
+> the screens are simplified rebuilds. This session: bring them to visual + interaction parity
+> with the SwiftUI app.
+>
+> Read `docs/flutter-ui-parity.md` (the punch-list) first, then the Phase 2 section of
+> `docs/flutter-migration-plan.md`, and skim `ios/NewsletterPodApp/Screens.swift` +
+> `Theme.swift` for the editorial components to port.
+>
+> Toolchain: Flutter 3.44 at `C:\flutter` (not on PATH). From `flutter/`:
+> `C:\flutter\bin\flutter.bat run -d chrome` (hot-reload loop), `... test` (the 22 tests),
+> `C:\flutter\bin\dart.bat run build_runner build` (after DTO changes). No Android emulator
+> installed — web/desktop is the loop.
+>
+> Plan: first build an editorial component library under `flutter/lib/widgets/` (EditorialCard,
+> MetaLabel, EditorialDivider, GenerationProgressBar, HeroEpisodeCard, VoiceChoiceCard,
+> OnboardingProgressDots, …), then rebuild the screens on top of it one at a time, keeping
+> `flutter analyze` clean and widget tests green, committing per screen. Stay on the existing
+> `feature/phase2-flutter-android` branch. Do NOT touch the uncommitted WIP
+> (`AppViewModel.swift`, `scripts/looker/build_dashboard.py`).
