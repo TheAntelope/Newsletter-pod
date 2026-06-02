@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "650971509352",
+    "project_id": "theclawcast-9a045",
+    "storage_bucket": "theclawcast-9a045.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:650971509352:android:c89f41b0492784afa2c1dd",
+        "android_client_info": {
+          "package_name": "com.newsletterpod.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "650971509352-8l5ikpgapq974r7pgv4r3566jm9p633g.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.newsletterpod.app",
+            "certificate_hash": "6e8d6b381ea0b8b883858ed2bf56d46dee8fd03f"
+          }
+        },
+        {
+          "client_id": "650971509352-gjk0vjlo6e24slghbkpp53il7vbo30ra.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAVM7c2GunAgPjBbtmWZdgpQTXnGHSRFFs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "650971509352-gjk0vjlo6e24slghbkpp53il7vbo30ra.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

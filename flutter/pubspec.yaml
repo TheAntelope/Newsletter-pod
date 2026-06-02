@@ -43,6 +43,12 @@ dependencies:
   just_audio: ^0.10.5
   speech_to_text: ^7.4.0
   url_launcher: ^6.3.2
+  # Firebase Auth + Google Sign-In for the real (account-gated) sign-in path.
+  # Only exercised when --dart-define=ENABLE_GOOGLE_SIGN_IN=true; the default
+  # (demo) build never initializes Firebase, so widget tests stay channel-free.
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  google_sign_in: ^6.2.1
 
 dev_dependencies:
   flutter_test:

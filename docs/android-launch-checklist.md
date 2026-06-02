@@ -15,6 +15,17 @@ Legend: **[you]** = console/account/portal work only you can do · **[code]** = 
 
 ## 1. Firebase project + Google Sign-In (do this first — everything else hangs off the Firebase project)
 
+> **Status 2026-06-02 — largely DONE.** Firebase project `theclawcast-9a045` created;
+> Android app registered (`com.newsletterpod.app`); debug SHA-1 generated + registered (Google
+> Sign-In OAuth clients present); `google-services.json` committed at `flutter/android/app/`.
+> Backend was already built (`FirebaseIdentityVerifier` + `/v1/auth/firebase`) — and
+> **`FIREBASE_PROJECT_ID=theclawcast-9a045` is now set on Cloud Run** (rev 00198) + pinned in
+> `cloudbuild.yaml`. Flutter client wired behind `--dart-define=ENABLE_GOOGLE_SIGN_IN=true`
+> (default off): `AuthController` (Google→Firebase→ID token) → `signInWithFirebaseToken` →
+> swap to `ApiAppRepository`. **Remaining:** add the **release/upload-key SHA-1** when Play
+> signing is set up (§4); first **real on-device sign-in** test needs an APK/device (see below);
+> iOS Firebase config deferred (Android-first).
+
 **[you] — Firebase / Google Cloud console**
 - [ ] Create (or reuse) a Firebase project and **add an Android app** with package name `com.newsletterpod.app`.
 - [ ] Add your debug + release **SHA-1 and SHA-256** fingerprints (required for Google Sign-In). Debug: from the `~/.android/debug.keystore`; release: from your upload keystore (see §4).

@@ -2,6 +2,9 @@ plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+    // Firebase: applied after the Android + Flutter plugins. Processes
+    // app/google-services.json so Firebase.initializeApp() needs no options.
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -19,7 +22,9 @@ android {
         applicationId = "com.newsletterpod.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Firebase Auth requires API 23+. maxOf avoids downgrading if Flutter's
+        // default is already higher.
+        minSdk = maxOf(23, flutter.minSdkVersion)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

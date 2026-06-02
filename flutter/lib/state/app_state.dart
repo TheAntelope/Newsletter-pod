@@ -1,14 +1,32 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 
+import '../api/api_client.dart';
 import '../api/models.dart';
+import '../config.dart';
+import '../data/api_app_repository.dart';
 import '../data/app_repository.dart';
+import '../services/auth_controller.dart';
 
 /// Single observable app-state store (the Flutter analogue of iOS AppViewModel).
 /// Holds session + the `/v1/me` snapshot and drives the screens via [AppScope].
 class AppState extends ChangeNotifier {
-  AppState(this._repository);
+  // A private field can't be a named initializing formal (`this._apiClient`),
+  // so it's assigned in the initializer list instead.
+  // ignore: prefer_initializing_formals
+  AppState(this._repository, {ApiClient? apiClient}) : _apiClient = apiClient;
 
-  final AppRepository _repository;
+  /// Swapped from the demo [FakeAppRepository] to a live [ApiAppRepository] by
+  /// [applySession] once a real sign-in returns a session token.
+  AppRepository _repository;
+
+  /// Present only in the real-auth build (passed from `main`); used to build the
+  /// live repository on sign-in. Null in the demo build and widget tests.
+  final ApiClient? _apiClient;
+
+  String? _sessionToken;
+  String? get sessionToken => _sessionToken;
 
   /// Exposed so list screens can fetch their own data (sources, episodes, …)
   /// without funnelling every collection through this store.
@@ -39,12 +57,34 @@ class AppState extends ChangeNotifier {
   bool _generating = false;
   bool get isGenerating => _generating;
 
-  /// Stubbed sign-in. The real flow exchanges a Firebase ID token via
-  /// `ApiClient.signInWithFirebase` and swaps in an `ApiAppRepository`; for now
-  /// it flips signed-in and loads `me` from the injected (fake) repository.
+  /// Stubbed/demo sign-in (flag off): flips signed-in and loads `me` from the
+  /// injected fake repository, then runs the onboarding wizard. The real path
+  /// goes through [applySession] instead.
   Future<void> signIn() async {
     _signedIn = true;
     _onboardingComplete = false; // new sign-in runs the onboarding wizard
+    notifyListeners();
+    await loadMe();
+  }
+
+  /// Real sign-in: exchange a Firebase ID token for an app session via
+  /// [ApiClient.signInWithFirebase], swap the demo repository for the live
+  /// [ApiAppRepository] backed by the returned session token, route brand-new
+  /// users into onboarding (existing users skip straight to the dashboard), and
+  /// load `me`. Throws on a failed exchange so the caller can surface it.
+  Future<void> signInWithFirebaseToken(
+    String idToken, {
+    String? displayName,
+  }) async {
+    final client = _apiClient;
+    assert(client != null,
+        'signInWithFirebaseToken requires an ApiClient (real-auth build only)');
+    final session =
+        await client!.signInWithFirebase(idToken, givenName: displayName);
+    _repository = ApiAppRepository(client, session.sessionToken);
+    _sessionToken = session.sessionToken;
+    _signedIn = true;
+    _onboardingComplete = !session.isNewUser;
     notifyListeners();
     await loadMe();
   }
@@ -90,9 +130,18 @@ class AppState extends ChangeNotifier {
   }
 
   void signOut() {
+    // Real-auth build: also clear the Firebase + cached Google account so the
+    // next sign-in re-shows the picker (otherwise it silently reuses the
+    // signed-in account). Fire-and-forget — routing reacts to the state change
+    // below immediately. Skipped when the flag is off, so the demo build and
+    // widget tests never touch a platform channel.
+    if (FeatureFlags.googleSignIn) {
+      unawaited(AuthController().signOut());
+    }
     _signedIn = false;
     _onboardingComplete = false;
     _me = null;
+    _sessionToken = null;
     _lastRunMessage = null;
     _generating = false;
     _error = null;
