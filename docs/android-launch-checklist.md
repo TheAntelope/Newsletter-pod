@@ -104,17 +104,27 @@ Legend: **[you]** = console/account/portal work only you can do · **[code]** = 
 
 ## 4. Codemagic → Play Store CI/CD
 
-**[you] — keystore + Play + Codemagic**
-- [ ] Generate an **upload keystore**; add its SHA-1/256 to Firebase (§1). Store the keystore + passwords in **Codemagic → code signing (Android)**.
-- [ ] Play Console: create a **service account** (via Google Cloud), grant it release permissions, download JSON → add to Codemagic for **Google Play publishing**.
-- [ ] Do the **first upload manually** (Play requires an initial build before API publishing works) and create an **internal testing** track.
+> **Status 2026-06-02 — codemagic.yaml DONE, blocked on Codemagic/Play setup.**
+> Added the `android-playstore` workflow (`instance_type: linux_x2`, `flutter:
+> stable`): submodule + design-token refresh & staleness guard → writes
+> `key.properties` from the Codemagic keystore → versionCode = Play-latest+1
+> (falls back to the monotonic build counter) → `flutter build appbundle
+> --release --dart-define=ENABLE_GOOGLE_SIGN_IN=true` → publishes the `.aab` to
+> the **internal** track (`changes_not_sent_for_review: true`). Path-filtered
+> with `when.changeset.includes: [flutter/**, design-tokens/**]`; the iOS
+> workflow gained `when.changeset.excludes: [flutter/**]` so neither rebuilds on
+> the other's commits. `build.gradle.kts` now has a real release signingConfig
+> that reads `key.properties` (falls back to debug locally).
 
-**[code] — codemagic.yaml**
-- [ ] Add an **Android workflow** to `codemagic.yaml`: `flutter build appbundle --release`, sign with the keystore, publish the `.aab` to the **internal** track.
-- [ ] **Path-filter** it so Android builds trigger on `flutter/**` changes (don't rebuild iOS for Flutter-only commits and vice-versa).
-- [ ] Wire `--build-number`/`--build-name` from Codemagic build vars (Android `versionCode` must monotonically increase — same discipline as the iOS build-number pitfall).
+**[you] — Codemagic + keystore + Play (the remaining setup)**
+- [ ] Generate an **upload keystore** (`keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload`). Add its **SHA-1/256 to Firebase** (§1) so Google Sign-In works on the released build.
+- [ ] In Codemagic → **Teams → Code signing identities → Android keystores**, upload it with reference name **`clawcast_upload_keystore`** (+ store password, key alias, key password).
+- [ ] Google Cloud → create a **Play Developer API service account**, grant it release perms in Play Console; put its JSON in a Codemagic **variable group `google_play`** as **`GCLOUD_SERVICE_ACCOUNT_CREDENTIALS`** (mark secure). (Optional in that group: `REVENUECAT_ANDROID_KEY` + `ENABLE_PURCHASES_REVENUECAT=true` to ship billing.)
+- [ ] Play Console: create the app + do the **first `.aab` upload manually** (Play requires one manual upload before API publishing works), create the **internal testing** track.
 
-**Acceptance:** a push to `flutter/**` produces a signed `.aab` in Play internal testing.
+**[code] — DONE** (per the status block).
+
+**Acceptance:** after the one-time manual upload, a push touching `flutter/**` on `main` produces a signed `.aab` in Play internal testing.
 
 ---
 
