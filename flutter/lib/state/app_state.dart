@@ -32,6 +32,13 @@ class AppState extends ChangeNotifier {
   String? _lastRunMessage;
   String? get lastRunMessage => _lastRunMessage;
 
+  /// True from the moment a generation run is kicked off. There's no run-status
+  /// polling in this build, so it stays true (the progress bar caps at 95% and
+  /// shows "you can leave the app") until sign-out — matching the iOS copy that
+  /// the episode lands in the feed asynchronously.
+  bool _generating = false;
+  bool get isGenerating => _generating;
+
   /// Stubbed sign-in. The real flow exchanges a Firebase ID token via
   /// `ApiClient.signInWithFirebase` and swaps in an `ApiAppRepository`; for now
   /// it flips signed-in and loads `me` from the injected (fake) repository.
@@ -63,11 +70,14 @@ class AppState extends ChangeNotifier {
 
   Future<void> generateNow() async {
     _error = null;
+    _generating = true;
+    notifyListeners();
     try {
       final result = await _repository.generateNow();
       _lastRunMessage = result.run.message;
     } catch (e) {
       _error = e.toString();
+      _generating = false;
     }
     notifyListeners();
   }
@@ -77,6 +87,7 @@ class AppState extends ChangeNotifier {
     _onboardingComplete = false;
     _me = null;
     _lastRunMessage = null;
+    _generating = false;
     _error = null;
     notifyListeners();
   }

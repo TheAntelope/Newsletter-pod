@@ -52,8 +52,14 @@ void main() {
     await tester.ensureVisible(generate);
     await tester.pumpAndSettle();
     await tester.tap(generate);
-    await tester.pumpAndSettle();
+    // Generation starts a live (never-settling) progress bar, so pump fixed
+    // steps to flush the fake run instead of pumpAndSettle.
+    await tester.pump(); // isGenerating -> banner + progress bar mount
+    await tester.pump(const Duration(milliseconds: 400)); // fake run resolves
     expect(find.textContaining('being generated'), findsOneWidget);
+
+    // Tear the tree down so the progress bar's periodic timer is cancelled.
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets('dashboard tabs load sources and library', (tester) async {

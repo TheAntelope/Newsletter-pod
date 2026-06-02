@@ -3,12 +3,71 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
+import '../widgets/editorial.dart';
+import '../widgets/generation_progress_bar.dart';
 import 'next_episode_queue_screen.dart';
 import 'paywall_screen.dart';
 import 'podcast_setup_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+/// The Today / "Your Briefing" dashboard. Editorial rebuild mirroring the iOS
+/// `HomeView`: greeting, a generation banner with progress while a run is
+/// active, the hero latest-episode card, plan + schedule cards, the next-pod
+/// queue entry, a setup checklist (hidden once setup is complete), and the
+/// primary Generate action.
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  late final AppState _app;
+  bool _initialized = false;
+
+  LibraryEpisodeDto? _latestEpisode;
+  bool _queueEnabled = true;
+  int _pinnedCount = 0;
+  int _enabledSourceCount = 0;
+  bool _loadedSources = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_initialized) {
+      _initialized = true;
+      _app = AppScope.of(context);
+      _loadExtras();
+    }
+  }
+
+  Future<void> _loadExtras() async {
+    try {
+      final episodes = await _app.repository.fetchEpisodes();
+      if (mounted && episodes.episodes.isNotEmpty) {
+        setState(() => _latestEpisode = episodes.episodes.first);
+      }
+    } catch (_) {/* hero falls back to the coming-soon state */}
+    try {
+      final queue = await _app.repository.fetchNextEpisodeQueue();
+      if (mounted) {
+        setState(() {
+          _queueEnabled = queue.enabled;
+          _pinnedCount = queue.pinnedCount;
+        });
+      }
+    } catch (_) {/* queue card hidden on failure */}
+    try {
+      final sources = await _app.repository.fetchSources();
+      if (mounted) {
+        setState(() {
+          _enabledSourceCount =
+              sources.sources.where((s) => s.enabled).length;
+          _loadedSources = true;
+        });
+      }
+    } catch (_) {/* checklist treats sources as unknown */}
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -17,7 +76,7 @@ class HomeScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Today'),
+        title: const Text('Your Briefing'),
         actions: [
           IconButton(
             tooltip: 'Podcast & schedule',
@@ -36,10 +95,16 @@ class HomeScreen extends StatelessWidget {
       body: SafeArea(
         child: switch ((app.loading, me)) {
           (true, null) => const Center(child: CircularProgressIndicator()),
-          (_, null) => Center(
-              child: Text(app.error ?? 'Something went wrong'),
+          (_, null) => Center(child: Text(app.error ?? 'Something went wrong')),
+          (_, final MeEnvelope loaded) => _Dashboard(
+              me: loaded,
+              app: app,
+              latestEpisode: _latestEpisode,
+              queueEnabled: _queueEnabled,
+              pinnedCount: _pinnedCount,
+              enabledSourceCount: _enabledSourceCount,
+              sourcesKnown: _loadedSources,
             ),
-          (_, final MeEnvelope loaded) => _Dashboard(me: loaded, app: app),
         },
       ),
     );
@@ -47,68 +112,251 @@ class HomeScreen extends StatelessWidget {
 }
 
 class _Dashboard extends StatelessWidget {
-  const _Dashboard({required this.me, required this.app});
+  const _Dashboard({
+    required this.me,
+    required this.app,
+    required this.latestEpisode,
+    required this.queueEnabled,
+    required this.pinnedCount,
+    required this.enabledSourceCount,
+    required this.sourcesKnown,
+  });
 
   final MeEnvelope me;
   final AppState app;
+  final LibraryEpisodeDto? latestEpisode;
+  final bool queueEnabled;
+  final int pinnedCount;
+  final int enabledSourceCount;
+  final bool sourcesKnown;
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    final name = me.user.firstName;
-    final greeting = name.isNotEmpty ? 'Good morning, $name' : 'Welcome';
-
     return ListView(
-      padding: const EdgeInsets.all(DesignTokens.spacingL),
+      padding: const EdgeInsets.fromLTRB(
+        DesignTokens.spacingL,
+        DesignTokens.spacingS,
+        DesignTokens.spacingL,
+        DesignTokens.spacingXl,
+      ),
       children: [
-        Text(greeting, style: text.displayLarge),
-        const SizedBox(height: DesignTokens.spacingXs),
-        Text(
-          'Your ${me.profile.title} is set to ${me.profile.desiredDurationMinutes} min.',
-          style: text.titleMedium?.copyWith(color: DesignTokens.colorMuted),
+        _GreetingHeader(name: me.user.firstName),
+        const SizedBox(height: DesignTokens.spacingL),
+        if (app.isGenerating) ...[
+          _GenerationBanner(
+            hasEpisode: latestEpisode != null,
+            message: app.lastRunMessage,
+          ),
+          const SizedBox(height: DesignTokens.spacingL),
+        ],
+        _HeroEpisodeCard(
+          episode: latestEpisode,
+          isGenerating: app.isGenerating,
         ),
         const SizedBox(height: DesignTokens.spacingL),
         _PlanCard(
           subscription: me.subscription,
           entitlements: me.entitlements,
         ),
-        const SizedBox(height: DesignTokens.spacingM),
+        const SizedBox(height: DesignTokens.spacingL),
         _ScheduleCard(schedule: me.schedule),
-        const SizedBox(height: DesignTokens.spacingM),
-        Card(
-          child: ListTile(
-            title: Text('What’s in your next pod', style: text.titleMedium),
-            subtitle: Text(
-              'Preview & pin the stories',
-              style: text.labelMedium?.copyWith(color: DesignTokens.colorMuted),
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => const NextEpisodeQueueScreen(),
-              ),
-            ),
-          ),
+        if (queueEnabled) ...[
+          const SizedBox(height: DesignTokens.spacingL),
+          _NextEpisodeQueueCard(pinnedCount: pinnedCount),
+        ],
+        const SizedBox(height: DesignTokens.spacingL),
+        _SetupChecklistCard(
+          hasSources: !sourcesKnown || enabledSourceCount > 0,
+          hasShow: me.profile.title.isNotEmpty,
+          hasSchedule: me.schedule.weekdays.isNotEmpty,
+          hasEpisode: latestEpisode != null,
         ),
         const SizedBox(height: DesignTokens.spacingL),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: app.generateNow,
-            child: const Text('Generate now'),
-          ),
+        AmberButton.filled(
+          label: 'Generate now',
+          icon: Icons.auto_awesome,
+          loading: app.isGenerating,
+          onPressed: app.isGenerating ? null : app.generateNow,
         ),
-        if (app.lastRunMessage != null) ...[
-          const SizedBox(height: DesignTokens.spacingM),
-          Text(
-            app.lastRunMessage!,
-            style: text.bodyMedium?.copyWith(color: DesignTokens.colorAmberDeep),
-          ),
-        ],
         if (app.error != null) ...[
           const SizedBox(height: DesignTokens.spacingM),
-          Text(app.error!, style: text.bodyMedium),
+          Text(
+            app.error!,
+            style: DesignTokens.typographyBody
+                .copyWith(color: DesignTokens.colorAmberDeep),
+          ),
         ],
+      ],
+    );
+  }
+}
+
+class _GreetingHeader extends StatelessWidget {
+  const _GreetingHeader({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final hour = DateTime.now().hour;
+    final partOfDay = switch (hour) {
+      >= 5 && < 12 => 'morning',
+      >= 12 && < 17 => 'afternoon',
+      >= 17 && < 22 => 'evening',
+      _ => 'night',
+    };
+    final greeting =
+        name.isEmpty ? 'Good $partOfDay.' : 'Good $partOfDay, $name.';
+    return Text(
+      greeting,
+      style: DesignTokens.typographyDisplay.copyWith(color: DesignTokens.colorInk),
+    );
+  }
+}
+
+class _GenerationBanner extends StatelessWidget {
+  const _GenerationBanner({required this.hasEpisode, required this.message});
+
+  final bool hasEpisode;
+  final String? message;
+
+  @override
+  Widget build(BuildContext context) {
+    final headline = hasEpisode
+        ? "We're putting together your next episode."
+        : 'Your first episode is being made.';
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.auto_awesome,
+                size: 22, color: DesignTokens.colorAmberDeep),
+            const SizedBox(width: DesignTokens.spacingM),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    headline,
+                    style: DesignTokens.typographySubtitle
+                        .copyWith(color: DesignTokens.colorInk),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    message ??
+                        'About 3–5 minutes. You can close the app — the episode '
+                            'lands in your feed and on this screen when ready.',
+                    style: DesignTokens.typographyCallout
+                        .copyWith(color: DesignTokens.colorInkSoft),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const GenerationProgressBar(isGenerating: true),
+      ],
+    );
+  }
+}
+
+class _HeroEpisodeCard extends StatelessWidget {
+  const _HeroEpisodeCard({required this.episode, required this.isGenerating});
+
+  final LibraryEpisodeDto? episode;
+  final bool isGenerating;
+
+  @override
+  Widget build(BuildContext context) {
+    final ep = episode;
+    final badge = ep != null
+        ? 'Latest episode'
+        : (isGenerating ? 'Generating now' : 'Coming soon');
+    final title = ep?.title ??
+        (isGenerating ? 'Cooking up your first briefing…' : 'No episode yet');
+
+    return EditorialCard(
+      children: [
+        MetaLabel(badge),
+        Text(
+          title,
+          style: DesignTokens.typographyTitle.copyWith(color: DesignTokens.colorInk),
+        ),
+        if (ep != null) ...[
+          Text(
+            ep.description,
+            style: DesignTokens.typographyBody
+                .copyWith(color: DesignTokens.colorInkSoft),
+          ),
+          Wrap(
+            spacing: DesignTokens.spacingM,
+            runSpacing: DesignTokens.spacingXs,
+            children: [
+              if (ep.durationSeconds != null)
+                _MetaChip(
+                  icon: Icons.schedule,
+                  label: '${(ep.durationSeconds! / 60).round()} min',
+                ),
+              _MetaChip(
+                icon: Icons.article_outlined,
+                label: '${ep.processedItemCount} items',
+              ),
+              _MetaChip(
+                icon: Icons.calendar_today_outlined,
+                label: _relativeDate(ep.publishedAt),
+              ),
+            ],
+          ),
+        ] else
+          Text(
+            isGenerating
+                ? 'Your episode is on its way — it will appear here and in your '
+                    'feed when ready.'
+                : 'Tap Generate below to make your first episode now, or wait '
+                    'for your scheduled delivery.',
+            style: DesignTokens.typographyBody
+                .copyWith(color: DesignTokens.colorInkSoft),
+          ),
+        const EditorialDivider(),
+        AmberButton.filled(
+          label: 'Open in your podcast app',
+          icon: Icons.play_arrow,
+          onPressed: ep == null
+              ? null
+              : () => ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Playback opens in your podcast app — wired with audio '
+                        'support.',
+                      ),
+                    ),
+                  ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MetaChip extends StatelessWidget {
+  const _MetaChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: DesignTokens.colorMuted),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: DesignTokens.typographyCallout
+              .copyWith(color: DesignTokens.colorMuted),
+        ),
       ],
     );
   }
@@ -122,51 +370,37 @@ class _PlanCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
     final tier = subscription.tier.toUpperCase();
-
-    return Card(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(DesignTokens.radiusCard),
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const PaywallScreen()),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(DesignTokens.spacingM),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('PLAN',
-                  style:
-                      text.labelSmall?.copyWith(color: DesignTokens.colorMuted)),
-              const SizedBox(height: DesignTokens.spacingXs),
-              Text('$tier · ${subscription.status}', style: text.titleLarge),
-              const SizedBox(height: DesignTokens.spacingS),
-              if (entitlements.isInTrial)
-                Text(
-                  'Trial: ${entitlements.trialPremiumPodsRemaining} premium pods left',
-                  style: text.bodyMedium,
-                )
-              else
-                Text(
-                  '${entitlements.premiumPodsRemainingThisWeek} of '
-                  '${entitlements.premiumPodsPerWeek} premium pods left this week',
-                  style: text.bodyMedium,
-                ),
-              const SizedBox(height: DesignTokens.spacingS),
-              Row(
-                children: [
-                  Text('See plans',
-                      style: text.labelLarge
-                          ?.copyWith(color: DesignTokens.colorAmberDeep)),
-                  const Icon(Icons.chevron_right,
-                      size: 18, color: DesignTokens.colorAmberDeep),
-                ],
-              ),
-            ],
-          ),
-        ),
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const PaywallScreen()),
       ),
+      children: [
+        const MetaLabel('Plan'),
+        Text(
+          '$tier · ${subscription.status}',
+          style: DesignTokens.typographyTitle.copyWith(color: DesignTokens.colorInk),
+        ),
+        Text(
+          entitlements.isInTrial
+              ? 'Trial: ${entitlements.trialPremiumPodsRemaining} premium pods left'
+              : '${entitlements.premiumPodsRemainingThisWeek} of '
+                  '${entitlements.premiumPodsPerWeek} premium pods left this week',
+          style: DesignTokens.typographyBody.copyWith(color: DesignTokens.colorInkSoft),
+        ),
+        Row(
+          children: [
+            Text(
+              'See plans',
+              style: DesignTokens.typographyCalloutStrong
+                  .copyWith(color: DesignTokens.colorAmberDeep),
+            ),
+            const Icon(Icons.chevron_right,
+                size: 18, color: DesignTokens.colorAmberDeep),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -178,25 +412,112 @@ class _ScheduleCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
     final days = schedule.weekdays
         .map((d) => d.isEmpty ? d : '${d[0].toUpperCase()}${d.substring(1)}')
         .join(' · ');
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(DesignTokens.spacingM),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('SCHEDULE', style: text.labelSmall?.copyWith(color: DesignTokens.colorMuted)),
-            const SizedBox(height: DesignTokens.spacingXs),
-            Text('Delivered at ${schedule.localTime}', style: text.titleLarge),
-            const SizedBox(height: DesignTokens.spacingS),
-            Text(days, style: text.bodyMedium),
-          ],
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        const MetaLabel('Schedule'),
+        Text(
+          'Delivered at ${schedule.localTime}',
+          style: DesignTokens.typographyTitle.copyWith(color: DesignTokens.colorInk),
         ),
-      ),
+        Text(
+          days,
+          style: DesignTokens.typographyBody.copyWith(color: DesignTokens.colorInkSoft),
+        ),
+      ],
     );
   }
+}
+
+class _NextEpisodeQueueCard extends StatelessWidget {
+  const _NextEpisodeQueueCard({required this.pinnedCount});
+
+  final int pinnedCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const NextEpisodeQueueScreen()),
+      ),
+      children: [
+        Row(
+          children: [
+            const Expanded(child: MetaLabel('Coming in your next pod')),
+            if (pinnedCount > 0)
+              Text(
+                '$pinnedCount pinned',
+                style: DesignTokens.typographyCallout
+                    .copyWith(color: DesignTokens.colorAmberDeep),
+              ),
+            const SizedBox(width: 4),
+            const Icon(Icons.chevron_right,
+                size: 18, color: DesignTokens.colorMuted),
+          ],
+        ),
+        Text(
+          "Peek at what's queued",
+          style: DesignTokens.typographySubtitle.copyWith(color: DesignTokens.colorInk),
+        ),
+        Text(
+          'Preview & pin the stories',
+          style: DesignTokens.typographyCallout
+              .copyWith(color: DesignTokens.colorInkSoft),
+        ),
+      ],
+    );
+  }
+}
+
+class _SetupChecklistCard extends StatelessWidget {
+  const _SetupChecklistCard({
+    required this.hasSources,
+    required this.hasShow,
+    required this.hasSchedule,
+    required this.hasEpisode,
+  });
+
+  final bool hasSources;
+  final bool hasShow;
+  final bool hasSchedule;
+  final bool hasEpisode;
+
+  @override
+  Widget build(BuildContext context) {
+    if (hasSources && hasShow && hasSchedule && hasEpisode) {
+      return const SizedBox.shrink();
+    }
+    return EditorialCard(
+      children: [
+        const MetaLabel('Setup checklist'),
+        Column(
+          children: [
+            ChecklistRow(label: 'Pick at least one source', isComplete: hasSources),
+            const SizedBox(height: DesignTokens.spacingS),
+            ChecklistRow(label: 'Configure your show', isComplete: hasShow),
+            const SizedBox(height: DesignTokens.spacingS),
+            ChecklistRow(label: 'Set a delivery schedule', isComplete: hasSchedule),
+            const SizedBox(height: DesignTokens.spacingS),
+            ChecklistRow(label: 'First episode ready', isComplete: hasEpisode),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// "5 hours ago", "yesterday", "3 days ago" — the casual meta-row date.
+String _relativeDate(DateTime when) {
+  final diff = DateTime.now().difference(when.toLocal());
+  if (diff.inMinutes < 1) return 'just now';
+  if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
+  if (diff.inHours < 24) {
+    return '${diff.inHours} hour${diff.inHours == 1 ? '' : 's'} ago';
+  }
+  if (diff.inDays == 1) return 'yesterday';
+  return '${diff.inDays} days ago';
 }
