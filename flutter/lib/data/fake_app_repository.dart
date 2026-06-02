@@ -164,6 +164,19 @@ class FakeAppRepository implements AppRepository {
       rankerUsed: true,
       candidates: [
         NextEpisodeCandidateDto(
+          dedupeKey: 'shared1',
+          sourceId: 'shared',
+          sourceName: 'Shared by you',
+          title: 'A long read you sent from Safari',
+          summary: 'Saved via the share sheet — pinned to the top so it always '
+              'makes the cut.',
+          link: 'https://example.com/shared',
+          publishedAt: now.subtract(const Duration(hours: 2)),
+          pinned: false,
+          likelyIncluded: true,
+          shared: true,
+        ),
+        NextEpisodeCandidateDto(
           dedupeKey: 'c1',
           sourceId: 'stratechery',
           sourceName: 'Stratechery',
