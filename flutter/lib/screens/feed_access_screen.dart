@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../api/models.dart';
 import '../design_tokens.dart';
+import '../services/link_launcher.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
 
@@ -64,6 +65,11 @@ class _FeedAccessScreenState extends State<FeedAccessScreen> {
                       'Add it to the player you already use.',
                       style: DesignTokens.typographyBody
                           .copyWith(color: DesignTokens.colorInkSoft),
+                    ),
+                    AmberButton.filled(
+                      label: 'Open feed',
+                      icon: Icons.open_in_new,
+                      onPressed: () => openExternal(context, feed.feedUrl),
                     ),
                   ],
                 ),

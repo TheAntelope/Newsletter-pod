@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import '../widgets/editorial.dart';
 import '../widgets/generation_progress_bar.dart';
 import 'account_screen.dart';
+import 'feed_access_screen.dart';
 import 'next_episode_queue_screen.dart';
 import 'paywall_screen.dart';
 import 'podcast_setup_screen.dart';
@@ -374,13 +375,8 @@ class _HeroEpisodeCardState extends State<_HeroEpisodeCard> {
           icon: Icons.play_arrow,
           onPressed: ep == null
               ? null
-              : () => ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Playback opens in your podcast app — wired with audio '
-                        'support.',
-                      ),
-                    ),
+              : () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const FeedAccessScreen()),
                   ),
         ),
       ],

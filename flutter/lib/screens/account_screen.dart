@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
+import '../services/link_launcher.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
 import 'feed_access_screen.dart';
@@ -232,9 +233,7 @@ class _LegalRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(url)),
-      ),
+      onTap: () => openExternal(context, url),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: DesignTokens.spacingM),
         child: Row(
