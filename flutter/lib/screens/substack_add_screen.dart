@@ -3,10 +3,11 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
+import '../widgets/editorial.dart';
 
 /// Add a Substack: discover candidates by topic, add one (which creates an
 /// intent), and review existing subscriptions — surfacing the 6-digit
-/// verification code when Substack sends one.
+/// verification code when Substack sends one. Editorial rebuild.
 class SubstackAddScreen extends StatefulWidget {
   const SubstackAddScreen({super.key});
 
@@ -70,8 +71,7 @@ class _SubstackAddScreenState extends State<SubstackAddScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _searching = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     }
   }
 
@@ -86,8 +86,7 @@ class _SubstackAddScreenState extends State<SubstackAddScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (mounted) setState(() => _adding.remove(pubUrl));
     }
@@ -98,42 +97,47 @@ class _SubstackAddScreenState extends State<SubstackAddScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Add Substack')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(DesignTokens.spacingL),
           children: [
-            _label('FIND', text),
+            const MetaLabel('Find a publication'),
+            const SizedBox(height: DesignTokens.spacingM),
             Row(
               children: [
                 Expanded(
                   child: TextField(
                     controller: _searchController,
-                    decoration:
-                        const InputDecoration(labelText: 'Topic or publication'),
+                    decoration: const InputDecoration(
+                      labelText: 'Topic or publication',
+                    ),
                     onSubmitted: (_) => _search(),
                   ),
                 ),
                 const SizedBox(width: DesignTokens.spacingS),
-                ElevatedButton(
+                AmberButton.filled(
+                  label: 'Find',
+                  expand: false,
+                  loading: _searching,
                   onPressed: _searching ? null : _search,
-                  child: const Text('Find'),
                 ),
               ],
             ),
             const SizedBox(height: DesignTokens.spacingM),
-            if (_searching)
-              const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(DesignTokens.spacingL),
-                  child: CircularProgressIndicator(),
-                ),
+            for (final c in _candidates) ...[
+              _CandidateCard(
+                candidate: c,
+                added: _alreadyAdded(c.pubHost),
+                adding: _adding.contains(c.pubUrl),
+                onAdd: () => _add(c.pubUrl),
               ),
-            ..._candidates.map((c) => _candidateCard(c, text)),
-            const SizedBox(height: DesignTokens.spacingL),
-            _label('YOUR SUBSCRIPTIONS', text),
+              const SizedBox(height: DesignTokens.spacingM),
+            ],
+            const SizedBox(height: DesignTokens.spacingS),
+            const MetaLabel('Your subscriptions'),
+            const SizedBox(height: DesignTokens.spacingM),
             if (_loadingIntents)
               const Center(
                 child: Padding(
@@ -142,98 +146,155 @@ class _SubstackAddScreenState extends State<SubstackAddScreen> {
                 ),
               )
             else
-              ..._intents.map((i) => _intentCard(i, text)),
+              for (final i in _intents) ...[
+                _IntentCard(intent: i),
+                const SizedBox(height: DesignTokens.spacingM),
+              ],
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _label(String s, TextTheme text) => Padding(
-        padding: const EdgeInsets.only(bottom: DesignTokens.spacingS),
-        child: Text(s,
-            style: text.labelSmall?.copyWith(color: DesignTokens.colorMuted)),
-      );
+class _CandidateCard extends StatelessWidget {
+  const _CandidateCard({
+    required this.candidate,
+    required this.added,
+    required this.adding,
+    required this.onAdd,
+  });
 
-  Widget _candidateCard(SubstackCandidateDto c, TextTheme text) {
-    final added = _alreadyAdded(c.pubHost);
-    final adding = _adding.contains(c.pubUrl);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(DesignTokens.spacingM),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+  final SubstackCandidateDto candidate;
+  final bool added;
+  final bool adding;
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = candidate;
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        Row(
           children: [
-            Text(c.title ?? c.pubHost, style: text.titleMedium),
-            if (c.why != null) ...[
-              const SizedBox(height: DesignTokens.spacingXs),
-              Text(c.why!,
-                  style: text.bodyMedium
-                      ?.copyWith(color: DesignTokens.colorMuted)),
-            ],
-            const SizedBox(height: DesignTokens.spacingS),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: added
-                  ? Text('Added',
-                      style: text.labelMedium
-                          ?.copyWith(color: DesignTokens.colorAmberDeep))
-                  : ElevatedButton(
-                      onPressed: adding ? null : () => _add(c.pubUrl),
-                      child: adding
-                          ? const SizedBox(
-                              height: 16,
-                              width: 16,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Add'),
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _intentCard(SubstackIntentDto i, TextTheme text) {
-    final pending = i.displayStatus == SubstackIntentStatus.pending;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(DesignTokens.spacingM),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(i.displayTitle, style: text.titleMedium),
-            const SizedBox(height: DesignTokens.spacingXs),
-            Text(
-              pending ? 'Pending confirmation' : 'Active',
-              style: text.labelMedium?.copyWith(
-                color:
-                    pending ? DesignTokens.colorMuted : DesignTokens.colorAmberDeep,
+            Expanded(
+              child: Text(
+                c.title ?? c.pubHost,
+                style: DesignTokens.typographySubtitle
+                    .copyWith(color: DesignTokens.colorInk),
               ),
             ),
-            if (i.hasLiveVerificationCode) ...[
-              const SizedBox(height: DesignTokens.spacingS),
-              Container(
-                padding: const EdgeInsets.all(DesignTokens.spacingS),
-                decoration: BoxDecoration(
-                  color: DesignTokens.colorCream,
-                  borderRadius:
-                      BorderRadius.circular(DesignTokens.radiusCard),
-                ),
-                child: Row(
+            if (c.hasPaidTier) const _PaidTag(),
+          ],
+        ),
+        if (c.why != null)
+          Text(
+            c.why!,
+            style: DesignTokens.typographyCallout
+                .copyWith(color: DesignTokens.colorInkSoft),
+          ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: added
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.vpn_key, size: 18),
-                    const SizedBox(width: DesignTokens.spacingS),
-                    Text('Code: ${i.pendingVerificationCode}',
-                        style: text.bodyLarge),
+                    const Icon(Icons.check_circle,
+                        size: 16, color: DesignTokens.colorAmberDeep),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Added',
+                      style: DesignTokens.typographyCalloutStrong
+                          .copyWith(color: DesignTokens.colorAmberDeep),
+                    ),
                   ],
+                )
+              : AmberButton.filled(
+                  label: 'Add',
+                  expand: false,
+                  loading: adding,
+                  onPressed: adding ? null : onAdd,
                 ),
+        ),
+      ],
+    );
+  }
+}
+
+class _IntentCard extends StatelessWidget {
+  const _IntentCard({required this.intent});
+
+  final SubstackIntentDto intent;
+
+  @override
+  Widget build(BuildContext context) {
+    final i = intent;
+    final pending = i.displayStatus == SubstackIntentStatus.pending;
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                i.displayTitle,
+                style: DesignTokens.typographySubtitle
+                    .copyWith(color: DesignTokens.colorInk),
               ),
-            ],
+            ),
+            if (i.hasPaidTier) const _PaidTag(),
           ],
         ),
+        Text(
+          pending ? 'Pending confirmation' : 'Active',
+          style: DesignTokens.typographyMeta.copyWith(
+            color: pending
+                ? DesignTokens.colorMuted
+                : DesignTokens.colorAmberDeep,
+          ),
+        ),
+        if (i.hasLiveVerificationCode)
+          Container(
+            padding: const EdgeInsets.all(DesignTokens.spacingS),
+            decoration: BoxDecoration(
+              color: DesignTokens.colorCream,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: DesignTokens.colorAmber),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.vpn_key,
+                    size: 18, color: DesignTokens.colorAmberDeep),
+                const SizedBox(width: DesignTokens.spacingS),
+                Text(
+                  'Code: ${i.pendingVerificationCode}',
+                  style: DesignTokens.typographyBodyStrong
+                      .copyWith(color: DesignTokens.colorInk),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _PaidTag extends StatelessWidget {
+  const _PaidTag();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: DesignTokens.colorAmber, width: 1),
+      ),
+      child: Text(
+        'Paid',
+        style: DesignTokens.typographyMeta
+            .copyWith(color: DesignTokens.colorAmberDeep),
       ),
     );
   }
