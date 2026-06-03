@@ -44,7 +44,11 @@ steps:
       # developer.apple.com → Membership). APNS_ENABLED gates the whole
       # push path so this revision can ship before the Portal+secret setup
       # lands without ELOG spam.
-      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true,CANDIDATE_QUEUE_ENABLED=true,APNS_ENABLED=true,APNS_TEAM_ID=R7HS2T53Z8,APNS_BUNDLE_ID=com.newsletterpod.app,APNS_ENVIRONMENT=production
+      # FIREBASE_PROJECT_ID gates the FirebaseIdentityVerifier used by the
+      # Android/Flutter /v1/auth/firebase sign-in. Non-secret (the project id is
+      # public, also in google-services.json). Without it, every Firebase
+      # sign-in 400s with "FIREBASE_PROJECT_ID is not configured".
+      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true,CANDIDATE_QUEUE_ENABLED=true,APNS_ENABLED=true,APNS_TEAM_ID=R7HS2T53Z8,APNS_BUNDLE_ID=com.newsletterpod.app,APNS_ENVIRONMENT=production,FIREBASE_PROJECT_ID=theclawcast-9a045,FCM_ENABLED=true
       # Pin every critical secret on every deploy so that if a future config
       # edit strips a binding (as happened on revision 00045 on 2026-05-01,
       # and again with MAILGUN_WEBHOOK_SIGNING_KEY in 2026-05), the next deploy
@@ -64,7 +68,7 @@ steps:
       # in Secret Manager from values minted at developer.x.com → Keys and
       # tokens (with App permissions set to Read and Write) before this
       # deploy runs, or the gcloud step will fail on the missing binding.
-      - --update-secrets=PODCAST_API_KEY=openai-api-key:latest,ELEVENLABS_API_KEY=elevenlabs-api-key:latest,JOB_TRIGGER_TOKEN=newsletter-pod-job-trigger-token:latest,FEED_TOKEN=newsletter-pod-feed-token:latest,SMTP_PASSWORD=smtp-password:latest,MAILGUN_WEBHOOK_SIGNING_KEY=mailgun-webhook-signing-key:latest,APNS_AUTH_KEY=apns-auth-key:latest,APNS_KEY_ID=apns-key-id:latest,X_API_KEY=x-api-key:latest,X_API_SECRET=x-api-secret:latest,X_ACCESS_TOKEN=x-access-token:latest,X_ACCESS_TOKEN_SECRET=x-access-token-secret:latest
+      - --update-secrets=PODCAST_API_KEY=openai-api-key:latest,ELEVENLABS_API_KEY=elevenlabs-api-key:latest,JOB_TRIGGER_TOKEN=newsletter-pod-job-trigger-token:latest,FEED_TOKEN=newsletter-pod-feed-token:latest,SMTP_PASSWORD=smtp-password:latest,MAILGUN_WEBHOOK_SIGNING_KEY=mailgun-webhook-signing-key:latest,APNS_AUTH_KEY=apns-auth-key:latest,APNS_KEY_ID=apns-key-id:latest,X_API_KEY=x-api-key:latest,X_API_SECRET=x-api-secret:latest,X_ACCESS_TOKEN=x-access-token:latest,X_ACCESS_TOKEN_SECRET=x-access-token-secret:latest,FCM_SERVICE_ACCOUNT_JSON=fcm-service-account:latest,REVENUECAT_WEBHOOK_AUTH_SECRET=revenuecat-webhook-auth-secret:latest
       - --quiet
 
 images:

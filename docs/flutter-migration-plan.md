@@ -232,3 +232,85 @@ _(Update as work proceeds.)_
     re-verify the **unchanged Swift app** still signs in + `/v1/me` against the new revision;
     a **real Firebase token** end-to-end needs a Firebase project + `FIREBASE_PROJECT_ID`
     (Phase 2 setup). Code + unit-level gate is met.
+  - **Merged + deployed:** PR #35 squash-merged (`2d4ada1`); Cloud Run rev
+    `newsletter-pod-00194-vnm` live; smoke test passed (`/v1/auth/firebase`→400 configured-guard,
+    `/v1/auth/apple`→400 invalid-token). TestFlight v1.0.5 build #118 accepted.
+- 2026-06-01 — **Phase 2 started — Flutter Android local scaffold.** Branch
+  `feature/phase2-flutter-android` (account-independent work; validated locally).
+  - **Toolchain:** Flutter 3.44.1 installed at `C:\flutter` (no admin, git clone; invoke
+    `C:\flutter\bin\flutter.bat`). `flutter doctor`: web + Windows-desktop run available;
+    Android SDK is the only gap (deferred — only needed to run an APK).
+  - **Scaffold:** `flutter/` (`flutter create --org com.newsletterpod --project-name app
+    --platforms android,ios,web`), applicationId/namespace `com.newsletterpod.app`. Committed
+    `0494074`. `flutter analyze` clean, `flutter test` green.
+  - **Design tokens (done properly):** added a `dart/design-tokens` format + `flutter`
+    platform to the **`clawcast-tokens` submodule** `build.js` → `dist/design_tokens.dart`
+    (pushed `a1fbec9`); submodule pointer bumped here. Swift/CSS outputs unchanged (iOS CI
+    staleness check stays green). Copied to `flutter/lib/design_tokens.dart`.
+  - **Theme:** `flutter/lib/theme.dart` (editorial palette/type/spacing over the generated
+    tokens, mirroring `Theme.swift`); themed app shell renders; widget test green.
+  - **API layer ported (committed):** `lib/api/models.dart` — all ~30 DTOs/envelopes via
+    `json_serializable` (FieldRename.snake, tolerant defaults, display helpers; 10 round-trip
+    tests). `lib/api/api_client.dart` — all 35 endpoints + `signInWithFirebase`, Bearer auth,
+    `{detail}` error mapping (`MockClient` tests). `lib/api/responses.dart` for the client ack
+    types; `lib/config.dart` holds the Cloud Run base URL (overridable via `--dart-define`).
+    `flutter analyze` clean, all tests green.
+  - **Screens — architecture + first flow (committed):** state via `AppState`
+    (`ChangeNotifier`, the iOS AppViewModel analogue) exposed through an `InheritedNotifier`
+    (`AppScope`) — no extra state-mgmt dependency. Data via an `AppRepository` interface with
+    `FakeAppRepository` (in-memory demo data, used now + in tests) and `ApiAppRepository`
+    (wraps `ApiClient`). First flow shipped: `SignInScreen` (stubbed) → `HomeScreen` dashboard
+    (greeting + plan/schedule cards + Generate now) via `RootView`. Widget test covers it.
+  - **Local screens COMPLETE (committed), 22 tests green:** sign-in → 8-step onboarding wizard
+    (gated for new sign-ins) → tabbed shell (Today / Sources / Library / Discover); dashboard;
+    Sources + Library; next-episode queue (pin/exclude); podcast setup + schedule editor; swipe
+    deck (bespoke drag physics + Skip/Keep); Substack add (discover → add intent, existing subs
+    with live verification code); paywall (Free/Pro/Max, purchase stubbed for RevenueCat). All
+    over the swappable `AppRepository` (Fake now / Api when auth lands), editorial theme.
+  - **Remaining for Phase 2 (needs the user's accounts):** wire real **Firebase Auth + Google
+    Sign-In** (swap the sign-in stub → `signInWithFirebase` → `ApiAppRepository`), **RevenueCat**
+    billing + backend webhook, **FCM** push + backend FCM branch, and the path-filtered Codemagic
+    workflow → Play Store internal track. Prereqs: Firebase project (+ `FIREBASE_PROJECT_ID` on
+    Cloud Run), Google Play Console ($25), RevenueCat account.
+- 2026-06-02 — Ran the app on web (`flutter run -d chrome`) — full flow verified visually. Two
+  tracks of remaining Phase 2 work, both **deferred to a new session**:
+  1. **UI parity with the SwiftUI app** — the screens are functional but simplified (plain
+     Material cards). Punch-list + per-screen gaps + the editorial component library to port are
+     in **[flutter-ui-parity.md](flutter-ui-parity.md)**. **Start here next session.**
+  2. **Account-dependent wiring** (Firebase auth / RevenueCat / FCM / Play CI) — blocked on the
+     user creating those accounts.
+  Resume context (toolchain, run/test commands, layout) is in flutter-ui-parity.md and the
+  `flutter_phase2_env` memory.
+- 2026-06-02 — **Phase 2 UI parity pass COMPLETE** (track 1 of the two above). Built the
+  editorial component library under `flutter/lib/widgets/` (EditorialCard, MetaLabel,
+  EditorialDivider, ChecklistRow, AmberButton, GenerationProgressBar, OnboardingProgressDots,
+  VoiceChoiceCard, DayToggle) + flat cream AppBar/Nav/input theme chrome, then **rebuilt all
+  10 screens** on top of it (sign-in, Today/home with HeroEpisodeCard + SetupChecklistCard +
+  live GenerationProgressBar, 8-step onboarding, sources with persisting toggles, library with
+  source-item refs, swipe deck at Swift physics/depth-3, next-pod queue with shared-item
+  highlighting, podcast setup with voice cards + day-circle schedule, paywall, Substack add).
+  Added `replaceSources` to the repository layer (`PUT /v1/me/sources`). `flutter analyze`
+  clean, **22 tests green**, `flutter build web` compiles. Committed per-screen on
+  `feature/phase2-flutter-android`. Punch-list updated in flutter-ui-parity.md.
+  - **Still deferred (unchanged):** audio preview, speech-to-text dictation, AccountSheet +
+    FeedAccessView, and the account-gated wiring (Firebase auth / RevenueCat / FCM / Play CI),
+    which is the remaining Phase 2 work and needs the user's external accounts.
+- 2026-06-02 — **Phase 2 UI parity — depth pass (24 tests green).** Closed the remaining
+  Swift-only surface that didn't need accounts: surfaced 8 more repository methods
+  (updateProfile/reset/delete/fetchFeed/fetchCatalog/fetchInboundItems/submitFeedback/
+  deleteSubstackIntent); PodcastSetup full config (format/tone/humor/key-takeaways/toggles/
+  guidance presets/weather); built **AccountSheet** (home gear) + **FeedAccessView**; richer
+  onboarding (show-format step + anchor/co-host voice roles, 9 steps); home depth
+  (about/sources-summary cards, collapsible hero description + transcript, FeedbackComposer);
+  Sources depth (topic-grouped catalog + custom RSS + recent newsletters). Committed per-unit.
+  **Now genuinely deferred:** audio preview (`just_audio`), STT dictation, the embedded
+  onboarding swipe step, the Apple-Podcasts deep link (Android pastes URL), and the
+  account-gated wiring (Firebase/RevenueCat/FCM/Play CI) — the real remaining Phase 2 work.
+- 2026-06-02 — **Phase 2 UI parity — device-feature pass (24 tests green).** Added the
+  deferred items that just needed plugins (`just_audio`, `speech_to_text`, `url_launcher`,
+  all compile for web): voice-sample **audio preview** (shared AudioController + bundled demo
+  WAV), **dictation** (DictationController + mic in the feedback composer, Android RECORD_AUDIO
+  added), **real link opening** (FeedAccess/legal/hero via url_launcher), and the **embedded
+  onboarding swipe step** (deck extracted to a reusable `SwipeDeck`; onboarding is 10 steps).
+  Committed per-unit. **Only the account-gated wiring remains** (Firebase auth / RevenueCat /
+  FCM / Play CI), plus the optional standalone OnboardingVoiceIntakeStep (submitVoiceIntake).

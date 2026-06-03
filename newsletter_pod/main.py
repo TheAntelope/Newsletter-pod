@@ -79,7 +79,12 @@ from .legal import PRIVACY_HTML, TERMS_HTML
 from .mailer import NoopMailer, SMTPMailer
 from .models import SourceItem
 from .podcast_api import PodcastApiClient, PodcastApiUnavailable
-from .push import PushSender, build_push_sender_from_settings
+from .push import (
+    FcmSender,
+    PushSender,
+    build_fcm_sender_from_settings,
+    build_push_sender_from_settings,
+)
 from .shared_items import MAX_UPLOAD_BYTES as SHARED_MAX_UPLOAD_BYTES, SUPPORTED_KINDS as SHARED_SUPPORTED_KINDS
 from .storage import AudioStorage, GCSAudioStorage, InMemoryAudioStorage
 from .user_models import DeviceTokenRecord
@@ -211,6 +216,7 @@ class RegisterDeviceTokenRequest(BaseModel):
     token: str
     environment: Optional[str] = "production"
     bundle_id: Optional[str] = None
+    platform: Optional[str] = "ios"  # "ios" (APNs) | "android" (FCM)
 
 
 class BroadcastGenerateOnceRequest(BaseModel):
@@ -271,6 +277,9 @@ class ServiceContainer:
     # built once per process so the JWT cache + HTTP/2 client are reused
     # across every push attempt.
     push_sender: PushSender | None = None
+    # FCM sender (Android). Built once so the OAuth token + HTTP client are
+    # reused; None when FCM isn't configured.
+    fcm_sender: FcmSender | None = None
     # Shared OpenAI/ElevenLabs client. Reused by both the per-user generation
     # path (via control_plane) and the broadcast loop, so we configure it
     # once and pass the same instance to both.
@@ -1157,11 +1166,21 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
     ) -> dict:
         user = _require_session_user(container, authorization)
         assert container.control_repository is not None
-        token = (request_payload.token or "").strip().lower()
+        platform = (request_payload.platform or "ios").strip().lower()
+        if platform not in {"ios", "android"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="platform must be 'ios' or 'android'",
+            )
+        # APNs tokens are hex (case-insensitive) — normalize to lowercase for a
+        # stable idempotency key. FCM tokens are case-sensitive, so preserve
+        # case for android.
+        raw_token = (request_payload.token or "").strip()
+        token = raw_token.lower() if platform == "ios" else raw_token
         if not token or len(token) < 32:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid APNs device token",
+                detail="Invalid device token",
             )
         environment = (request_payload.environment or "production").strip().lower()
         if environment not in {"production", "sandbox"}:
@@ -1173,9 +1192,14 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             (request_payload.bundle_id or "").strip()
             or container.settings.apns_bundle_id
         )
-        # Idempotent on (user_id, token): re-registering the same device
-        # refreshes last_seen_at and clears any prior invalidated_at marker.
-        token_id = hashlib.sha256(f"{user.id}:{token}".encode("utf-8")).hexdigest()[:32]
+        # Idempotent on (user_id, platform, token): re-registering the same
+        # device refreshes last_seen_at and clears any prior invalidated_at
+        # marker. platform is in the key so an iOS and an Android token that
+        # happen to normalize to the same string get distinct records (and so a
+        # platform never silently flips on an existing record).
+        token_id = hashlib.sha256(
+            f"{user.id}:{platform}:{token}".encode("utf-8")
+        ).hexdigest()[:32]
         now = utc_now()
         existing = container.control_repository.get_device_token(token_id)
         if existing is not None:
@@ -1193,7 +1217,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             id=token_id,
             user_id=user.id,
             token=token,
-            platform="ios",
+            platform=platform,
             environment=environment,
             bundle_id=bundle_id,
             created_at=now,
@@ -1600,6 +1624,45 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
             )
 
+    @app.post("/webhooks/revenuecat")
+    async def receive_revenuecat_webhook(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        """RevenueCat webhook (Android / Play Billing subscription events).
+
+        RevenueCat authenticates by sending the exact Authorization header
+        value configured in its dashboard; we compare it constant-time against
+        REVENUECAT_WEBHOOK_AUTH_SECRET. 503 until that secret is set (so this
+        ships ahead of the RevenueCat project), 401 on mismatch.
+        """
+        assert container.control_plane is not None
+        secret = container.settings.revenuecat_webhook_auth_secret
+        if not secret:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="RevenueCat webhook is not configured",
+            )
+        # RevenueCat sends the dashboard-configured Authorization value verbatim.
+        # That value is conventionally "Bearer <token>"; accept either form by
+        # stripping an optional Bearer prefix, then constant-time compare against
+        # the bare secret.
+        provided = (authorization or "").strip()
+        if provided.startswith("Bearer "):
+            provided = provided[len("Bearer ") :].strip()
+        if not provided or not secrets.compare_digest(provided, secret):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid authorization",
+            )
+        payload = await request.json()
+        try:
+            return container.control_plane.apply_revenuecat_event(payload)
+        except ControlPlaneError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
+
     @app.post("/webhooks/mailgun/inbound")
     async def receive_mailgun_inbound(request: Request) -> dict:
         assert container.control_repository is not None
@@ -1613,6 +1676,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             mailgun_signing_key=container.settings.mailgun_webhook_signing_key,
             embeddings=_build_embedding_provider(container.settings),
             push_sender=container.push_sender,
+            fcm_sender=container.fcm_sender,
         )
         try:
             return handler.handle(payload)
@@ -1786,6 +1850,12 @@ def _build_container(settings: Settings) -> ServiceContainer:
         environment=settings.apns_environment,
     )
 
+    fcm_sender = build_fcm_sender_from_settings(
+        enabled=settings.fcm_enabled,
+        service_account_json=settings.fcm_service_account_json,
+        project_id=settings.firebase_project_id,
+    )
+
     x_client = XClient(
         api_key=settings.x_api_key,
         api_secret=settings.x_api_secret,
@@ -1805,6 +1875,7 @@ def _build_container(settings: Settings) -> ServiceContainer:
         control_repository=control_repository,
         control_plane=control_plane,
         push_sender=push_sender,
+        fcm_sender=fcm_sender,
         podcast_client=podcast_client,
         x_client=x_client,
         broadcast_repository=broadcast_repository,

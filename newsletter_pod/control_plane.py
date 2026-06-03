@@ -1468,6 +1468,14 @@ class ControlPlaneService:
         {"EXPIRED", "REVOKE", "REFUND", "GRACE_PERIOD_EXPIRED"}
     )
 
+    # RevenueCat (Play) event types → which Apple-style bucket they map to.
+    # CANCELLATION / BILLING_ISSUE / SUBSCRIPTION_PAUSED keep entitlement until
+    # EXPIRATION fires (the user paid through the period), so they're neither.
+    _REVENUECAT_ACTIVATE_TYPES = frozenset(
+        {"INITIAL_PURCHASE", "RENEWAL", "PRODUCT_CHANGE", "UNCANCELLATION", "NON_RENEWING_PURCHASE"}
+    )
+    _REVENUECAT_REVOKE_TYPES = frozenset({"EXPIRATION"})
+
     def apply_app_store_notification(self, payload: dict[str, Any]) -> dict[str, Any]:
         signed_payload = payload.get("signedPayload") or payload.get("signed_payload")
         if signed_payload:
@@ -1695,6 +1703,117 @@ class ControlPlaneService:
             "event_id": event.id,
         }
 
+    def apply_revenuecat_event(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Apply a RevenueCat webhook event (Android / Play Billing).
+
+        Auth is checked by the HTTP layer (constant-time compare of the
+        Authorization header against the configured secret). Mirrors the App
+        Store path: persist a BillingEventRecord first, then mutate the user's
+        SubscriptionRecord via the shared mutation helper. RevenueCat's
+        `app_user_id` IS our user id — the client calls Purchases.logIn(userId)
+        after sign-in so the two line up.
+        """
+        event = (payload or {}).get("event") or {}
+        rc_type = str(event.get("type") or "").upper()
+        app_user_id = event.get("app_user_id") or event.get("original_app_user_id")
+        product_id = event.get("product_id")
+        product_id = str(product_id) if product_id is not None else None
+        raw_entitlements = event.get("entitlement_ids")
+        entitlement_ids = raw_entitlements if isinstance(raw_entitlements, list) else []
+        expiration_at_ms = event.get("expiration_at_ms")
+        if not isinstance(expiration_at_ms, (int, float)):
+            expiration_at_ms = None
+
+        # Use RevenueCat's own event id as the record id so a retried/duplicate
+        # webhook collapses onto one audit record instead of stacking.
+        rc_event_id = event.get("id")
+        billing_event = BillingEventRecord(
+            id=str(rc_event_id) if rc_event_id else uuid4().hex,
+            user_id=app_user_id,
+            notification_type=rc_type or "unknown",
+            product_id=product_id,
+            raw_payload=payload,
+            created_at=utc_now(),
+        )
+        self.repository.save_billing_event(billing_event)
+
+        if not app_user_id:
+            logger.warning("RevenueCat event %s missing app_user_id", rc_type)
+            return {"accepted": True, "event_id": billing_event.id, "warning": "no app_user_id"}
+        if self.repository.get_user(app_user_id) is None:
+            logger.warning("RevenueCat event %s for unknown user: %s", rc_type, app_user_id)
+            return {"accepted": True, "event_id": billing_event.id, "warning": "user not found"}
+
+        subscription = self._get_subscription(app_user_id)
+
+        if rc_type in self._REVENUECAT_ACTIVATE_TYPES:
+            internal_type = "SUBSCRIBED"
+        elif rc_type in self._REVENUECAT_REVOKE_TYPES:
+            # Guard against out-of-order delivery: an EXPIRATION whose expiry
+            # predates the current known expiry (e.g. arriving after a RENEWAL)
+            # must not revoke an already-renewed subscription.
+            if (
+                expiration_at_ms is not None
+                and subscription.expires_at is not None
+                and expiration_at_ms < subscription.expires_at.timestamp() * 1000
+            ):
+                logger.info(
+                    "Ignoring stale RevenueCat EXPIRATION (event expiry < current) for user=%s",
+                    app_user_id,
+                )
+                return {"accepted": True, "event_id": billing_event.id, "stale": True}
+            internal_type = "EXPIRED"
+        else:
+            # CANCELLATION / BILLING_ISSUE / SUBSCRIPTION_PAUSED / TEST / etc. —
+            # recorded for audit, but entitlement is unchanged until EXPIRATION.
+            return {"accepted": True, "event_id": billing_event.id}
+
+        previous_tier = subscription.tier
+        previous_status = subscription.status
+        self._mutate_subscription_from_notification(
+            subscription,
+            notification_type=internal_type,
+            product_id=product_id,
+            expires_date_ms=expiration_at_ms,
+            revocation_date_ms=None,
+            tier=self._revenuecat_tier(product_id, entitlement_ids),
+        )
+        subscription.updated_at = utc_now()
+        self.repository.save_subscription(subscription)
+        self._log_subscription_mutation(
+            user_id=app_user_id,
+            subscription=subscription,
+            previous_tier=previous_tier,
+            previous_status=previous_status,
+            notification_type=rc_type or "unknown",
+            via="revenuecat_webhook",
+        )
+        return {"accepted": True, "event_id": billing_event.id}
+
+    def _revenuecat_tier(
+        self, product_id: Optional[str], entitlement_ids: list[str]
+    ) -> Optional[str]:
+        """Resolve tier from the RevenueCat product id, falling back to the
+        entitlement ids (configure RevenueCat entitlements named 'pro'/'max')."""
+        pro_ids = {
+            self.settings.revenuecat_pro_monthly_product_id,
+            self.settings.revenuecat_pro_annual_product_id,
+        }
+        max_ids = {
+            self.settings.revenuecat_max_monthly_product_id,
+            self.settings.revenuecat_max_annual_product_id,
+        }
+        if product_id in max_ids:
+            return "max"
+        if product_id in pro_ids:
+            return "pro"
+        lowered = {str(e).lower() for e in entitlement_ids}
+        if "max" in lowered:
+            return "max"
+        if "pro" in lowered:
+            return "pro"
+        return None
+
     def _mutate_subscription_from_notification(
         self,
         subscription: SubscriptionRecord,
@@ -1703,7 +1822,11 @@ class ControlPlaneService:
         product_id: Optional[str],
         expires_date_ms: Optional[int],
         revocation_date_ms: Optional[int],
+        tier: Optional[str] = None,
     ) -> None:
+        # `tier`, when provided, is the already-resolved tier (the RevenueCat
+        # path resolves it from its own product ids/entitlements). When None we
+        # fall back to mapping the App Store product id → tier (the Apple path).
         pro_ids = {
             self.settings.app_store_pro_monthly_product_id,
             self.settings.app_store_pro_annual_product_id,
@@ -1714,20 +1837,23 @@ class ControlPlaneService:
         }
 
         if notification_type in self._APP_STORE_ACTIVATE_TYPES:
-            if product_id in pro_ids:
-                subscription.tier = "pro"
-                subscription.status = "active"
-                subscription.product_id = product_id
-            elif product_id in max_ids:
-                subscription.tier = "max"
+            resolved_tier = tier
+            if resolved_tier is None:
+                if product_id in pro_ids:
+                    resolved_tier = "pro"
+                elif product_id in max_ids:
+                    resolved_tier = "max"
+            if resolved_tier in {"pro", "max"}:
+                subscription.tier = resolved_tier
                 subscription.status = "active"
                 subscription.product_id = product_id
             else:
                 logger.warning(
-                    "App Store notification %s referenced unknown product_id=%r — "
-                    "skipping tier mutation",
+                    "Activation notification %s referenced unknown product_id=%r "
+                    "(tier=%r) — skipping tier mutation",
                     notification_type,
                     product_id,
+                    tier,
                 )
         elif notification_type in self._APP_STORE_REVOKE_TYPES:
             subscription.tier = "free"

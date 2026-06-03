@@ -2831,3 +2831,114 @@ def test_delete_me_anonymizes_billing_events():
     # The billing row survives but is no longer linked to the user.
     assert repo._billing_events["evt-1"].user_id is None
     assert repo._billing_events["evt-1"].notification_type == "SUBSCRIBED"
+
+
+# ---------- device-token registration (APNs + FCM) ----------
+
+
+def test_register_device_token_android_preserves_case_and_platform():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("android-push-user", "ap@example.com")
+    )
+
+    fcm_token = "MixedCaseFCMToken" + "Zz9" * 20  # case-sensitive, >32 chars
+    resp = client.post(
+        "/v1/me/device-tokens",
+        headers=headers,
+        json={"token": fcm_token, "platform": "android"},
+    )
+    assert resp.status_code == 201
+    record = container.control_repository.get_device_token(resp.json()["token_id"])
+    assert record is not None
+    assert record.platform == "android"
+    # FCM tokens are case-sensitive — registration must NOT lowercase them.
+    assert record.token == fcm_token
+
+
+def test_register_device_token_ios_lowercases_hex():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("ios-push-user", "ip@example.com")
+    )
+
+    apns_token = "ABCDEF0123" * 7  # hex-ish, 70 chars
+    resp = client.post(
+        "/v1/me/device-tokens",
+        headers=headers,
+        json={"token": apns_token, "platform": "ios"},
+    )
+    assert resp.status_code == 201
+    record = container.control_repository.get_device_token(resp.json()["token_id"])
+    assert record.platform == "ios"
+    assert record.token == apns_token.lower()
+
+
+def test_register_device_token_rejects_unknown_platform():
+    _, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("bad-plat-user", "bp@example.com")
+    )
+    resp = client.post(
+        "/v1/me/device-tokens",
+        headers=headers,
+        json={"token": "x" * 64, "platform": "windows"},
+    )
+    assert resp.status_code == 400
+
+
+def test_register_device_token_defaults_to_ios():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("default-plat-user", "dp@example.com")
+    )
+    # platform omitted → defaults to ios (back-compat with the iOS client) and
+    # the hex token is lowercased.
+    resp = client.post(
+        "/v1/me/device-tokens", headers=headers, json={"token": "ABCDEF0123" * 7}
+    )
+    assert resp.status_code == 201
+    record = container.control_repository.get_device_token(resp.json()["token_id"])
+    assert record.platform == "ios"
+    assert record.token == ("ABCDEF0123" * 7).lower()
+
+
+def test_register_device_token_is_idempotent_on_reregister():
+    _, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("reg-idem-user", "ri@example.com")
+    )
+    body = {"token": "z" * 64, "platform": "android"}
+    first = client.post("/v1/me/device-tokens", headers=headers, json=body)
+    assert first.status_code == 201
+    assert first.json()["status"] == "registered"
+    again = client.post("/v1/me/device-tokens", headers=headers, json=body)
+    assert again.status_code == 201
+    assert again.json()["status"] == "refreshed"
+    assert again.json()["token_id"] == first.json()["token_id"]
+
+
+def test_register_device_tokens_same_string_different_platforms_coexist():
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("dual-plat-user", "dpx@example.com")
+    )
+    # An iOS token that normalizes to the same string as an Android token must
+    # NOT collide: platform is part of the idempotency key, so both persist with
+    # their correct platform (regression guard for the cross-platform collision).
+    shared = "a" * 64
+    ios = client.post(
+        "/v1/me/device-tokens", headers=headers, json={"token": shared, "platform": "ios"}
+    )
+    android = client.post(
+        "/v1/me/device-tokens",
+        headers=headers,
+        json={"token": shared, "platform": "android"},
+    )
+    assert ios.json()["token_id"] != android.json()["token_id"]
+    platforms = {
+        r.platform for r in container.control_repository.list_active_device_tokens(
+            list(container.control_repository._users.values())[0].id
+        )
+    }
+    assert platforms == {"ios", "android"}

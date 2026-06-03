@@ -12,6 +12,14 @@ workflows:
         - pattern: main
           include: true
           source: true
+    # Don't rebuild iOS for Flutter-only commits (the Android workflow owns
+    # those). `when` is a sibling of `triggering`. A build is skipped only when
+    # EVERY changed file matches an exclude, so mixed iOS+Flutter commits still
+    # build iOS.
+    when:
+      changeset:
+        excludes:
+          - 'flutter/**'
     environment:
       ios_signing:
         # ios_signing handles the main app's cert + profile install into
@@ -297,3 +305,114 @@ workflows:
       - ios/build/onboarding.xcresult
       - ios/build/screenshots.zip
       - ios/build/screenshots/*.png
+
+  android-playstore:
+    name: Android Play Store (internal)
+    max_build_duration: 60
+    instance_type: linux_x2
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+    # Only build Android for Flutter / design-token changes (the iOS workflow
+    # owns iOS-only commits). `when` is a sibling of `triggering`.
+    when:
+      changeset:
+        includes:
+          - 'flutter/**'
+          - 'design-tokens/**'
+    environment:
+      # Configure these in the Codemagic UI before the first run:
+      #  - an android_signing keystore reference named "clawcast_upload_keystore"
+      #    (upload keystore + store password + key alias + key password)
+      #  - a variable group "google_play" holding GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+      #    (Play Developer API service-account JSON). Optional in that group:
+      #    REVENUECAT_ANDROID_KEY + ENABLE_PURCHASES_REVENUECAT to switch billing on.
+      android_signing:
+        - clawcast_upload_keystore
+      groups:
+        - google_play
+      flutter: stable
+      vars:
+        PACKAGE_NAME: "com.newsletterpod.app"
+    scripts:
+      - name: Build design tokens (refresh + staleness guard)
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          # The design-tokens submodule (TheAntelope/clawcast-tokens) isn't
+          # cloned by default — pull it, build, and refresh the committed Dart copy.
+          git submodule update --init --recursive
+          cd "$CM_BUILD_DIR/design-tokens"
+          npm ci
+          npm run build
+          cp dist/design_tokens.dart "$CM_BUILD_DIR/flutter/lib/design_tokens.dart"
+          cd "$CM_BUILD_DIR"
+          if ! git diff --exit-code flutter/lib/design_tokens.dart; then
+            echo "ERROR: flutter/lib/design_tokens.dart is stale. Run 'npm run build' in design-tokens/, copy dist/design_tokens.dart to flutter/lib/, and commit."
+            exit 1
+          fi
+      - name: Materialize release keystore key.properties
+        script: |
+          set +x  # never echo the credential values into the build log
+          # Codemagic sets CM_KEYSTORE_PATH/CM_KEYSTORE_PASSWORD + CM_KEY_ALIAS/
+          # CM_KEY_PASSWORD when the android_signing keystore reference is
+          # attached. build.gradle.kts reads flutter/android/key.properties for
+          # the release signingConfig. (key.properties + *.jks are gitignored.)
+          {
+            echo "storePassword=$CM_KEYSTORE_PASSWORD"
+            echo "keyPassword=$CM_KEY_PASSWORD"
+            echo "keyAlias=$CM_KEY_ALIAS"
+            echo "storeFile=$CM_KEYSTORE_PATH"
+          } > "$CM_BUILD_DIR/flutter/android/key.properties"
+          chmod 600 "$CM_BUILD_DIR/flutter/android/key.properties"
+          # Print the release/upload-key fingerprints (NOT secret) so they can be
+          # registered in Firebase → so Google Sign-In works on the Play build.
+          keytool -list -v -keystore "$CM_KEYSTORE_PATH" -storepass "$CM_KEYSTORE_PASSWORD" \
+            -alias "$CM_KEY_ALIAS" 2>/dev/null | grep -E "SHA1:|SHA256:" || true
+      - name: Determine versionCode
+        script: |
+          # Android versionCode must strictly increase. Prefer Play's latest + 1;
+          # fall back to Codemagic's monotonic build counter (covers the first
+          # upload, when Play has no build yet). stderr is kept visible so a
+          # broken service account surfaces in the log instead of silently
+          # falling back to a too-low number.
+          LATEST=$(google-play get-latest-build-number --package-name "$PACKAGE_NAME" || echo "")
+          case "$LATEST" in ''|*[!0-9]*) LATEST=0 ;; esac
+          BUILD_NUMBER=$((LATEST + 1))
+          if [ "${PROJECT_BUILD_NUMBER:-0}" -gt "$BUILD_NUMBER" ]; then
+            BUILD_NUMBER=$PROJECT_BUILD_NUMBER
+          fi
+          # Monotonic guard: if Play already has builds, the chosen code MUST
+          # exceed the latest, or Play will reject the upload after a 20-min build.
+          if [ "$LATEST" -gt 0 ] && [ "$BUILD_NUMBER" -le "$LATEST" ]; then
+            echo "ERROR: versionCode $BUILD_NUMBER <= Play latest $LATEST — refusing to build a doomed upload." >&2
+            exit 1
+          fi
+          echo "Using versionCode=$BUILD_NUMBER (play_latest=$LATEST counter=${PROJECT_BUILD_NUMBER:-0})"
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$CM_ENV"
+      - name: Build signed app bundle
+        script: |
+          cd "$CM_BUILD_DIR/flutter"
+          flutter pub get
+          # Internal-testing builds are the REAL app, so enable Google sign-in.
+          # Purchases stay off until REVENUECAT_ANDROID_KEY + the flag are set
+          # (e.g. via the google_play variable group).
+          flutter build appbundle --release \
+            --build-number="$BUILD_NUMBER" \
+            --dart-define=ENABLE_GOOGLE_SIGN_IN=true \
+            --dart-define=ENABLE_PURCHASES_REVENUECAT="${ENABLE_PURCHASES_REVENUECAT:-false}" \
+            --dart-define=REVENUECAT_ANDROID_KEY="${REVENUECAT_ANDROID_KEY:-}"
+    artifacts:
+      - flutter/build/app/outputs/bundle/release/*.aab
+      - flutter/build/app/outputs/mapping/release/mapping.txt
+    publishing:
+      google_play:
+        credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+        track: internal
+        # Non-production track: don't submit for review (avoids the "changes
+        # pending review" state on internal/alpha/beta).
+        changes_not_sent_for_review: true

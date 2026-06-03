@@ -28,7 +28,7 @@ from .interest_seeds import (
     is_user_forwarded_mail,
     seed_user_interest,
 )
-from .push import PushSender, send_substack_verification_push
+from .push import FcmSender, PushSender, send_substack_verification_push
 from .substack import (
     extract_confirm_url,
     fetch_confirm_url,
@@ -211,6 +211,9 @@ class InboundEmailHandler:
     # device(s). Optional: when None, push is silently skipped — the code
     # still surfaces via the Sources screen as Phase A.
     push_sender: Optional[PushSender] = None
+    # FCM sender (Android counterpart to push_sender). Optional: when None,
+    # android tokens are skipped while iOS still pushes via push_sender.
+    fcm_sender: Optional[FcmSender] = None
 
     def handle(self, payload: dict[str, str]) -> dict[str, str]:
         """Process one Mailgun multipart-form payload.
@@ -457,6 +460,7 @@ class InboundEmailHandler:
         try:
             send_substack_verification_push(
                 sender=self.push_sender,
+                fcm_sender=self.fcm_sender,
                 repository=self.repository,
                 user_id=user.id,
                 code=code,

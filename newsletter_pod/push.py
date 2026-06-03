@@ -22,11 +22,12 @@ of `_send_payload` is all that's needed.
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 import jwt
@@ -50,6 +51,10 @@ _APNS_HOSTS = {
 # typical sub-second response and tight enough that a hung TCP connection
 # can't stall the inbound webhook for long.
 _PUSH_TIMEOUT_SECONDS = 10.0
+
+# FCM HTTP v1 send endpoint + the OAuth scope a service account needs to call it.
+_FCM_SEND_URL = "https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
+_FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 
 
 class PushConfigError(Exception):
@@ -152,6 +157,117 @@ class PushResult:
     token_invalid: bool
 
 
+class FcmConfigError(Exception):
+    """Raised when an FCM send is attempted but FCM is not properly configured."""
+
+
+@dataclass
+class FcmSender:
+    """Thread-safe FCM HTTP v1 sender (the Android counterpart to [PushSender]).
+
+    Auth is an OAuth2 access token minted from the Firebase service account
+    (scope ``firebase.messaging``); google-auth caches + refreshes it, so we
+    just ask for ``credentials.token`` and refresh when it goes invalid. Tests
+    inject [access_token_provider] to avoid needing real Google credentials.
+    """
+
+    project_id: str
+    service_account_info: dict
+    # Tests set this to bypass google-auth; production leaves it None and mints
+    # a token from the service account.
+    access_token_provider: Optional[Callable[[], str]] = None
+    _credentials: Optional[object] = None
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+    _http_client: Optional[httpx.Client] = None
+
+    def _get_client(self) -> httpx.Client:
+        if self._http_client is None:
+            self._http_client = httpx.Client(timeout=_PUSH_TIMEOUT_SECONDS)
+        return self._http_client
+
+    def _access_token(self) -> str:
+        if self.access_token_provider is not None:
+            return self.access_token_provider()
+        # Imported lazily so the module loads even where google-auth isn't
+        # present, and so the no-op (disabled) path never touches it.
+        from google.auth.transport.requests import Request as GoogleAuthRequest
+        from google.oauth2 import service_account
+
+        with self._lock:
+            creds = self._credentials
+            if creds is None:
+                creds = service_account.Credentials.from_service_account_info(
+                    self.service_account_info, scopes=[_FCM_SCOPE]
+                )
+                self._credentials = creds
+            if not creds.valid:
+                creds.refresh(GoogleAuthRequest())
+            return creds.token
+
+    def send(
+        self,
+        *,
+        device_token: str,
+        notification: dict,
+        data: Optional[dict] = None,
+        collapse_key: Optional[str] = None,
+    ) -> "PushResult":
+        url = _FCM_SEND_URL.format(project_id=self.project_id)
+        message: dict = {
+            "token": device_token,
+            "notification": notification,
+            # FCM data values must be strings.
+            "data": {k: str(v) for k, v in (data or {}).items()},
+            "android": {"priority": "high"},
+        }
+        if collapse_key:
+            message["android"]["collapse_key"] = collapse_key
+        headers = {
+            "Authorization": f"Bearer {self._access_token()}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            response = self._get_client().post(
+                url, json={"message": message}, headers=headers
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("FCM send raised: %s token_prefix=%s", exc, device_token[:8])
+            return PushResult(status_code=0, reason="transport_error", token_invalid=False)
+
+        if response.status_code == 200:
+            return PushResult(status_code=200, reason=None, token_invalid=False)
+
+        # FCM v1 errors look like
+        # {"error": {"status": "NOT_FOUND", "details": [{"errorCode": "UNREGISTERED"}]}}
+        reason: Optional[str] = None
+        error_codes: set[str] = set()
+        try:
+            body = response.json() or {}
+            error = body.get("error") or {}
+            reason = error.get("status")
+            for detail in error.get("details") or []:
+                if isinstance(detail, dict) and detail.get("errorCode"):
+                    error_codes.add(detail["errorCode"])
+        except Exception:
+            reason = None
+        # Only UNREGISTERED (or a bare 404) reliably means the token is dead.
+        # INVALID_ARGUMENT can also mean a malformed message (our bug), so we
+        # log it but do NOT deregister on it.
+        token_invalid = response.status_code == 404 or "UNREGISTERED" in error_codes
+        if not token_invalid:
+            logger.warning(
+                "FCM send non-2xx: status=%s reason=%s codes=%s token_prefix=%s",
+                response.status_code,
+                reason,
+                error_codes or None,
+                device_token[:8],
+            )
+        return PushResult(
+            status_code=response.status_code, reason=reason, token_invalid=token_invalid
+        )
+
+
 def build_substack_verification_payload(*, code: str, pub_title: str) -> dict:
     """Construct the APNs JSON body for a Substack verification-code push.
 
@@ -184,17 +300,21 @@ def send_substack_verification_push(
     code: str,
     pub_title: str,
     pub_url: Optional[str] = None,
+    fcm_sender: Optional["FcmSender"] = None,
 ) -> dict:
     """Send the Substack verification-code push to every active device the
-    user has. No-ops with an INFO log when the sender is None (APNs disabled
-    in this environment) so callers can invoke unconditionally.
+    user has, routing iOS tokens through APNs ([sender]) and Android tokens
+    through FCM ([fcm_sender]). No-ops with an INFO log when BOTH senders are
+    None (push disabled in this environment) so callers can invoke
+    unconditionally. A token whose platform has no configured sender is skipped.
 
-    Returns a small dict useful for tests / logs:
+    Returns a small dict useful for tests / logs (attempted counts only tokens
+    we actually tried — i.e. had a sender for):
       {"attempted": N, "delivered": K, "deregistered": M}
     """
-    if sender is None:
+    if sender is None and fcm_sender is None:
         logger.info(
-            "APNs sender unavailable; skipping verification-code push: user=%s",
+            "Push senders unavailable; skipping verification-code push: user=%s",
             user_id,
         )
         return {"attempted": 0, "delivered": 0, "deregistered": 0}
@@ -207,24 +327,63 @@ def send_substack_verification_push(
         )
         return {"attempted": 0, "delivered": 0, "deregistered": 0}
 
-    payload = build_substack_verification_payload(code=code, pub_title=pub_title)
+    apns_payload = build_substack_verification_payload(code=code, pub_title=pub_title)
     if pub_url:
-        payload["pub_url"] = pub_url
+        apns_payload["pub_url"] = pub_url
 
+    # FCM uses a notification block + a string-valued data map rather than the
+    # APNs `aps` dict; the Android handler reads `data` to act on the tap.
+    fcm_notification = {
+        "title": "Substack verification code",
+        "body": f"{code} for {pub_title} — expires in ~15 min. Tap to copy.",
+    }
+    fcm_data: dict = {
+        "type": "substack_verification",
+        "code": code,
+        "pub_title": pub_title,
+    }
+    if pub_url:
+        fcm_data["pub_url"] = pub_url
+
+    attempted = 0
     delivered = 0
     deregistered = 0
-    # collapse_id ensures retry storms (e.g. user rapidly hitting Resend on
-    # Substack) result in a single visible notification, replacing earlier
-    # codes with the freshest one.
+    # A stable collapse id ensures retry storms (e.g. rapidly hitting Resend)
+    # show a single notification with the freshest code, on both platforms.
     collapse_id = f"substack-verify-{user_id[:8]}"
     for record in tokens:
-        result = sender.send(
-            device_token=record.token,
-            payload=payload,
-            push_type="alert",
-            priority=10,
-            collapse_id=collapse_id,
-        )
+        platform = (record.platform or "ios").lower()
+        if platform == "android":
+            if fcm_sender is None:
+                logger.info(
+                    "FCM sender unavailable; skipping android token: user=%s token_prefix=%s",
+                    user_id,
+                    record.token[:8],
+                )
+                continue
+            result = fcm_sender.send(
+                device_token=record.token,
+                notification=fcm_notification,
+                data=fcm_data,
+                collapse_key=collapse_id,
+            )
+        else:
+            if sender is None:
+                logger.info(
+                    "APNs sender unavailable; skipping ios token: user=%s token_prefix=%s",
+                    user_id,
+                    record.token[:8],
+                )
+                continue
+            result = sender.send(
+                device_token=record.token,
+                payload=apns_payload,
+                push_type="alert",
+                priority=10,
+                collapse_id=collapse_id,
+            )
+
+        attempted += 1
         if result.status_code == 200:
             delivered += 1
             continue
@@ -233,12 +392,13 @@ def send_substack_verification_push(
             repository.save_device_token(invalidated)
             deregistered += 1
             logger.info(
-                "Deregistered APNs token after 410/BadDeviceToken: user=%s token_prefix=%s",
+                "Deregistered device token after invalid response: user=%s platform=%s token_prefix=%s",
                 user_id,
+                platform,
                 record.token[:8],
             )
 
-    return {"attempted": len(tokens), "delivered": delivered, "deregistered": deregistered}
+    return {"attempted": attempted, "delivered": delivered, "deregistered": deregistered}
 
 
 def build_push_sender_from_settings(
@@ -270,3 +430,32 @@ def build_push_sender_from_settings(
         bundle_id=bundle_id,
         environment=environment,
     )
+
+
+def build_fcm_sender_from_settings(
+    *,
+    enabled: bool,
+    service_account_json: Optional[str],
+    project_id: Optional[str],
+) -> Optional[FcmSender]:
+    """Factory that returns None when FCM isn't fully configured (disabled, or
+    no service-account JSON / project id), mirroring [build_push_sender_from_settings].
+    The container builder decides once at startup whether the sender is alive.
+    """
+    if not enabled:
+        return None
+    if not (service_account_json and project_id):
+        logger.info(
+            "FCM enabled but config incomplete (service_account=%s project_id=%s); FCM sender disabled",
+            bool(service_account_json),
+            bool(project_id),
+        )
+        return None
+    try:
+        info = json.loads(service_account_json)
+    except (ValueError, TypeError) as exc:
+        logger.warning(
+            "FCM service-account JSON is not valid JSON; FCM sender disabled: %s", exc
+        )
+        return None
+    return FcmSender(project_id=project_id, service_account_info=info)
