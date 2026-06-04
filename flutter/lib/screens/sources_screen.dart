@@ -128,6 +128,10 @@ class _SourcesScreenState extends State<SourcesScreen> {
     final inbound = _app.me?.user.inboundAddress;
     return Scaffold(
       appBar: AppBar(
+        leading: const Padding(
+          padding: EdgeInsets.all(8),
+          child: ClawcastLogo(size: 28),
+        ),
         title: const Text('Sources'),
         actions: [
           IconButton(

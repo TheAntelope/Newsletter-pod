@@ -41,7 +41,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Library')),
+      appBar: AppBar(
+        leading: const Padding(
+          padding: EdgeInsets.all(8),
+          child: ClawcastLogo(size: 28),
+        ),
+        title: const Text('Library'),
+      ),
       body: SafeArea(
         child: FutureBuilder<EpisodesEnvelope>(
           future: _future,
@@ -55,10 +61,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
             final episodes = snapshot.data!.episodes;
             if (episodes.isEmpty) {
               return Center(
-                child: Text(
-                  'No episodes yet.',
-                  style: DesignTokens.typographyBody
-                      .copyWith(color: DesignTokens.colorMuted),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const ClawcastLogo(size: 56),
+                    const SizedBox(height: DesignTokens.spacingM),
+                    Text(
+                      'No episodes yet.',
+                      style: DesignTokens.typographyBody
+                          .copyWith(color: DesignTokens.colorMuted),
+                    ),
+                  ],
                 ),
               );
             }

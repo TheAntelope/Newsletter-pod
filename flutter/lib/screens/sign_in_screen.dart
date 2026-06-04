@@ -82,6 +82,8 @@ class _SignInScreenState extends State<SignInScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const SizedBox(height: DesignTokens.spacingXl),
+                    const ClawcastLogo(size: 72),
+                    const SizedBox(height: DesignTokens.spacingL),
                     const MetaLabel('Your daily briefing'),
                     const SizedBox(height: DesignTokens.spacingS),
                     Text(
