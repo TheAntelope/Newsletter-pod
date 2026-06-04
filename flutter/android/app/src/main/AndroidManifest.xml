@@ -54,5 +54,17 @@
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="https"/>
         </intent>
+        <!-- "Open in Podcast Addict": detect the app + hand it the feed via its
+             podcastaddict:// subscribe scheme, and fall back to the Play Store
+             (market://) to install it when it isn't present. -->
+        <package android:name="com.bambuna.podcastaddict"/>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="podcastaddict"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="market"/>
+        </intent>
     </queries>
 </manifest>

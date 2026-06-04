@@ -3,14 +3,14 @@ import 'package:flutter/services.dart';
 
 import '../api/models.dart';
 import '../design_tokens.dart';
-import '../services/link_launcher.dart';
+import '../services/podcast_addict.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
 
 /// Private RSS feed access. Editorial rebuild of the iOS `FeedAccessView`: a
-/// "add to your podcast app" step, the copyable feed URL, and the latest-run
-/// status. (The Apple-Podcasts deep link is iOS-only; on Android we surface the
-/// URL to paste into any podcast app.)
+/// one-tap "open in Podcast Addict" step (our chosen Android player — it's
+/// installed automatically if missing, then the feed is added on return), with
+/// the copyable feed URL below as a fallback for any other podcast app.
 class FeedAccessScreen extends StatefulWidget {
   const FeedAccessScreen({super.key});
 
@@ -56,27 +56,29 @@ class _FeedAccessScreenState extends State<FeedAccessScreen> {
                   children: [
                     const MetaLabel('Step 1'),
                     Text(
-                      'Add to your podcast app',
+                      'Open in Podcast Addict',
                       style: DesignTokens.typographyTitle
                           .copyWith(color: DesignTokens.colorInk),
                     ),
                     Text(
                       'Your briefings are delivered as a private podcast feed. '
-                      'Add it to the player you already use.',
+                      'Tap below to add it to Podcast Addict — we’ll install the '
+                      'app for you if you don’t have it yet.',
                       style: DesignTokens.typographyBody
                           .copyWith(color: DesignTokens.colorInkSoft),
                     ),
                     AmberButton.filled(
-                      label: 'Open feed',
-                      icon: Icons.open_in_new,
-                      onPressed: () => openExternal(context, feed.feedUrl),
+                      label: 'Open in Podcast Addict',
+                      icon: Icons.podcasts,
+                      onPressed: () =>
+                          PodcastAddict.subscribe(context, feed.feedUrl),
                     ),
                   ],
                 ),
                 const SizedBox(height: DesignTokens.spacingL),
                 EditorialCard(
                   children: [
-                    const MetaLabel('Step 2 · Add by URL'),
+                    const MetaLabel('Or · Use another podcast app'),
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(DesignTokens.spacingS),

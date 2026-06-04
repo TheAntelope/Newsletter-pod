@@ -155,3 +155,31 @@ webhook, FCM push + backend branch, and the path-filtered Codemagic → Play Sto
 > `flutter analyze` clean and widget tests green, committing per screen. Stay on the existing
 > `feature/phase2-flutter-android` branch. Do NOT touch the uncommitted WIP
 > (`AppViewModel.swift`, `scripts/looker/build_dashboard.py`).
+
+## Android podcast delivery (decided 2026-06-04)
+
+Android has no guaranteed pre-installed podcast inbox (unlike Apple Podcasts on iOS), so the
+iOS "hand a private RSS feed to the OS player" model doesn't transfer for free. Decision
+(memory: `android_delivery_player_decision`):
+
+- **Chosen + shipped path (option B): "Open in Podcast Addict".** ClawCast stays a setup/control
+  app on Android; Podcast Addict is the listening surface. Chosen for largest Android install
+  base + private-feed-by-URL support. Implemented in `flutter/lib/services/podcast_addict.dart`:
+  - One tap → `podcastaddict://<feed-without-https>` subscribe deep link.
+  - If not installed → bounce to Play Store (`market://details?id=com.bambuna.podcastaddict`),
+    remember the feed, and **auto-retry the deep link on app resume** (`RootView` lifecycle
+    observer) so the feed is added when the user returns — no second tap. AndroidManifest
+    `<queries>` declare the `podcastaddict`/`market` schemes + package for Android 11+ visibility.
+  - Wired into `FeedAccessScreen` Step 1; raw feed URL kept below as a generic fallback.
+  - **Verify on a real device:** the `podcastaddict://` subscribe scheme comes from the community
+    scheme registry — confirm it actually subscribes (vs just opens the app) on the first build.
+- **Deferred (option A): in-app Flutter player.** `just_audio` + `audio_service` (MediaSession,
+  background, lock-screen, resume, Android Auto) playing the token-gated
+  `/media/{token}/{episode_id}.mp3`. Not built now. **Revisit when** we need to own the listening
+  surface to close the swipe-learning / feedback loop (plays are invisible inside Podcast Addict)
+  or the two-app model confuses users. **Blocker:** `LibraryEpisodeDto`
+  (`flutter/lib/api/models.dart`) carries no audio URL — add a per-episode token-gated MP3 URL to
+  the `/v1/me/episodes` payload first.
+- **Spotify: not viable** for personal delivery (RSS ingestion = public shows only; no API to
+  inject audio into a user's library). Any Spotify presence would be a separate *public* sample
+  show, never the personal-delivery path.
