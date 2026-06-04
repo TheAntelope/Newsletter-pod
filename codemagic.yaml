@@ -339,6 +339,15 @@ workflows:
       vars:
         PACKAGE_NAME: "com.newsletterpod.app"
     scripts:
+      - name: Report current Play internal track (read-only)
+        script: |
+          # Ambient confirmation: logs which versionCode is currently LIVE to
+          # internal testers BEFORE this build publishes. So each build's log
+          # shows the prior release landed (status=completed). To confirm THIS
+          # build went live, trigger the `android-play-status` workflow after
+          # it finishes (publishing runs after scripts, so it can't self-check
+          # within the same build). Non-fatal — never blocks a release.
+          python3 "$CM_BUILD_DIR/scripts/check_play_track.py" --track internal || true
       - name: Build design tokens (refresh + staleness guard)
         script: |
           set -e
@@ -417,3 +426,23 @@ workflows:
         # the changesNotSentForReview param for an app that hasn't been through
         # production review yet ("Changes are sent for review automatically...").
         # Re-add it only once the app is established in production.
+
+  android-play-status:
+    name: Android Play status (read-only)
+    max_build_duration: 10
+    instance_type: linux_x2
+    # Manual-only. Trigger this AFTER an android-playstore build finishes to
+    # get an authoritative confirmation that the new versionCode is live to
+    # internal testers (status=completed). The main build can't self-check —
+    # Codemagic runs publishing after all scripts — so this is the post-publish
+    # verification, decoupled from the build/publish ordering. No build, no
+    # signing, no upload: it only reads the track via the Play Developer API.
+    environment:
+      groups:
+        - google_play
+      vars:
+        PACKAGE_NAME: "com.newsletterpod.app"
+    scripts:
+      - name: Report Play internal track release status
+        script: |
+          python3 "$CM_BUILD_DIR/scripts/check_play_track.py" --track internal

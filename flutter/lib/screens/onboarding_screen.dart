@@ -43,6 +43,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         'An anchor plus a different guest voice each day.'),
   ];
 
+  // Style options, mirrored from the podcast-settings editor so the two stay in
+  // step. The onboarding defaults lean playful + dad jokes (see _tone/_humor).
+  static const _toneOptions = [
+    ('calm_analyst', 'Calm analyst'),
+    ('warm_friendly', 'Warm & friendly'),
+    ('snappy_news', 'Snappy news'),
+    ('playful', 'Playful'),
+  ];
+
+  static const _humorOptions = [
+    ('none', 'None'),
+    ('dry_wit', 'Dry wit'),
+    ('dad_jokes', 'Dad jokes'),
+  ];
+
   /// Curated icon + display order for the catalog's topic categories. The chips
   /// shown are the intersection of this map with the topics actually present in
   /// the catalog, so new catalog topics fall back to a default glyph rather than
@@ -74,6 +89,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Future<CatalogEnvelope>? _catalog;
   String? _anchorVoiceId;
   String? _commentatorVoiceId;
+  // Style step (right after voice). Defaults to a playful show with dad jokes.
+  String _tone = 'playful';
+  String _humor = 'dad_jokes';
+  int _keyFindings = 3;
+  bool _greeting = true;
+  bool _topTakeaways = true;
   bool _includeWeather = false;
   // "Use my current location" flow for the weather city. Mirrors the iOS
   // LocationResolver states (idle / requesting / denied / error / resolved).
@@ -103,27 +124,91 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
-  /// Persist the picked topics as enabled sources (pod tuning), then drop into
-  /// the dashboard. The source write is best-effort — onboarding completes even
-  /// if it fails, since the user can still tune from the Sources tab.
+  /// Persist the picked topics as enabled sources (pod tuning) and the onboarding
+  /// picks onto the profile, then drop into the dashboard. Neither write blocks
+  /// finishing — the user can still tune in-app — but a failure is surfaced (not
+  /// silently swallowed) so they know which picks didn't save.
   Future<void> _finish() async {
     final app = AppScope.of(context);
-    await _persistTopicSources(app);
+    final messenger = ScaffoldMessenger.of(context);
+    final failed = <String>[
+      if (!await _persistTopicSources(app)) 'topics',
+      if (!await _persistProfile(app)) 'show settings',
+    ];
+    if (mounted && failed.isNotEmpty) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            "Couldn't save your ${failed.join(' and ')} during setup — "
+            'open the app to set them.',
+          ),
+        ),
+      );
+    }
     if (!mounted) return;
     app.completeOnboarding();
   }
 
-  Future<void> _persistTopicSources(AppState app) async {
+  /// Returns true on success (including the no-op empty case), false if the
+  /// source write failed — the caller surfaces that.
+  Future<bool> _persistTopicSources(AppState app) async {
     try {
       final catalog = await (_catalog ??= app.repository.fetchCatalog());
       final payloads = catalog.sources
           .where((s) => s.topic != null && _selectedTopics.contains(s.topic))
           .map((s) => SourcePayload(sourceId: s.sourceId, isCustom: false))
           .toList();
-      if (payloads.isEmpty) return;
+      if (payloads.isEmpty) return true;
       await app.repository.replaceSources(payloads);
+      return true;
     } catch (_) {
-      // Best-effort; never block finishing onboarding.
+      return false;
+    }
+  }
+
+  /// Persist the onboarding picks onto the podcast profile + schedule. We patch
+  /// the loaded profile rather than build one from scratch so server-managed
+  /// fields (title, host names, guidance, duration) survive untouched. Like the
+  /// source write, this never blocks finishing onboarding; returns true on
+  /// success, false on failure so the caller can surface it.
+  Future<bool> _persistProfile(AppState app) async {
+    try {
+      final config = await app.repository.fetchPodcastConfig();
+      final loaded = config.profile;
+      final weather = _weatherController.text.trim();
+      final updated = PodcastProfileDto(
+        title: loaded.title,
+        formatPreset: _showPreset,
+        hostPrimaryName: loaded.hostPrimaryName,
+        hostSecondaryName: loaded.hostSecondaryName,
+        guestNames: loaded.guestNames,
+        desiredDurationMinutes: loaded.desiredDurationMinutes,
+        voiceId: _anchorVoiceId ?? loaded.voiceId,
+        secondaryVoiceId: _isTwoHost
+            ? (_commentatorVoiceId ?? loaded.secondaryVoiceId)
+            : loaded.secondaryVoiceId,
+        tone: _tone,
+        keyFindingsCount: _keyFindings,
+        humorStyle: _humor,
+        personalizedGreeting: _greeting,
+        includeTopTakeaways: _topTakeaways,
+        includeWeather: _includeWeather,
+        weatherLocation: weather.isEmpty ? null : weather,
+        customGuidance: loaded.customGuidance,
+        customGuidancePresetId: loaded.customGuidancePresetId,
+      );
+      await app.repository.updatePodcastConfig(updated);
+
+      // Preserve the server's timezone; only override the days + delivery time.
+      final schedule = await app.repository.fetchSchedule();
+      await app.repository.updateSchedule(
+        timezone: schedule.schedule.timezone,
+        weekdays: _selectedDays.toList(),
+        localTime: _formatTime(_deliveryTime),
+      );
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -192,6 +277,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     switch (_step) {
       case 0:
         return _shell(
+          leading: const ClawcastLogo(size: 64),
           title: 'Welcome to ClawCast',
           subtitle:
               'A daily briefing podcast, built from the sources you choose. '
@@ -208,6 +294,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         );
       case 2:
         return _shell(
+          title: 'Style your show',
+          subtitle:
+              'Set the feel of your briefing — tone, humor, how many takeaways, '
+              'and whether to open with the local weather. You can change any of '
+              'this later from Podcast settings.',
+          children: [_styleStep()],
+        );
+      case 3:
+        return _shell(
           title: 'What should we call you?',
           subtitle: "We'll greet you by name at the top of each episode.",
           children: [
@@ -218,7 +313,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
           ],
         );
-      case 3:
+      case 4:
         return _shell(
           title: 'Pick your topics',
           subtitle:
@@ -227,7 +322,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               'tune any time from the Sources tab.',
           children: [_topicsStep()],
         );
-      case 4:
+      case 5:
         return _shell(
           title: 'Tune your pod',
           subtitle:
@@ -240,7 +335,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
           ],
         );
-      case 5:
+      case 6:
         return _shell(
           title: 'Add your Substacks',
           subtitle:
@@ -248,13 +343,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               'and they fold into your pod automatically.',
           children: const [_InboundAddressCard()],
         );
-      case 6:
+      case 7:
         return _shell(
           title: 'Choose a format',
           subtitle: 'How should your briefing be hosted?',
           children: [_showStep()],
         );
-      case 7:
+      case 8:
         return _shell(
           title: _isTwoHost ? 'Add a co-host' : 'Your host',
           subtitle: _isTwoHost
@@ -264,20 +359,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   'here if you like.',
           children: [_coHostStep()],
         );
-      case 8:
+      case 9:
         return _shell(
           title: 'Set your schedule',
           subtitle:
               'Choose which mornings your pod is ready. We default to weekdays '
               'at 07:00.',
           children: [_scheduleEditor()],
-        );
-      case 9:
-        return _shell(
-          title: 'Add a weather note?',
-          subtitle:
-              'Open each episode with a quick local weather line, if you like.',
-          children: [_weatherEditor()],
         );
       default:
         return _shell(
@@ -294,6 +382,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     required String title,
     required String subtitle,
     required List<Widget> children,
+    Widget? leading,
   }) {
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(
@@ -305,6 +394,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (leading != null) ...[
+            leading,
+            const SizedBox(height: DesignTokens.spacingL),
+          ],
           Text(
             title,
             style: DesignTokens.typographyDisplay
@@ -536,6 +629,63 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
           ],
         ),
+      ],
+    );
+  }
+
+  /// The Style step, shown right after the voice pick. Mirrors the Style + Weather
+  /// sections of the podcast-settings editor: tone, humor, key-takeaway count,
+  /// greeting + top-takeaways toggles, then the weather note (folded in here
+  /// rather than a separate late step).
+  Widget _styleStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        EditorialCard(
+          children: [
+            const _FieldLabel('Tone'),
+            _PillGroup(
+              options: _toneOptions,
+              selectedId: _tone,
+              onSelect: (id) => setState(() => _tone = id),
+            ),
+            const _FieldLabel('Humor'),
+            _PillGroup(
+              options: _humorOptions,
+              selectedId: _humor,
+              onSelect: (id) => setState(() => _humor = id),
+            ),
+            const _FieldLabel('Key takeaways'),
+            Row(
+              children: [
+                for (var n = 3; n <= 7; n++)
+                  Padding(
+                    padding: const EdgeInsets.only(right: DesignTokens.spacingS),
+                    child: _NumberPill(
+                      value: n,
+                      selected: _keyFindings == n,
+                      onTap: () => setState(() => _keyFindings = n),
+                    ),
+                  ),
+              ],
+            ),
+            const EditorialDivider(),
+            _SwitchRow(
+              label: 'Greet me by name',
+              value: _greeting,
+              onChanged: (v) => setState(() => _greeting = v),
+            ),
+            _SwitchRow(
+              label: 'Include top takeaways',
+              value: _topTakeaways,
+              onChanged: (v) => setState(() => _topTakeaways = v),
+            ),
+          ],
+        ),
+        const SizedBox(height: DesignTokens.spacingL),
+        const MetaLabel('Weather'),
+        const SizedBox(height: DesignTokens.spacingM),
+        _weatherEditor(),
       ],
     );
   }
@@ -843,6 +993,141 @@ class _TopicChip extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A wrapped row of single-select choice pills (tone / humor). Mirrors the
+/// podcast-settings `_PillGroup` so the two surfaces match.
+class _PillGroup extends StatelessWidget {
+  const _PillGroup({
+    required this.options,
+    required this.selectedId,
+    required this.onSelect,
+  });
+
+  final List<(String, String)> options;
+  final String selectedId;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: DesignTokens.spacingS,
+      runSpacing: DesignTokens.spacingS,
+      children: [
+        for (final opt in options)
+          _ChoicePill(
+            label: opt.$2,
+            selected: selectedId == opt.$1,
+            onTap: () => onSelect(opt.$1),
+          ),
+      ],
+    );
+  }
+}
+
+class _ChoicePill extends StatelessWidget {
+  const _ChoicePill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: DesignTokens.spacingM,
+          vertical: DesignTokens.spacingS,
+        ),
+        decoration: BoxDecoration(
+          color: selected ? DesignTokens.colorAmber : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? DesignTokens.colorAmber : DesignTokens.colorRule,
+            width: 1.5,
+          ),
+        ),
+        child: Text(
+          label,
+          style: DesignTokens.typographyCalloutStrong.copyWith(
+            color: selected ? Colors.white : DesignTokens.colorInk,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NumberPill extends StatelessWidget {
+  const _NumberPill({
+    required this.value,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final int value;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: selected ? DesignTokens.colorAmber : Colors.transparent,
+          border: Border.all(
+            color: selected ? DesignTokens.colorAmber : DesignTokens.colorRule,
+            width: 1.5,
+          ),
+        ),
+        child: Text(
+          '$value',
+          style: DesignTokens.typographySubtitle.copyWith(
+            color: selected ? Colors.white : DesignTokens.colorInk,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SwitchRow extends StatelessWidget {
+  const _SwitchRow({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: DesignTokens.typographyBody
+                .copyWith(color: DesignTokens.colorInk),
+          ),
+        ),
+        Switch(value: value, onChanged: onChanged),
+      ],
     );
   }
 }

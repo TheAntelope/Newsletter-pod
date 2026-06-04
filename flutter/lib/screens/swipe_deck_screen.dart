@@ -20,7 +20,13 @@ class SwipeDeckScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Tune your pod')),
+      appBar: AppBar(
+        leading: const Padding(
+          padding: EdgeInsets.all(8),
+          child: ClawcastLogo(size: 28),
+        ),
+        title: const Text('Tune your pod'),
+      ),
       body: const SafeArea(child: SwipeDeck()),
     );
   }
@@ -425,8 +431,7 @@ class _EmptyState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.verified_outlined,
-                size: 44, color: DesignTokens.colorAmberDeep),
+            const ClawcastLogo(size: 56),
             const SizedBox(height: DesignTokens.spacingM),
             Text(
               'All caught up',

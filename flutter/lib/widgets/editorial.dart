@@ -155,6 +155,29 @@ class ChecklistRow extends StatelessWidget {
   }
 }
 
+/// The ClawCast app mark (assets/brand/clawcast-logo.png) as a rounded badge.
+/// The source is a square illustration on a cream ground; it's clipped to a
+/// soft-cornered square so it reads as a brand badge at any [size].
+class ClawcastLogo extends StatelessWidget {
+  const ClawcastLogo({super.key, this.size = 56});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(size * 0.22),
+      child: Image.asset(
+        'assets/brand/clawcast-logo.png',
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => const SizedBox.shrink(),
+      ),
+    );
+  }
+}
+
 /// ElevenLabs Startup Grant attribution: a "Voices powered by" caption above the
 /// official ElevenLabs wordmark (assets/brand/elevenlabs-logo.png, the black logo
 /// from elevenlabs.io/brand, suited to the cream ground). Shown on the sign-in
