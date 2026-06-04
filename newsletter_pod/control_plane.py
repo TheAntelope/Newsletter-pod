@@ -883,11 +883,15 @@ class ControlPlaneService:
         self, user_id: str, topics: list[str] | None = None
     ) -> dict[str, Any]:
         user = self._require_user(user_id)
-        source_ids = self._catalog_source_ids_for_topics(topics)
+        source_id_groups = self._catalog_source_id_groups_for_topics(topics)
+        source_ids = [sid for group in source_id_groups for sid in group]
         if source_ids:
             preferred = self._region_preferred_source_ids(user, source_ids)
             records = self._swipe_deck_service.get_topic_seeded_deck(
-                user_id, source_ids, preferred_source_ids=preferred
+                user_id,
+                source_ids,
+                preferred_source_ids=preferred,
+                source_id_groups=source_id_groups,
             )
         else:
             records = self._swipe_deck_service.get_cold_start_deck(user_id)
@@ -913,21 +917,30 @@ class ControlPlaneService:
             and source_region_matches(region, source.region)
         ]
 
-    def _catalog_source_ids_for_topics(self, topics: list[str] | None) -> list[str]:
-        """Resolve catalog topic names (as picked in onboarding) to the ids of the
-        catalog sources tagged with them. Case-insensitive; unknown topics are
-        ignored. Empty result falls back to the global cold-start deck.
+    def _catalog_source_id_groups_for_topics(
+        self, topics: list[str] | None
+    ) -> list[list[str]]:
+        """Resolve catalog topic names (as picked in onboarding) to one list of
+        catalog source ids per topic, in the order the topics were given. The
+        deck round-robins across these groups so every picked topic is
+        represented. Case-insensitive; topics with no catalog sources are
+        dropped. Empty result falls back to the global cold-start deck.
         """
         if not topics:
             return []
-        wanted = {topic.strip().casefold() for topic in topics if topic and topic.strip()}
-        if not wanted:
-            return []
-        return [
-            source.id
-            for source in self._catalog.values()
-            if source.topic and source.topic.casefold() in wanted
-        ]
+        groups: list[list[str]] = []
+        for topic in topics:
+            if not topic or not topic.strip():
+                continue
+            wanted = topic.strip().casefold()
+            ids = [
+                source.id
+                for source in self._catalog.values()
+                if source.topic and source.topic.casefold() == wanted
+            ]
+            if ids:
+                groups.append(ids)
+        return groups
 
     def refresh_cold_start_deck(self) -> dict[str, Any]:
         """Force-refresh the global cold-start swipe deck.

@@ -90,6 +90,7 @@ class SwipeDeckService:
         user_id: str,
         source_ids: list[str],
         preferred_source_ids: Optional[list[str]] = None,
+        source_id_groups: Optional[list[list[str]]] = None,
     ) -> list[SourceItemRecord]:
         """Onboarding deck seeded from the catalog sources behind the topics the
         user just picked. Prefers fresh items from those sources, then backfills
@@ -99,6 +100,12 @@ class SwipeDeckService:
         [preferred_source_ids] (a subset of [source_ids], e.g. sources matching
         the user's region) are floated to the front so region-relevant stories
         lead the deck without excluding the rest.
+
+        [source_id_groups] (one source-id list per picked topic) makes the deck
+        round-robin across topics so a low-cadence topic (e.g. Sports) is
+        represented rather than crowded out of the size-capped deck by a
+        high-cadence one (e.g. Tech). Omitted / single-group degrades to plain
+        recency order — the legacy behavior.
         """
         if not source_ids:
             return self.get_cold_start_deck(user_id)
@@ -119,7 +126,8 @@ class SwipeDeckService:
             )
         deck: list[SourceItemRecord] = []
         seen: set[str] = set()
-        for record in seeded:
+        streams = self._partition_into_topic_streams(seeded, source_id_groups)
+        for record in self._round_robin(streams):
             if record.dedupe_key in already_swiped or record.dedupe_key in seen:
                 continue
             deck.append(record)
@@ -136,6 +144,51 @@ class SwipeDeckService:
             if len(deck) >= deck_size:
                 break
         return deck
+
+    @staticmethod
+    def _partition_into_topic_streams(
+        records: list[SourceItemRecord],
+        source_id_groups: Optional[list[list[str]]],
+    ) -> list[list[SourceItemRecord]]:
+        """Split the (already-ordered) candidate list into one stream per topic
+        group, preserving order within each stream. With no grouping or a single
+        group, returns one stream — i.e. the original recency order untouched.
+        Sources not in any group (shouldn't normally happen) collect in a
+        trailing catch-all stream so nothing is dropped.
+        """
+        if not source_id_groups or len(source_id_groups) <= 1:
+            return [list(records)]
+        group_of_source: dict[str, int] = {}
+        for index, group in enumerate(source_id_groups):
+            for source_id in group:
+                group_of_source.setdefault(source_id, index)
+        streams: list[list[SourceItemRecord]] = [[] for _ in source_id_groups]
+        overflow: list[SourceItemRecord] = []
+        for record in records:
+            index = group_of_source.get(record.source_id)
+            (overflow if index is None else streams[index]).append(record)
+        if overflow:
+            streams.append(overflow)
+        return [stream for stream in streams if stream]
+
+    @staticmethod
+    def _round_robin(
+        streams: list[list[SourceItemRecord]],
+    ) -> list[SourceItemRecord]:
+        """Flatten parallel streams by taking one item from each in turn (each
+        stream is already newest-first), so every topic gets a fair share of the
+        size-capped deck instead of the highest-cadence topic dominating.
+        """
+        ordered: list[SourceItemRecord] = []
+        cursors = [0] * len(streams)
+        remaining = sum(len(stream) for stream in streams)
+        while remaining:
+            for index, stream in enumerate(streams):
+                if cursors[index] < len(stream):
+                    ordered.append(stream[cursors[index]])
+                    cursors[index] += 1
+                    remaining -= 1
+        return ordered
 
     def refresh_cold_start_deck(self) -> Optional[SwipeDeckRecord]:
         """Force a recompute of the global cold-start deck regardless of TTL.

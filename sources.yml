@@ -566,6 +566,38 @@ sources:
     ingest_mode: full
     jurisdiction_sensitive: false
 
+  - id: sports-sbnation
+    name: SB Nation
+    rss_url: https://www.sbnation.com/rss/index.xml
+    topic: Sports
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: sports-cbssports
+    name: CBS Sports Headlines
+    rss_url: https://www.cbssports.com/rss/headlines/
+    topic: Sports
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: sports-deadspin
+    name: Deadspin
+    rss_url: https://deadspin.com/rss
+    topic: Sports
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: sports-yahoo
+    name: Yahoo Sports
+    rss_url: https://sports.yahoo.com/rss/
+    topic: Sports
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
   # =====================================================================
   # Culture
   # =====================================================================

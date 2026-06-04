@@ -169,6 +169,37 @@ def test_topic_seeded_deck_prefers_items_from_topic_sources():
     assert all(record.source_id == "techcrunch" for record in deck)
 
 
+def test_topic_seeded_deck_round_robins_across_topic_groups():
+    # A high-cadence topic (6 fresh items) and a low-cadence one (2 older
+    # items). Pure recency would fill the 4-card deck entirely from the
+    # high-cadence source; round-robin must surface the low-cadence topic.
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [
+            _record(f"tech-{i}", embedding=[1.0], source_id="techcrunch",
+                    last_seen_offset_minutes=10 + i)
+            for i in range(6)
+        ]
+        + [
+            _record(f"sport-{i}", embedding=[1.0], source_id="espn",
+                    last_seen_offset_minutes=i)
+            for i in range(2)
+        ]
+    )
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=4, recent_deck_lookback_days=3650),
+    )
+    deck = service.get_topic_seeded_deck(
+        "u1",
+        source_ids=["techcrunch", "espn"],
+        source_id_groups=[["techcrunch"], ["espn"]],
+    )
+    sources = {record.source_id for record in deck}
+    assert "espn" in sources
+    assert "techcrunch" in sources
+
+
 def test_topic_seeded_deck_backfills_from_cold_start_when_topic_thin():
     repo = InMemoryControlPlaneRepository()
     # Only two items from the picked topic's source; the rest of the corpus is
