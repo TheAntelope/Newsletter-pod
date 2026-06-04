@@ -292,72 +292,59 @@ def build_substack_verification_payload(*, code: str, pub_title: str) -> dict:
     }
 
 
-def send_substack_verification_push(
+def _dispatch_to_user_devices(
     *,
     sender: Optional[PushSender],
+    fcm_sender: Optional["FcmSender"],
     repository: ControlPlaneRepository,
     user_id: str,
-    code: str,
-    pub_title: str,
-    pub_url: Optional[str] = None,
-    fcm_sender: Optional["FcmSender"] = None,
+    apns_payload: dict,
+    fcm_notification: dict,
+    fcm_data: dict,
+    collapse_id: str,
+    log_label: str,
+    apns_priority: int = 10,
 ) -> dict:
-    """Send the Substack verification-code push to every active device the
-    user has, routing iOS tokens through APNs ([sender]) and Android tokens
-    through FCM ([fcm_sender]). No-ops with an INFO log when BOTH senders are
-    None (push disabled in this environment) so callers can invoke
-    unconditionally. A token whose platform has no configured sender is skipped.
+    """Fan a single notification out to every active device a user has,
+    routing iOS tokens through APNs ([sender]) and Android tokens through FCM
+    ([fcm_sender]). No-ops with an INFO log when BOTH senders are None (push
+    disabled in this environment) so callers can invoke unconditionally. A
+    token whose platform has no configured sender is skipped. Dead tokens
+    (410 / UNREGISTERED) are deregistered in place.
 
     Returns a small dict useful for tests / logs (attempted counts only tokens
     we actually tried — i.e. had a sender for):
       {"attempted": N, "delivered": K, "deregistered": M}
+
+    `log_label` names the notification kind in log lines; `collapse_id` is
+    reused across both platforms so retries replace rather than stack.
     """
     if sender is None and fcm_sender is None:
         logger.info(
-            "Push senders unavailable; skipping verification-code push: user=%s",
-            user_id,
+            "Push senders unavailable; skipping %s: user=%s", log_label, user_id
         )
         return {"attempted": 0, "delivered": 0, "deregistered": 0}
 
     tokens = repository.list_active_device_tokens(user_id)
     if not tokens:
-        logger.info(
-            "No active device tokens for verification-code push: user=%s",
-            user_id,
-        )
+        logger.info("No active device tokens for %s: user=%s", log_label, user_id)
         return {"attempted": 0, "delivered": 0, "deregistered": 0}
-
-    apns_payload = build_substack_verification_payload(code=code, pub_title=pub_title)
-    if pub_url:
-        apns_payload["pub_url"] = pub_url
-
-    # FCM uses a notification block + a string-valued data map rather than the
-    # APNs `aps` dict; the Android handler reads `data` to act on the tap.
-    fcm_notification = {
-        "title": "Substack verification code",
-        "body": f"{code} for {pub_title} — expires in ~15 min. Tap to copy.",
-    }
-    fcm_data: dict = {
-        "type": "substack_verification",
-        "code": code,
-        "pub_title": pub_title,
-    }
-    if pub_url:
-        fcm_data["pub_url"] = pub_url
 
     attempted = 0
     delivered = 0
     deregistered = 0
-    # A stable collapse id ensures retry storms (e.g. rapidly hitting Resend)
-    # show a single notification with the freshest code, on both platforms.
-    collapse_id = f"substack-verify-{user_id[:8]}"
     for record in tokens:
         platform = (record.platform or "ios").lower()
-        if platform == "android":
+        # Route by transport: the Flutter app uses FCM on BOTH platforms, while
+        # the native Swift iOS app talks to APNs directly. Legacy tokens with
+        # no transport fall back to platform (android→fcm, ios→apns).
+        transport = (record.transport or ("fcm" if platform == "android" else "apns")).lower()
+        if transport == "fcm":
             if fcm_sender is None:
                 logger.info(
-                    "FCM sender unavailable; skipping android token: user=%s token_prefix=%s",
+                    "FCM sender unavailable; skipping fcm token: user=%s platform=%s token_prefix=%s",
                     user_id,
+                    platform,
                     record.token[:8],
                 )
                 continue
@@ -370,8 +357,9 @@ def send_substack_verification_push(
         else:
             if sender is None:
                 logger.info(
-                    "APNs sender unavailable; skipping ios token: user=%s token_prefix=%s",
+                    "APNs sender unavailable; skipping apns token: user=%s platform=%s token_prefix=%s",
                     user_id,
+                    platform,
                     record.token[:8],
                 )
                 continue
@@ -379,7 +367,7 @@ def send_substack_verification_push(
                 device_token=record.token,
                 payload=apns_payload,
                 push_type="alert",
-                priority=10,
+                priority=apns_priority,
                 collapse_id=collapse_id,
             )
 
@@ -399,6 +387,125 @@ def send_substack_verification_push(
             )
 
     return {"attempted": attempted, "delivered": delivered, "deregistered": deregistered}
+
+
+def send_substack_verification_push(
+    *,
+    sender: Optional[PushSender],
+    repository: ControlPlaneRepository,
+    user_id: str,
+    code: str,
+    pub_title: str,
+    pub_url: Optional[str] = None,
+    fcm_sender: Optional["FcmSender"] = None,
+) -> dict:
+    """Send the Substack verification-code push to every active device the
+    user has. Thin wrapper that builds the per-platform payloads and hands off
+    to [_dispatch_to_user_devices]. See that function for the return shape and
+    the no-sender / no-token no-op behavior.
+    """
+    apns_payload = build_substack_verification_payload(code=code, pub_title=pub_title)
+    if pub_url:
+        apns_payload["pub_url"] = pub_url
+
+    # FCM uses a notification block + a string-valued data map rather than the
+    # APNs `aps` dict; the Android handler reads `data` to act on the tap.
+    fcm_notification = {
+        "title": "Substack verification code",
+        "body": f"{code} for {pub_title} — expires in ~15 min. Tap to copy.",
+    }
+    fcm_data: dict = {
+        "type": "substack_verification",
+        "code": code,
+        "pub_title": pub_title,
+    }
+    if pub_url:
+        fcm_data["pub_url"] = pub_url
+
+    return _dispatch_to_user_devices(
+        sender=sender,
+        fcm_sender=fcm_sender,
+        repository=repository,
+        user_id=user_id,
+        apns_payload=apns_payload,
+        fcm_notification=fcm_notification,
+        fcm_data=fcm_data,
+        # A stable collapse id ensures retry storms (e.g. rapidly hitting
+        # Resend) show a single notification with the freshest code.
+        collapse_id=f"substack-verify-{user_id[:8]}",
+        log_label="verification-code push",
+    )
+
+
+def build_pod_ready_payload(*, episode_title: str, feed_url: Optional[str] = None,
+                            episode_id: Optional[str] = None) -> dict:
+    """Construct the APNs JSON body for a "your pod is ready" push.
+
+    `category` lets the iOS handler match this kind of push (a tap can open
+    the latest episode). `feed_url` / `episode_id` ride along at top level so
+    the app can deep-link straight to the new briefing.
+    """
+    payload: dict = {
+        "aps": {
+            "alert": {
+                "title": "Your briefing is ready",
+                "body": episode_title,
+            },
+            "sound": "default",
+            "category": "POD_READY",
+        },
+        "type": "pod_ready",
+    }
+    if feed_url:
+        payload["feed_url"] = feed_url
+    if episode_id:
+        payload["episode_id"] = episode_id
+    return payload
+
+
+def send_pod_ready_push(
+    *,
+    sender: Optional[PushSender],
+    repository: ControlPlaneRepository,
+    user_id: str,
+    episode_title: str,
+    episode_id: Optional[str] = None,
+    feed_url: Optional[str] = None,
+    fcm_sender: Optional["FcmSender"] = None,
+) -> dict:
+    """Notify every active device a user has that their latest podcast is
+    ready, routing iOS→APNs and Android→FCM. Thin wrapper over
+    [_dispatch_to_user_devices]; see it for return shape and no-op behavior.
+
+    The collapse id is keyed on the user (not the episode) so that if a second
+    episode publishes before the user opens the first notification, the newer
+    one replaces it rather than stacking a stale "ready" alert.
+    """
+    apns_payload = build_pod_ready_payload(
+        episode_title=episode_title, feed_url=feed_url, episode_id=episode_id
+    )
+
+    fcm_notification = {
+        "title": "Your briefing is ready",
+        "body": episode_title,
+    }
+    fcm_data: dict = {"type": "pod_ready"}
+    if episode_id:
+        fcm_data["episode_id"] = episode_id
+    if feed_url:
+        fcm_data["feed_url"] = feed_url
+
+    return _dispatch_to_user_devices(
+        sender=sender,
+        fcm_sender=fcm_sender,
+        repository=repository,
+        user_id=user_id,
+        apns_payload=apns_payload,
+        fcm_notification=fcm_notification,
+        fcm_data=fcm_data,
+        collapse_id=f"pod-ready-{user_id[:8]}",
+        log_label="pod-ready push",
+    )
 
 
 def build_push_sender_from_settings(

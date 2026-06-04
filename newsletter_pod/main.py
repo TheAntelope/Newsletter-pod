@@ -72,13 +72,14 @@ from .inbound import (
 )
 from .legal import PRIVACY_HTML, TERMS_HTML
 from .mailer import NoopMailer, SMTPMailer
-from .models import SourceItem
+from .models import PublishStatus, SourceItem
 from .podcast_api import PodcastApiClient, PodcastApiUnavailable
 from .push import (
     FcmSender,
     PushSender,
     build_fcm_sender_from_settings,
     build_push_sender_from_settings,
+    send_pod_ready_push,
 )
 from .shared_items import MAX_UPLOAD_BYTES as SHARED_MAX_UPLOAD_BYTES, SUPPORTED_KINDS as SHARED_SUPPORTED_KINDS
 from .storage import AudioStorage, GCSAudioStorage, InMemoryAudioStorage
@@ -211,7 +212,10 @@ class RegisterDeviceTokenRequest(BaseModel):
     token: str
     environment: Optional[str] = "production"
     bundle_id: Optional[str] = None
-    platform: Optional[str] = "ios"  # "ios" (APNs) | "android" (FCM)
+    platform: Optional[str] = "ios"  # "ios" | "android"
+    # Push service the token belongs to. None → derived from platform
+    # (android→fcm, ios→apns). The Flutter app sends "fcm" on both platforms.
+    transport: Optional[str] = None  # "apns" | "fcm" | None
 
 
 class BroadcastGenerateOnceRequest(BaseModel):
@@ -337,10 +341,34 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
     ) -> dict:
         _validate_job_auth(container.settings, authorization, x_job_trigger_token)
         assert container.control_plane is not None
-        return container.control_plane.process_user_generation(
+        result = container.control_plane.process_user_generation(
             user_id=request_payload.user_id,
             force=request_payload.force,
         )
+        # Best-effort "your pod is ready" push when a new episode actually
+        # published. Failures must never fail the generation job (the episode
+        # is already saved and will appear in the user's feed regardless).
+        run = result.get("run") or {}
+        episode = result.get("episode") or {}
+        if run.get("status") == PublishStatus.PUBLISHED.value and episode.get("id"):
+            try:
+                send_pod_ready_push(
+                    sender=container.push_sender,
+                    fcm_sender=container.fcm_sender,
+                    repository=container.control_repository,
+                    user_id=request_payload.user_id,
+                    episode_title=episode.get("title") or "Your latest briefing is ready.",
+                    episode_id=episode.get("id"),
+                    feed_url=result.get("feed_url"),
+                )
+            except Exception:  # pragma: no cover — push is non-critical
+                logger.warning(
+                    "Pod-ready push failed: user=%s episode=%s",
+                    request_payload.user_id,
+                    episode.get("id"),
+                    exc_info=True,
+                )
+        return result
 
     @app.post("/jobs/send-feedback-digest")
     def send_feedback_digest(
@@ -1085,11 +1113,21 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="platform must be 'ios' or 'android'",
             )
+        # Resolve the push transport. Explicit wins; otherwise derive from
+        # platform for backward compat (android→fcm, ios→apns).
+        transport = (request_payload.transport or "").strip().lower() or (
+            "fcm" if platform == "android" else "apns"
+        )
+        if transport not in {"apns", "fcm"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="transport must be 'apns' or 'fcm'",
+            )
         # APNs tokens are hex (case-insensitive) — normalize to lowercase for a
-        # stable idempotency key. FCM tokens are case-sensitive, so preserve
-        # case for android.
+        # stable idempotency key. FCM tokens are case-sensitive (on either
+        # platform), so preserve their case.
         raw_token = (request_payload.token or "").strip()
-        token = raw_token.lower() if platform == "ios" else raw_token
+        token = raw_token.lower() if transport == "apns" else raw_token
         if not token or len(token) < 32:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1121,6 +1159,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                     "last_seen_at": now,
                     "environment": environment,
                     "bundle_id": bundle_id,
+                    "transport": transport,
                     "invalidated_at": None,
                 }
             )
@@ -1131,6 +1170,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             user_id=user.id,
             token=token,
             platform=platform,
+            transport=transport,
             environment=environment,
             bundle_id=bundle_id,
             created_at=now,

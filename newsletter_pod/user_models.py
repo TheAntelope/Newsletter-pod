@@ -220,6 +220,11 @@ class DeviceTokenRecord(BaseModel):
     user_id: str
     token: str
     platform: str = "ios"
+    # Which push service the token belongs to: "apns" (direct Apple) or "fcm"
+    # (Firebase, used by the Flutter app for BOTH Android and iOS). None means
+    # "derive from platform" for tokens registered before this field existed:
+    # android→fcm, ios→apns (the native Swift app's direct-APNs behavior).
+    transport: Optional[str] = None  # "apns" | "fcm" | None (legacy)
     environment: str = "production"  # "production" | "sandbox"
     bundle_id: str
     created_at: datetime
