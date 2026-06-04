@@ -180,11 +180,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     switch (_step) {
       case 0:
         return _shell(
-          title: 'Welcome to ClawCast',
+          title: 'Pick your voice',
           subtitle:
-              'A daily briefing podcast, built from the sources you choose. '
-              "Here's what we'll set up — it takes about a minute.",
-          children: const [_WelcomeSteps()],
+              'Welcome to ClawCast! First, the fun part — choose the voice that '
+              'reads your briefing every morning. Tap a card to hear a sample.',
+          children: [_hostVoiceStep()],
         );
       case 1:
         return _shell(
@@ -236,11 +236,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         );
       case 6:
         return _shell(
-          title: _isTwoHost ? 'Choose your voices' : 'Choose a voice',
+          title: _isTwoHost ? 'Add a co-host' : 'Your host',
           subtitle: _isTwoHost
-              ? 'Pick an anchor and a co-host. You can change these later.'
-              : 'Pick who reads your briefing. You can change this later.',
-          children: [_voiceStep()],
+              ? 'Your show pairs two voices — pick a co-host to trade off with '
+                  'the host you chose. You can change these later.'
+              : 'This is the voice you picked to read your briefing. Change it '
+                  'here if you like.',
+          children: [_coHostStep()],
         );
       case 7:
         return _shell(
@@ -370,7 +372,89 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  Widget _voiceStep() {
+  /// The fun opener: pick the primary host voice. Single-select, with audio
+  /// samples. Format-independent so it can be the very first onboarding step.
+  Widget _hostVoiceStep() {
+    return _voiceCatalogBuilder((voices) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final v in voices) ...[
+            VoiceChoiceCard(
+              voice: v,
+              selected: _anchorVoiceId == v.id,
+              onSelect: () => setState(() => _anchorVoiceId = v.id),
+              previewSource: v.previewUrl,
+            ),
+            const SizedBox(height: DesignTokens.spacingM),
+          ],
+        ],
+      );
+    });
+  }
+
+  /// Shown after the format is chosen. For two-host it picks the co-host (the
+  /// host was chosen up front, on step 0); otherwise it re-shows the host picker
+  /// so it can still be changed, plus the rotating-guest note.
+  Widget _coHostStep() {
+    return _voiceCatalogBuilder((voices) {
+      final hostName = _voiceName(voices, _anchorVoiceId);
+      if (_isTwoHost) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (hostName != null) ...[
+              const _FieldLabel('Your host'),
+              const SizedBox(height: DesignTokens.spacingS),
+              Text(
+                hostName,
+                style: DesignTokens.typographyBodyStrong
+                    .copyWith(color: DesignTokens.colorInk),
+              ),
+              const SizedBox(height: DesignTokens.spacingL),
+            ],
+            const _FieldLabel('Co-host'),
+            const SizedBox(height: DesignTokens.spacingS),
+            for (final v in voices) ...[
+              VoiceChoiceCard(
+                voice: v,
+                selected: _commentatorVoiceId == v.id,
+                onSelect: () => setState(() => _commentatorVoiceId = v.id),
+                previewSource: v.previewUrl,
+              ),
+              const SizedBox(height: DesignTokens.spacingM),
+            ],
+          ],
+        );
+      }
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final v in voices) ...[
+            VoiceChoiceCard(
+              voice: v,
+              selected: _anchorVoiceId == v.id,
+              onSelect: () => setState(() => _anchorVoiceId = v.id),
+              previewSource: v.previewUrl,
+            ),
+            const SizedBox(height: DesignTokens.spacingM),
+          ],
+          if (_isRotating)
+            Text(
+              'A different guest voice joins ${hostName ?? 'your host'} each day, '
+              'drawn from the full catalog.',
+              style: DesignTokens.typographyCallout
+                  .copyWith(color: DesignTokens.colorMuted),
+            ),
+        ],
+      );
+    });
+  }
+
+  /// Resolves the voice-catalog future once and hands the list to [builder],
+  /// showing a spinner while it loads. Shared by the host and co-host steps.
+  Widget _voiceCatalogBuilder(
+      Widget Function(List<CatalogVoiceDto> voices) builder) {
     _voices ??= AppScope.of(context).repository.fetchVoiceCatalog();
     return FutureBuilder<VoiceCatalogEnvelope>(
       future: _voices,
@@ -381,45 +465,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             child: Center(child: CircularProgressIndicator()),
           );
         }
-        final voices = snapshot.data?.voices ?? const [];
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _FieldLabel(_isTwoHost ? 'Anchor' : 'Voice'),
-            const SizedBox(height: DesignTokens.spacingS),
-            for (final v in voices) ...[
-              VoiceChoiceCard(
-                voice: v,
-                selected: _anchorVoiceId == v.id,
-                onSelect: () => setState(() => _anchorVoiceId = v.id),
-                previewSource: v.previewUrl,
-              ),
-              const SizedBox(height: DesignTokens.spacingM),
-            ],
-            if (_isTwoHost) ...[
-              const SizedBox(height: DesignTokens.spacingS),
-              const _FieldLabel('Co-host'),
-              const SizedBox(height: DesignTokens.spacingS),
-              for (final v in voices) ...[
-                VoiceChoiceCard(
-                  voice: v,
-                  selected: _commentatorVoiceId == v.id,
-                  onSelect: () => setState(() => _commentatorVoiceId = v.id),
-                  previewSource: v.previewUrl,
-                ),
-                const SizedBox(height: DesignTokens.spacingM),
-              ],
-            ] else if (_isRotating)
-              Text(
-                'A different guest voice joins your anchor each day, drawn from '
-                'the full catalog.',
-                style: DesignTokens.typographyCallout
-                    .copyWith(color: DesignTokens.colorMuted),
-              ),
-          ],
-        );
+        return builder(snapshot.data?.voices ?? const []);
       },
     );
+  }
+
+  String? _voiceName(List<CatalogVoiceDto> voices, String? id) {
+    if (id == null) return null;
+    for (final v in voices) {
+      if (v.id == id) return v.name;
+    }
+    return null;
   }
 
   Widget _scheduleEditor() {
@@ -569,56 +625,7 @@ class _ShowPresetRow extends StatelessWidget {
   }
 }
 
-/// The welcome preview: a numbered "here's what we'll do" list. Numbered badges
-/// (not check circles) so it reads as an agenda rather than a tappable form.
-class _WelcomeSteps extends StatelessWidget {
-  const _WelcomeSteps();
-
-  static const _steps = [
-    'Pick the topics and sources you trust',
-    'Choose a format, voice, and length',
-    'Get a fresh briefing on your schedule',
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return EditorialCard(
-      spacing: DesignTokens.spacingM,
-      children: [
-        for (var i = 0; i < _steps.length; i++)
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 26,
-                height: 26,
-                alignment: Alignment.center,
-                decoration: const BoxDecoration(
-                  color: DesignTokens.colorAmber,
-                  shape: BoxShape.circle,
-                ),
-                child: Text(
-                  '${i + 1}',
-                  style: DesignTokens.typographyCalloutStrong
-                      .copyWith(color: Colors.white),
-                ),
-              ),
-              const SizedBox(width: DesignTokens.spacingM),
-              Expanded(
-                child: Text(
-                  _steps[i],
-                  style: DesignTokens.typographyBody
-                      .copyWith(color: DesignTokens.colorInk),
-                ),
-              ),
-            ],
-          ),
-      ],
-    );
-  }
-}
-
-/// The "you're all set" recap — the same agenda shown as completed checks.
+/// The "you're all set" recap — the setup agenda shown as completed checks.
 class _WelcomePoints extends StatelessWidget {
   const _WelcomePoints({this.allChecked = false});
 
