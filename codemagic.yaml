@@ -413,6 +413,7 @@ workflows:
       google_play:
         credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
         track: internal
-        # Non-production track: don't submit for review (avoids the "changes
-        # pending review" state on internal/alpha/beta).
-        changes_not_sent_for_review: true
+        # NOTE: do NOT set changes_not_sent_for_review here. Google Play rejects
+        # the changesNotSentForReview param for an app that hasn't been through
+        # production review yet ("Changes are sent for review automatically...").
+        # Re-add it only once the app is established in production.
