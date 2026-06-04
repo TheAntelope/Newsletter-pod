@@ -278,6 +278,31 @@ void main() {
     expect(find.text('Pick your topics'), findsOneWidget);
   });
 
+  testWidgets('weather step offers using the current location', (tester) async {
+    _useTallViewport(tester);
+    final appState = AppState(FakeAppRepository());
+    await tester.pumpWidget(
+      AppScope(notifier: appState, child: const ClawcastApp()),
+    );
+
+    await tester.tap(find.text('Get started'));
+    await tester.pumpAndSettle();
+
+    // Walk to the weather step (step 9: welcome, voice, name, topics, swipe,
+    // substack, format, co-host, schedule, weather).
+    for (var i = 0; i < 9; i++) {
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Add a weather note?'), findsOneWidget);
+
+    // Turning weather on reveals the city field and the location affordance.
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+    expect(find.text('Use my current location'), findsOneWidget);
+    expect(find.byIcon(Icons.my_location), findsOneWidget);
+  });
+
   testWidgets('adding a substack copies the alias and opens its subscribe form',
       (tester) async {
     // Capture url_launcher channel calls so we can assert the deep-link fires.

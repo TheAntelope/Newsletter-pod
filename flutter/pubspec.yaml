@@ -55,6 +55,10 @@ dependencies:
   # RevenueCat (Play Billing) purchases. Only configured/used on the real-auth
   # path behind ENABLE_PURCHASES_REVENUECAT; the demo build never touches it.
   purchases_flutter: ^8.0.0
+  # Device location for the optional weather feature ("use my current
+  # location"). Works on web + Android + iOS; reverse-geocoding to a city name
+  # is done over HTTP (see services/location_service.dart), not a plugin.
+  geolocator: ^14.0.2
 
 dev_dependencies:
   flutter_test:
