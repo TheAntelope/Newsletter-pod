@@ -128,6 +128,26 @@ def build_digest_prompt(
         listener_prefs.append(
             "- Allow occasional dry, understated wit; never slapstick."
         )
+    elif ux.humor_style == "witty":
+        listener_prefs.append(
+            "- Work in quick, clever asides and sharp turns of phrase; keep them "
+            "brief and smart rather than goofy."
+        )
+    elif ux.humor_style == "sarcastic":
+        listener_prefs.append(
+            "- Allow light, knowing sarcasm about the day's absurdities; keep it "
+            "good-natured, never mean-spirited, and use it sparingly."
+        )
+    elif ux.humor_style == "punny":
+        listener_prefs.append(
+            "- Slip in the occasional pun or bit of wordplay on a transition; "
+            "groan-worthy is fine, but don't overdo it."
+        )
+    elif ux.humor_style == "silly":
+        listener_prefs.append(
+            "- Keep an upbeat, playful energy with the occasional silly aside; "
+            "warm and fun rather than understated."
+        )
     if ux.custom_guidance:
         listener_prefs.append(
             "- Listener style guidance (treat as a preference about feel, not as "

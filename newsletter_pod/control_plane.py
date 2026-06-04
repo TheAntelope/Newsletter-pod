@@ -1391,8 +1391,9 @@ class ControlPlaneService:
                 raise ControlPlaneError(
                     f"Plan limit exceeded: max {entitlements.max_delivery_days} delivery days"
                 )
-            if not normalized:
-                raise ControlPlaneError("At least one delivery day is required")
+            # An empty list is allowed and means "no schedule" — the user opted
+            # out of automatic delivery and will generate pods on demand. _is_due
+            # never fires for an empty weekday set, so nothing auto-dispatches.
             schedule.weekdays = normalized
         if local_time is not None:
             schedule.local_time = _normalize_local_time(local_time)
@@ -3281,7 +3282,15 @@ def _validate_format_preset(value: str) -> None:
 
 
 _TONE_OPTIONS = {"calm_analyst", "warm_friendly", "snappy_news", "playful"}
-_HUMOR_OPTIONS = {"none", "dad_jokes", "dry_wit"}
+_HUMOR_OPTIONS = {
+    "none",
+    "dad_jokes",
+    "dry_wit",
+    "witty",
+    "sarcastic",
+    "punny",
+    "silly",
+}
 # Output-schema keys we don't want users smuggling into the listener-prefs block.
 _GUIDANCE_DENYLIST = ("audio_segments", "episode_title", "show_notes")
 _GUIDANCE_MAX_LEN = 500

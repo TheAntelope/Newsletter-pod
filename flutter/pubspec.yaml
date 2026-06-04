@@ -43,15 +43,24 @@ dependencies:
   just_audio: ^0.10.5
   speech_to_text: ^7.4.0
   url_launcher: ^6.3.2
+  # "Share to ClawCast": receives content from the OS share sheet (Android
+  # ACTION_SEND intent filters + the iOS Share Extension's App Group). Only
+  # subscribed on the real-auth build (see services/share_intake_controller.dart);
+  # the demo build + widget tests never touch the platform channel.
+  receive_sharing_intent: ^1.8.0
   # Firebase Auth + Google Sign-In for the real (account-gated) sign-in path.
   # Only exercised when --dart-define=ENABLE_GOOGLE_SIGN_IN=true; the default
   # (demo) build never initializes Firebase, so widget tests stay channel-free.
   firebase_core: ^3.6.0
   firebase_auth: ^5.3.1
   google_sign_in: ^6.2.1
-  # FCM push (Android). Registration runs only on the real-auth path; the demo
-  # build never touches it.
+  # FCM push (Android + iOS). Registration runs only on the real-auth path; the
+  # demo build never touches it.
   firebase_messaging: ^15.1.3
+  # Renders a heads-up notification when a push arrives while the app is in the
+  # foreground (FCM does NOT display those itself) and owns the Android
+  # notification channel. Only used on the real-auth path.
+  flutter_local_notifications: ^17.2.3
   # RevenueCat (Play Billing) purchases. Only configured/used on the real-auth
   # path behind ENABLE_PURCHASES_REVENUECAT; the demo build never touches it.
   purchases_flutter: ^8.0.0

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from newsletter_pod.models import PodcastUxConfig, SourceItem
 from newsletter_pod.prompting import (
     build_closing_prompt,
@@ -267,6 +269,26 @@ def test_prompt_includes_dry_wit_directive():
     )
 
     assert "dry, understated wit" in prompt
+
+
+@pytest.mark.parametrize(
+    ("humor_style", "marker"),
+    [
+        ("witty", "clever asides"),
+        ("sarcastic", "knowing sarcasm"),
+        ("punny", "pun or bit of wordplay"),
+        ("silly", "silly aside"),
+    ],
+)
+def test_prompt_includes_expanded_humor_directive(humor_style, marker):
+    prompt = build_digest_prompt(
+        _items_three(),
+        run_date=datetime(2026, 3, 9, 5, 0, tzinfo=timezone.utc).date(),
+        ux=PodcastUxConfig(humor_style=humor_style),
+    )
+
+    assert "Listener preferences:" in prompt
+    assert marker in prompt
 
 
 def test_prompt_omits_listener_preferences_block_when_no_extras():

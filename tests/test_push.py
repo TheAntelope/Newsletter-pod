@@ -13,8 +13,10 @@ from newsletter_pod.push import (
     FcmSender,
     PushSender,
     build_fcm_sender_from_settings,
+    build_pod_ready_payload,
     build_push_sender_from_settings,
     build_substack_verification_payload,
+    send_pod_ready_push,
     send_substack_verification_push,
 )
 from newsletter_pod.user_models import DeviceTokenRecord
@@ -439,6 +441,145 @@ def test_send_substack_push_noops_when_both_senders_none():
         pub_title="Noahpinion",
     )
     assert result == {"attempted": 0, "delivered": 0, "deregistered": 0}
+
+
+# ========================= pod-ready push =========================
+
+
+def test_build_pod_ready_payload_has_expected_aps_shape():
+    payload = build_pod_ready_payload(
+        episode_title="Tuesday briefing: 4 stories",
+        feed_url="https://api.example.com/feeds/abc.xml",
+        episode_id="abc-2026-06-04-deadbeef",
+    )
+    aps = payload["aps"]
+    assert aps["alert"]["title"] == "Your briefing is ready"
+    assert aps["alert"]["body"] == "Tuesday briefing: 4 stories"
+    assert aps["category"] == "POD_READY"
+    assert payload["type"] == "pod_ready"
+    # Deep-link fields ride along at top level for the iOS tap handler.
+    assert payload["episode_id"] == "abc-2026-06-04-deadbeef"
+    assert payload["feed_url"] == "https://api.example.com/feeds/abc.xml"
+
+
+def test_build_pod_ready_payload_omits_optional_fields_when_absent():
+    payload = build_pod_ready_payload(episode_title="Your latest briefing is ready.")
+    assert "episode_id" not in payload
+    assert "feed_url" not in payload
+
+
+def test_send_pod_ready_push_noops_when_both_senders_none():
+    repo = InMemoryControlPlaneRepository()
+    repo.save_device_token(_make_device_token("u1", "a" * 64))
+    result = send_pod_ready_push(
+        sender=None,
+        fcm_sender=None,
+        repository=repo,
+        user_id="u1",
+        episode_title="Tuesday briefing",
+    )
+    assert result == {"attempted": 0, "delivered": 0, "deregistered": 0}
+
+
+def test_send_pod_ready_push_routes_android_to_fcm_and_ios_to_apns():
+    repo = InMemoryControlPlaneRepository()
+    repo.save_device_token(_make_device_token("u1", "a" * 64))  # ios → APNs
+    repo.save_device_token(
+        _make_android_device_token("u1", "AndroidToken" + "z" * 40)
+    )  # android → FCM
+
+    apns_client = _StubClient([_StubResponse(200)])
+    fcm_client = _StubClient([_StubResponse(200, {"name": "ok"})])
+    result = send_pod_ready_push(
+        sender=_make_sender(apns_client),
+        fcm_sender=_make_fcm_sender(fcm_client),
+        repository=repo,
+        user_id="u1",
+        episode_title="Tuesday briefing: 4 stories",
+        episode_id="abc-2026-06-04-deadbeef",
+        feed_url="https://api.example.com/feeds/abc.xml",
+    )
+    assert result == {"attempted": 2, "delivered": 2, "deregistered": 0}
+    assert len(apns_client.calls) == 1
+    assert len(fcm_client.calls) == 1
+    # iOS gets the aps alert; Android gets the notification + data deep-link.
+    assert apns_client.calls[0]["json"]["aps"]["category"] == "POD_READY"
+    fcm_message = fcm_client.calls[0]["json"]["message"]
+    assert fcm_message["notification"]["title"] == "Your briefing is ready"
+    assert fcm_message["data"]["type"] == "pod_ready"
+    assert fcm_message["data"]["episode_id"] == "abc-2026-06-04-deadbeef"
+    # Collapse id is user-keyed so a newer episode replaces a stale alert.
+    assert apns_client.calls[0]["headers"]["apns-collapse-id"] == "pod-ready-u1"
+
+
+def test_pod_ready_ios_fcm_token_routes_to_fcm_not_apns():
+    # An iOS device registered via the Flutter app carries transport="fcm",
+    # so it must go through FCM even though platform is "ios".
+    repo = InMemoryControlPlaneRepository()
+    now = datetime(2026, 6, 4, 12, 0, tzinfo=timezone.utc)
+    repo.save_device_token(
+        DeviceTokenRecord(
+            id="id-iosfcm",
+            user_id="u1",
+            token="iOS-FCM-Token" + "Z" * 40,
+            platform="ios",
+            transport="fcm",
+            environment="production",
+            bundle_id="com.newsletterpod.app",
+            created_at=now,
+            last_seen_at=now,
+        )
+    )
+    apns_client = _StubClient([])  # must NOT be called
+    fcm_client = _StubClient([_StubResponse(200, {"name": "ok"})])
+    result = send_pod_ready_push(
+        sender=_make_sender(apns_client),
+        fcm_sender=_make_fcm_sender(fcm_client),
+        repository=repo,
+        user_id="u1",
+        episode_title="Tuesday briefing",
+    )
+    assert result["delivered"] == 1
+    assert apns_client.calls == []  # routed to FCM, not APNs
+    assert len(fcm_client.calls) == 1
+
+
+def test_pod_ready_legacy_ios_token_falls_back_to_apns():
+    # A token with transport=None (registered before the field existed) routes
+    # by platform: ios → APNs.
+    repo = InMemoryControlPlaneRepository()
+    repo.save_device_token(_make_device_token("u1", "a" * 64))  # transport unset
+    apns_client = _StubClient([_StubResponse(200)])
+    fcm_client = _StubClient([])  # must NOT be called
+    result = send_pod_ready_push(
+        sender=_make_sender(apns_client),
+        fcm_sender=_make_fcm_sender(fcm_client),
+        repository=repo,
+        user_id="u1",
+        episode_title="Tuesday briefing",
+    )
+    assert result["delivered"] == 1
+    assert len(apns_client.calls) == 1
+    assert fcm_client.calls == []
+
+
+def test_send_pod_ready_push_deregisters_dead_tokens():
+    repo = InMemoryControlPlaneRepository()
+    repo.save_device_token(_make_device_token("u1", "a" * 64))
+    repo.save_device_token(_make_device_token("u1", "b" * 64))
+
+    client = _StubClient(
+        [_StubResponse(410, {"reason": "Unregistered"}), _StubResponse(200)]
+    )
+    result = send_pod_ready_push(
+        sender=_make_sender(client),
+        repository=repo,
+        user_id="u1",
+        episode_title="Tuesday briefing",
+    )
+    assert result["deregistered"] == 1
+    assert result["delivered"] == 1
+    assert len(repo.list_active_device_tokens("u1")) == 1
 
 
 def test_send_substack_push_skips_android_when_fcm_sender_none():

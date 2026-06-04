@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../services/podcast_addict.dart';
+import '../services/share_intake_controller.dart';
 import '../state/app_state.dart';
 import 'dashboard_scaffold.dart';
 import 'onboarding_screen.dart';
+import 'share_intake_screen.dart';
 import 'sign_in_screen.dart';
 
 /// Top-level router: sign-in → onboarding (new sign-in) → tabbed dashboard.
@@ -44,6 +46,13 @@ class _RootViewState extends State<RootView> with WidgetsBindingObserver {
     final app = AppScope.of(context);
     if (!app.signedIn) return const SignInScreen();
     if (!app.onboardingComplete) return const OnboardingScreen();
+    // A share waits behind sign-in/onboarding: once the user is in, surface the
+    // "Send to ClawCast" confirmation full-screen, then drop back to the
+    // dashboard. ShareScope is absent in the demo build, so [share] is null.
+    final share = ShareScope.maybeOf(context);
+    if (share != null && share.hasPending) {
+      return ShareIntakeScreen(shares: share.pending, onDone: share.clear);
+    }
     return const DashboardScaffold();
   }
 }

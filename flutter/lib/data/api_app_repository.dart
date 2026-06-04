@@ -137,4 +137,21 @@ class ApiAppRepository implements AppRepository {
   @override
   Future<SubstackIntentEnvelope> createSubstackIntent(String pubUrl) =>
       _client.createSubstackIntent(_token, pubUrl);
+
+  @override
+  Future<SharedItemResult> submitSharedItem({
+    required String kind,
+    String? url,
+    List<int>? fileBytes,
+    String? filename,
+    String? title,
+  }) =>
+      _client.submitSharedItem(
+        _token,
+        kind: kind,
+        url: url,
+        fileBytes: fileBytes,
+        filename: filename,
+        title: title,
+      );
 }
