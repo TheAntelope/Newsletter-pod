@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:app/data/fake_app_repository.dart';
@@ -240,5 +241,56 @@ void main() {
 
     // Lands on the dashboard.
     expect(find.text('Generate now'), findsOneWidget);
+  });
+
+  testWidgets('adding a substack copies the alias and opens its subscribe form',
+      (tester) async {
+    // Capture url_launcher channel calls so we can assert the deep-link fires.
+    // (Creating the intent alone never subscribes the alias — the user must
+    // complete Substack's own subscribe form, so the screen MUST open it.)
+    final launched = <String>[];
+    const launcherChannel = MethodChannel('plugins.flutter.io/url_launcher');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(launcherChannel, (call) async {
+      final args = call.arguments;
+      if (args is Map && args['url'] is String) {
+        launched.add(args['url'] as String);
+      }
+      return true; // launch/canLaunch/supportsMode all expect a bool
+    });
+    // Capture the alias the screen copies to the clipboard.
+    String? copied;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied = (call.arguments as Map)['text'] as String?;
+      }
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(launcherChannel, null);
+      messenger.setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+
+    await _signIn(tester);
+    await tester.tap(find.text('Sources'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'tech');
+    await tester.tap(find.text('Find'));
+    await tester.pumpAndSettle();
+
+    // Add the first discovered candidate (Platformer → www.platformer.news).
+    final add = find.text('Add').first;
+    await tester.ensureVisible(add);
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+
+    // The two behaviors that were missing before the fix: the alias is copied
+    // and the publication's subscribe form is opened (so Substack mails it).
+    expect(copied, 'demo@theclawcast.com');
+    expect(launched, isNotEmpty);
+    expect(launched.single, endsWith('/subscribe'));
   });
 }

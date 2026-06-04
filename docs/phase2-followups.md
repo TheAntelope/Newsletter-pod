@@ -6,6 +6,23 @@ Firebase Google Sign-In, Codemagic→Play CI, FCM push backend, RevenueCat webho
 is shipped to `main` and live (see the `flutter_phase2_env` + `firebase_android_setup`
 auto-memories for the full state).
 
+> **Status 2026-06-04 (investigated):**
+> - **Task 1 — BLOCKED on Google Play product propagation, not our code.** Everything we own
+>   verified correct: webhook live + auth-gated (401 on unauth probe), tier resolves from `pro`/`max`
+>   entitlements, build 242 has flag+key, Play products configured (`pro`/`max` + `monthly`/`annual`
+>   base plans Active). Symptom: tapping Choose Pro does *nothing* because
+>   `Purchases.getProducts(['pro:monthly'])` returns **empty** — and on Android that queries the
+>   device's Play Billing client directly, so it's a device↔Play propagation/caching issue (products
+>   created/edited Jun 3–4). Retry after propagation (hours). Two side-issues found:
+>   **(i)** RevenueCat Play service-account has a **Pub/Sub permission error** (RTDN/renewals — fix for
+>   prod, not blocking the first purchase); **(ii)** the annual base plan was recreated as `annualmax`
+>   (Yearly) + left **Draft**, so `max:annual` won't resolve until renamed/activated — fine for now
+>   since the paywall only buys `:monthly`. See `revenuecat_android_setup` memory.
+> - **Task 2 — DONE.** Root cause: Flutter `substack_add_screen._add()` created the intent + RSS-prefetch
+>   but never opened the deep-link subscribe form / copied the alias, so the alias was never subscribed
+>   and no mail ever reached `/webhooks/mailgun/inbound` (a parity gap vs iOS `handleContinue`). Fixed +
+>   regression test added. Suspects (a) stale signing key and (b) alias change were ruled out with logs/Firestore.
+
 ## Context / access
 - **Prod backend:** Cloud Run `newsletter-pod` (`europe-west1`), base URL
   `https://newsletter-pod-cdze2t26va-ew.a.run.app`. `gcloud` is authed to project

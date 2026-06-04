@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api/models.dart';
 import '../design_tokens.dart';
+import '../services/link_launcher.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
 
@@ -76,17 +78,35 @@ class _SubstackAddScreenState extends State<SubstackAddScreen> {
   }
 
   Future<void> _add(String pubUrl) async {
+    final messenger = ScaffoldMessenger.of(context);
     setState(() => _adding.add(pubUrl));
     try {
-      await _app.repository.createSubstackIntent(pubUrl);
+      final env = await _app.repository.createSubstackIntent(pubUrl);
       await _loadIntents();
+      final intent = env.intent;
+      // Creating the intent alone never subscribes the alias — Substack only
+      // emails the alias once the user completes the publication's own
+      // subscribe form with it. Mirror the iOS flow: copy the alias to the
+      // clipboard, then deep-link to the subscribe page so the user can paste
+      // it and subscribe (which triggers the confirmation email → verification
+      // code → push).
+      await Clipboard.setData(ClipboardData(text: intent.aliasEmail));
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Added — check for a confirmation email')),
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'ClawCast email copied — paste it into Substack and subscribe. '
+            "We'll auto-confirm the rest.",
+          ),
+        ),
       );
+      final subscribeUrl = intent.subscribeUrl;
+      if (subscribeUrl != null && mounted) {
+        await openExternal(context, subscribeUrl.toString());
+      }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (mounted) setState(() => _adding.remove(pubUrl));
     }
