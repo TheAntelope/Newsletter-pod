@@ -404,8 +404,8 @@ workflows:
           flutter build appbundle --release \
             --build-number="$BUILD_NUMBER" \
             --dart-define=ENABLE_GOOGLE_SIGN_IN=true \
-            --dart-define=ENABLE_PURCHASES_REVENUECAT="${ENABLE_PURCHASES_REVENUECAT:-false}" \
-            --dart-define=REVENUECAT_ANDROID_KEY="${REVENUECAT_ANDROID_KEY:-}"
+            --dart-define=ENABLE_PURCHASES_REVENUECAT=true \
+            --dart-define=REVENUECAT_ANDROID_KEY=goog_wmyyscxLmKwzOOzLHfOnruzAbnv
     artifacts:
       - flutter/build/app/outputs/bundle/release/*.aab
       - flutter/build/app/outputs/mapping/release/mapping.txt

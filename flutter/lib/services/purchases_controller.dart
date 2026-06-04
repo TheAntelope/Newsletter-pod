@@ -36,30 +36,24 @@ class PurchasesController {
     await Purchases.logOut();
   }
 
-  /// Purchase the package for [tier] ('pro' | 'max') and period. Returns true if
-  /// that entitlement is active afterward; false on user-cancel or no offering.
-  /// The backend reconciles the real plan from the RevenueCat webhook; the UI
-  /// just calls [AppState.loadMe] after a successful purchase.
+  /// Purchase [tier] ('pro' | 'max') for the chosen period. Buys the Play
+  /// subscription product directly by id — the Play product id has the form
+  /// `subscriptionId:basePlanId` (e.g. `pro:monthly`, `max:annual`), which is
+  /// how the products are configured in RevenueCat — so no Offering is needed.
+  /// Returns true if the entitlement is active afterward; false on user-cancel
+  /// or a missing product. The backend reconciles the real plan from the
+  /// RevenueCat webhook; the UI just calls [AppState.loadMe] after success.
   static Future<bool> purchase(String tier, {bool annual = false}) async {
     if (!_enabled) return false;
-    final offerings = await Purchases.getOfferings();
-    final offering = offerings.current;
-    if (offering == null || offering.availablePackages.isEmpty) return false;
-
-    final wanted = '${tier}_${annual ? 'annual' : 'monthly'}';
-    Package? pkg;
-    for (final p in offering.availablePackages) {
-      if (p.identifier == wanted ||
-          p.storeProduct.identifier.toLowerCase().contains(wanted)) {
-        pkg = p;
-        break;
-      }
-    }
-    pkg ??= offering.availablePackages.first;
-
+    final productId = '$tier:${annual ? 'annual' : 'monthly'}';
     try {
+      final products = await Purchases.getProducts(
+        [productId],
+        productCategory: ProductCategory.subscription,
+      );
+      if (products.isEmpty) return false;
       // purchases_flutter 8.x returns the CustomerInfo directly.
-      final customerInfo = await Purchases.purchasePackage(pkg);
+      final customerInfo = await Purchases.purchaseStoreProduct(products.first);
       final active = customerInfo.entitlements.active;
       return active.containsKey(tier) || active.isNotEmpty;
     } on PlatformException catch (e) {
