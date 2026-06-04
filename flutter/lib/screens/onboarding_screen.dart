@@ -155,6 +155,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ),
             ),
             Expanded(child: _stepContent()),
+            // ElevenLabs Startup Grant attribution — pinned to the bottom of the
+            // welcome screen only, just above the primary action.
+            if (_step == 0) ...[
+              const _ElevenLabsBadge(),
+              const SizedBox(height: DesignTokens.spacingS),
+            ],
             Padding(
               padding: const EdgeInsets.all(DesignTokens.spacingL),
               child: Column(
@@ -700,6 +706,38 @@ class _WelcomePoints extends StatelessWidget {
       children: [
         for (final p in _setupAgenda)
           ChecklistRow(label: p, isComplete: allChecked),
+      ],
+    );
+  }
+}
+
+/// ElevenLabs Startup Grant attribution shown at the bottom of the welcome
+/// screen. The logo is an asset slot (assets/brand/elevenlabs-grant.png) — until
+/// the official badge is dropped in, the placeholder is ~invisible and the
+/// "Voices powered by ElevenLabs" caption carries the attribution. If the asset
+/// is ever missing entirely, the image quietly collapses to nothing.
+class _ElevenLabsBadge extends StatelessWidget {
+  const _ElevenLabsBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Image.asset(
+          'assets/brand/elevenlabs-grant.png',
+          height: 28,
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Voices powered by ElevenLabs',
+          style: DesignTokens.typographyMeta.copyWith(
+            color: DesignTokens.colorMuted,
+            letterSpacing: 0.6,
+          ),
+        ),
       ],
     );
   }
