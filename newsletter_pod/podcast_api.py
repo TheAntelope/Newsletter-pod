@@ -173,15 +173,24 @@ class PodcastApiClient:
 
         audio_chunks = [self._synthesize_speech(segment.text, _voice_for(segment)) for segment in audio_segments]
         transcript = "\n\n".join(f"{segment.speaker}: {segment.text}" for segment in audio_segments)
+        audio_bytes = _concat_mp3_chunks(audio_chunks)
+
+        # Prefer the duration decoded from the rendered MP3 frames; fall back to a
+        # word-count estimate only if frame parsing finds nothing (e.g. a stub
+        # synthesizer in tests). The measured value is what the player and our RSS
+        # ``itunes:duration`` should agree on.
+        duration_seconds = _measure_mp3_duration_seconds(audio_bytes)
+        if duration_seconds is None:
+            duration_seconds = _estimate_duration_seconds(transcript)
 
         return GeneratedEpisode(
             episode_title=episode_title,
-            audio_bytes=b"".join(audio_chunks),
+            audio_bytes=audio_bytes,
             mime_type="audio/mpeg",
             show_notes=show_notes,
             audio_segments=audio_segments,
             transcript=transcript,
-            duration_seconds=_estimate_duration_seconds(transcript),
+            duration_seconds=duration_seconds,
         )
 
     def _generate_openai_script(self, prompt: str, title: str) -> dict[str, Any]:
@@ -575,3 +584,160 @@ def _estimate_duration_seconds(text: str) -> int:
     if words == 0:
         return 0
     return max(1, round(words / 150 * 60))
+
+
+# MPEG audio frame tables (Layer III only — everything we synthesize is MP3).
+_MP3_BITRATES_KBPS = {
+    "1": [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0],
+    "2": [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
+}
+_MP3_SAMPLE_RATES = {
+    "1": [44100, 48000, 32000, 0],  # MPEG-1
+    "2": [22050, 24000, 16000, 0],  # MPEG-2
+    "2.5": [11025, 12000, 8000, 0],
+}
+_MP3_VERSION = {0: "2.5", 2: "2", 3: "1"}
+
+
+def _mp3_frame_length(buf: bytes, i: int) -> Optional[int]:
+    """Byte length of the MPEG Layer III frame whose header starts at ``i``,
+    or None if there is no valid Layer III frame there."""
+    if i + 4 > len(buf) or buf[i] != 0xFF or (buf[i + 1] & 0xE0) != 0xE0:
+        return None
+    version = _MP3_VERSION.get((buf[i + 1] >> 3) & 0x3)
+    layer_bits = (buf[i + 1] >> 1) & 0x3
+    bitrate_idx = (buf[i + 2] >> 4) & 0xF
+    srate_idx = (buf[i + 2] >> 2) & 0x3
+    padding = (buf[i + 2] >> 1) & 0x1
+    if version is None or layer_bits != 1 or srate_idx == 3 or bitrate_idx in (0, 15):
+        return None
+    bitrate = _MP3_BITRATES_KBPS["1" if version == "1" else "2"][bitrate_idx] * 1000
+    sample_rate = _MP3_SAMPLE_RATES[version][srate_idx]
+    if bitrate == 0 or sample_rate == 0:
+        return None
+    if version == "1":
+        return (144 * bitrate) // sample_rate + padding
+    return (72 * bitrate) // sample_rate + padding
+
+
+def _strip_mp3_container(chunk: bytes) -> bytes:
+    """Strip a single TTS chunk's MP3 container framing so multiple chunks can be
+    safely concatenated into one stream.
+
+    Each ElevenLabs/OpenAI TTS response is a *complete* MP3: a leading ID3v2 tag,
+    a Xing/Info header frame that declares the duration of *that chunk only*, the
+    audio frames, then sometimes a trailing ID3v1 tag. Byte-joining complete MP3s
+    buries those headers mid-stream, and spec-compliant players (e.g. Podcast
+    Addict) trust the first chunk's Xing frame count and stop after just that
+    chunk — the episode appears to cut off after a few seconds. We keep only the
+    raw audio frames; with no Xing header the joined result is read as CBR and its
+    duration is computed correctly from size/bitrate.
+
+    Non-MP3 input (e.g. a stub synthesizer in tests) is returned unchanged.
+    """
+    if not chunk:
+        return b""
+    n = len(chunk)
+    i = 0
+    if n >= 10 and chunk[:3] == b"ID3":
+        size = (chunk[6] << 21) | (chunk[7] << 14) | (chunk[8] << 7) | chunk[9]
+        i = 10 + size
+    # Advance to the first MPEG audio frame sync.
+    j = i
+    while j < n - 4 and not (chunk[j] == 0xFF and (chunk[j + 1] & 0xE0) == 0xE0):
+        j += 1
+    if j >= n - 4:
+        # No MPEG frames found — not an MP3 we recognize; leave it untouched.
+        return chunk
+    i = j
+    # Drop a leading Xing/Info/VBRI header frame (it describes only this chunk).
+    frame_len = _mp3_frame_length(chunk, i)
+    if frame_len and (
+        b"Xing" in chunk[i : i + frame_len]
+        or b"Info" in chunk[i : i + frame_len]
+        or b"VBRI" in chunk[i : i + frame_len]
+    ):
+        i += frame_len
+    # Strip a trailing ID3v1 tag (128 bytes starting with "TAG").
+    end = n
+    if end >= 128 and chunk[end - 128 : end - 125] == b"TAG":
+        end -= 128
+    return chunk[i:end]
+
+
+def _concat_mp3_chunks(chunks: list[bytes]) -> bytes:
+    """Join per-segment TTS MP3s into one playable stream by stripping each
+    chunk's container framing first (see :func:`_strip_mp3_container`)."""
+    return b"".join(_strip_mp3_container(chunk) for chunk in chunks)
+
+
+def _measure_mp3_duration_seconds(audio: bytes) -> Optional[int]:
+    """Measure the real duration of a (possibly concatenated) MP3 by walking its
+    frame headers and summing per-frame durations. Returns None if no valid
+    frames are found so callers can fall back to a transcript-based estimate.
+
+    Our episodes are byte-concatenated TTS chunks, so the only reliable duration
+    is the one decoded from the actual frames — a word-count estimate drifts from
+    what the player reports (and what we put in the RSS ``itunes:duration``).
+    """
+    if not audio:
+        return None
+
+    i = 0
+    n = len(audio)
+    # Skip a leading ID3v2 tag (syncsafe size, 4 bytes) if present.
+    if n >= 10 and audio[:3] == b"ID3":
+        size = (
+            (audio[6] << 21) | (audio[7] << 14) | (audio[8] << 7) | audio[9]
+        )
+        i = 10 + size
+
+    total = 0.0
+    frames = 0
+    while i < n - 4:
+        if audio[i] != 0xFF or (audio[i + 1] & 0xE0) != 0xE0:
+            i += 1
+            continue
+        header = audio[i + 1]
+        ver_bits = (header >> 3) & 0x3
+        layer_bits = (header >> 1) & 0x3
+        b2 = audio[i + 2]
+        bitrate_idx = (b2 >> 4) & 0xF
+        srate_idx = (b2 >> 2) & 0x3
+        padding = (b2 >> 1) & 0x1
+
+        version = _MP3_VERSION.get(ver_bits)
+        # layer_bits 01 == Layer III; bail on anything else / reserved fields.
+        if (
+            version is None
+            or layer_bits != 1
+            or srate_idx == 3
+            or bitrate_idx in (0, 15)
+        ):
+            i += 1
+            continue
+
+        bitrate = _MP3_BITRATES_KBPS["1" if version == "1" else "2"][bitrate_idx] * 1000
+        sample_rate = _MP3_SAMPLE_RATES[version][srate_idx]
+        if bitrate == 0 or sample_rate == 0:
+            i += 1
+            continue
+
+        if version == "1":
+            samples_per_frame = 1152
+            frame_len = (144 * bitrate) // sample_rate + padding
+        else:
+            samples_per_frame = 576
+            frame_len = (72 * bitrate) // sample_rate + padding
+
+        if frame_len <= 0:
+            i += 1
+            continue
+
+        total += samples_per_frame / sample_rate
+        frames += 1
+        i += frame_len
+
+    if frames == 0:
+        return None
+    return max(1, round(total))
