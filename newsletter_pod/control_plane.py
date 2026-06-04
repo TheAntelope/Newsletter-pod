@@ -1391,8 +1391,9 @@ class ControlPlaneService:
                 raise ControlPlaneError(
                     f"Plan limit exceeded: max {entitlements.max_delivery_days} delivery days"
                 )
-            if not normalized:
-                raise ControlPlaneError("At least one delivery day is required")
+            # An empty list is allowed and means "no schedule" — the user opted
+            # out of automatic delivery and will generate pods on demand. _is_due
+            # never fires for an empty weekday set, so nothing auto-dispatches.
             schedule.weekdays = normalized
         if local_time is not None:
             schedule.local_time = _normalize_local_time(local_time)

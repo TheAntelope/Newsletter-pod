@@ -11,12 +11,13 @@ import '../widgets/onboarding_progress_dots.dart';
 import '../widgets/voice_choice_card.dart';
 import 'swipe_deck_screen.dart';
 
-/// Onboarding wizard (welcome → name → sources → Substack → show format → voices
-/// → schedule → weather → done). Editorial rebuild on the shared step-shell
-/// pattern from iOS: serif display title, body subtitle, a scrollable content
-/// well, and a bottom amber primary / outlined-back button pair, with the
-/// progress dots up top. Collected values are local in this build; finishing
-/// calls completeOnboarding so RootView shows the dashboard.
+/// Onboarding wizard (welcome → voice → style+weather → name → topics → swipe →
+/// Substack → format → co-host → schedule → done). Editorial rebuild on the
+/// shared step-shell pattern from iOS: serif display title, body subtitle, a
+/// scrollable content well, and a bottom amber primary / outlined-back button
+/// pair, with the progress dots up top. On finish the picks are written through
+/// to the podcast profile + schedule (best-effort) before completeOnboarding
+/// hands off to RootView's dashboard.
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -26,6 +27,20 @@ class OnboardingScreen extends StatefulWidget {
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
   static const _stepCount = 11;
+  static const _nameStepId = 3;
+
+  /// The visible steps, in order. The name step ("What should we call you?") is
+  /// shown only when the user opted into a personalised greeting on the style
+  /// step (id 2, immediately before it) — otherwise we never ask for a name.
+  List<int> get _activeSteps => [
+        for (var id = 0; id < _stepCount; id++)
+          if (id != _nameStepId || _greeting) id,
+      ];
+
+  /// The step id currently shown, resolved from the position [_step] within
+  /// [_activeSteps]. `_step` indexes the visible list, not the raw id space.
+  int get _currentStepId =>
+      _activeSteps[_step.clamp(0, _activeSteps.length - 1)];
   static const _weekdays = [
     ('mon', 'M'),
     ('tue', 'T'),
@@ -117,7 +132,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   void _next() {
-    if (_step < _stepCount - 1) {
+    if (_step < _activeSteps.length - 1) {
       setState(() => _step++);
     } else {
       _finish();
@@ -218,7 +233,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isLast = _step == _stepCount - 1;
+    final isLast = _step == _activeSteps.length - 1;
     return Scaffold(
       body: SafeArea(
         child: Column(
@@ -232,7 +247,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ),
               child: Row(
                 children: [
-                  OnboardingProgressDots(current: _step, total: _stepCount),
+                  OnboardingProgressDots(
+                      current: _step, total: _activeSteps.length),
                   const Spacer(),
                   if (!isLast)
                     TextButton(
@@ -248,7 +264,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             Expanded(child: _stepContent()),
             // ElevenLabs Startup Grant attribution — pinned to the bottom of the
             // welcome screen only, just above the primary action.
-            if (_step == 0) ...[
+            if (_currentStepId == 0) ...[
               const ElevenLabsBadge(),
               const SizedBox(height: DesignTokens.spacingS),
             ],
@@ -274,7 +290,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Widget _stepContent() {
-    switch (_step) {
+    switch (_currentStepId) {
       case 0:
         return _shell(
           leading: const ClawcastLogo(size: 64),
@@ -629,6 +645,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
           ],
         ),
+        const EditorialDivider(),
+        _NoScheduleOptOut(
+          optedOut: _selectedDays.isEmpty,
+          onOptOut: () => setState(_selectedDays.clear),
+        ),
       ],
     );
   }
@@ -810,6 +831,51 @@ class _FieldLabel extends StatelessWidget {
       label,
       style: DesignTokens.typographyCalloutStrong
           .copyWith(color: DesignTokens.colorMuted),
+    );
+  }
+}
+
+/// Lets the user decline a recurring schedule and generate pods on demand
+/// instead. "Opted out" is simply an empty weekday set — when it's empty we show
+/// a confirming note rather than the opt-out button.
+class _NoScheduleOptOut extends StatelessWidget {
+  const _NoScheduleOptOut({required this.optedOut, required this.onOptOut});
+
+  final bool optedOut;
+  final VoidCallback onOptOut;
+
+  @override
+  Widget build(BuildContext context) {
+    if (optedOut) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.bolt_outlined,
+            size: 20,
+            color: DesignTokens.colorMuted,
+          ),
+          const SizedBox(width: DesignTokens.spacingS),
+          Expanded(
+            child: Text(
+              'No schedule — pick days above any time, or just generate a pod '
+              'yourself whenever you want one.',
+              style: DesignTokens.typographyCallout
+                  .copyWith(color: DesignTokens.colorMuted),
+            ),
+          ),
+        ],
+      );
+    }
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton(
+        onPressed: onOptOut,
+        child: const Text(
+          "No thanks — I'll generate pods on my own when I want to",
+          textAlign: TextAlign.left,
+        ),
+      ),
     );
   }
 }

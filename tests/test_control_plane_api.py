@@ -136,6 +136,27 @@ def test_schedule_patch_accepts_local_time():
     assert bad2.status_code == 400
 
 
+def test_schedule_patch_allows_empty_weekdays_for_on_demand():
+    """Clearing all delivery days opts out of automatic generation: the patch
+    succeeds with an empty weekday set and the user is never picked up by the
+    dispatcher (an empty set is never "due")."""
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("on-demand-user", "od@example.com"))
+
+    resp = client.patch(
+        "/v1/me/schedule",
+        json={"weekdays": [], "timezone": "America/Chicago", "local_time": "06:30"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["schedule"]["weekdays"] == []
+
+    # With no delivery days, the dispatcher must not enqueue any generation,
+    # regardless of the current time.
+    result = container.control_plane.dispatch_due_users()
+    assert all(p["user_id"] != "on-demand-user" for p in result["processed"])
+
+
 def test_feedback_endpoint_translates_and_persists(monkeypatch):
     from newsletter_pod import control_plane as cp_module
 

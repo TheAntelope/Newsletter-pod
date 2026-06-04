@@ -115,12 +115,15 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
   final _hostSecondaryController = TextEditingController();
   final _weatherController = TextEditingController();
   final _guidanceController = TextEditingController();
+  // The listener's name, used only when "Greet me by name" is on (account-level
+  // displayName, not a profile field).
+  final _nameController = TextEditingController();
 
   String _formatPreset = 'two_hosts';
   int _durationMinutes = 5;
   String? _voiceId;
-  String _tone = 'calm_analyst';
-  String _humor = 'none';
+  String _tone = 'playful';
+  String _humor = 'dad_jokes';
   int _keyFindings = 3;
   bool _greeting = true;
   bool _topTakeaways = true;
@@ -159,6 +162,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
         _entitlements = config.entitlements;
         _voices = voices.voices;
         _titleController.text = p.title;
+        _nameController.text = _app.me?.user.displayName ?? '';
         _hostPrimaryController.text = p.hostPrimaryName;
         _hostSecondaryController.text = p.hostSecondaryName ?? '';
         _weatherController.text = p.weatherLocation ?? '';
@@ -166,8 +170,8 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
         _formatPreset = p.formatPreset;
         _durationMinutes = p.desiredDurationMinutes;
         _voiceId = p.voiceId;
-        _tone = p.tone ?? 'calm_analyst';
-        _humor = p.humorStyle ?? 'none';
+        _tone = p.tone ?? 'playful';
+        _humor = p.humorStyle ?? 'dad_jokes';
         _keyFindings = p.keyFindingsCount ?? 3;
         _greeting = p.personalizedGreeting ?? true;
         _topTakeaways = p.includeTopTakeaways ?? true;
@@ -197,6 +201,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
     _hostSecondaryController.dispose();
     _weatherController.dispose();
     _guidanceController.dispose();
+    _nameController.dispose();
     super.dispose();
   }
 
@@ -262,6 +267,16 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
         weekdays: _weekdays.toList(),
         localTime: _localTime,
       );
+      // Persist the greeting name to the account display name (only when the
+      // greeting is on and a name was entered), then refresh `me`.
+      final name = _nameController.text.trim();
+      if (_greeting && name.isNotEmpty && name != _app.me?.user.displayName) {
+        await _app.repository.updateProfile(
+          displayName: name,
+          timezone: _app.me?.user.timezone ?? _timezone,
+        );
+        await _app.loadMe();
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Saved')));
@@ -408,6 +423,12 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
               value: _greeting,
               onChanged: (v) => setState(() => _greeting = v),
             ),
+            if (_greeting)
+              TextField(
+                controller: _nameController,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(labelText: 'Your name'),
+              ),
             _SwitchRow(
               label: 'Include top takeaways',
               value: _topTakeaways,
@@ -493,6 +514,11 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
               'Stories must arrive before $_cutoffTime to make that day’s pod.',
               style: DesignTokens.typographyCallout
                   .copyWith(color: DesignTokens.colorMuted),
+            ),
+            const EditorialDivider(),
+            _NoScheduleOptOut(
+              optedOut: _weekdays.isEmpty,
+              onOptOut: () => setState(_weekdays.clear),
             ),
           ],
         ),
@@ -683,6 +709,51 @@ class _NumberPill extends StatelessWidget {
           style: DesignTokens.typographySubtitle.copyWith(
             color: selected ? Colors.white : DesignTokens.colorInk,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Lets the user decline a recurring schedule and generate pods on demand
+/// instead. "Opted out" is simply an empty weekday set — when it's empty we show
+/// a confirming note rather than the opt-out button.
+class _NoScheduleOptOut extends StatelessWidget {
+  const _NoScheduleOptOut({required this.optedOut, required this.onOptOut});
+
+  final bool optedOut;
+  final VoidCallback onOptOut;
+
+  @override
+  Widget build(BuildContext context) {
+    if (optedOut) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.bolt_outlined,
+            size: 20,
+            color: DesignTokens.colorMuted,
+          ),
+          const SizedBox(width: DesignTokens.spacingS),
+          Expanded(
+            child: Text(
+              'No schedule — pick days above any time, or just generate a pod '
+              'yourself whenever you want one.',
+              style: DesignTokens.typographyCallout
+                  .copyWith(color: DesignTokens.colorMuted),
+            ),
+          ),
+        ],
+      );
+    }
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton(
+        onPressed: onOptOut,
+        child: const Text(
+          "No thanks — I'll generate pods on my own when I want to",
+          textAlign: TextAlign.left,
         ),
       ),
     );
