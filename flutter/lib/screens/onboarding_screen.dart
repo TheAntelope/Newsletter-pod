@@ -712,10 +712,10 @@ class _WelcomePoints extends StatelessWidget {
 }
 
 /// ElevenLabs Startup Grant attribution shown at the bottom of the welcome
-/// screen. The logo is an asset slot (assets/brand/elevenlabs-grant.png) — until
-/// the official badge is dropped in, the placeholder is ~invisible and the
-/// "Voices powered by ElevenLabs" caption carries the attribution. If the asset
-/// is ever missing entirely, the image quietly collapses to nothing.
+/// screen: a "Voices powered by" caption above the official ElevenLabs wordmark
+/// (assets/brand/elevenlabs-logo.png, the black logo from elevenlabs.io/brand,
+/// suited to the cream ground). If the asset is ever missing the wordmark falls
+/// back to text so the attribution still reads.
 class _ElevenLabsBadge extends StatelessWidget {
   const _ElevenLabsBadge();
 
@@ -724,18 +724,22 @@ class _ElevenLabsBadge extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Image.asset(
-          'assets/brand/elevenlabs-grant.png',
-          height: 28,
-          fit: BoxFit.contain,
-          errorBuilder: (_, _, _) => const SizedBox.shrink(),
-        ),
-        const SizedBox(height: 6),
         Text(
-          'Voices powered by ElevenLabs',
+          'Voices powered by',
           style: DesignTokens.typographyMeta.copyWith(
             color: DesignTokens.colorMuted,
             letterSpacing: 0.6,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Image.asset(
+          'assets/brand/elevenlabs-logo.png',
+          height: 20,
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) => Text(
+            'ElevenLabs',
+            style: DesignTokens.typographyBodyStrong
+                .copyWith(color: DesignTokens.colorInk),
           ),
         ),
       ],

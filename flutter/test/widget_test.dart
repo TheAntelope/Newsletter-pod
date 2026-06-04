@@ -228,7 +228,7 @@ void main() {
     // Onboarding (not the dashboard) shows first.
     expect(find.text('Welcome to ClawCast'), findsOneWidget);
     // ElevenLabs grant attribution sits at the bottom of the welcome screen.
-    expect(find.text('Voices powered by ElevenLabs'), findsOneWidget);
+    expect(find.text('Voices powered by'), findsOneWidget);
 
     // Advance through every step until only Finish remains (step count varies).
     for (var guard = 0; guard < 20 && find.text('Next').evaluate().isNotEmpty; guard++) {
