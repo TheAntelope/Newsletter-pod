@@ -24,7 +24,7 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  static const _stepCount = 10;
+  static const _stepCount = 11;
   static const _weekdays = [
     ('mon', 'M'),
     ('tue', 'T'),
@@ -180,13 +180,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     switch (_step) {
       case 0:
         return _shell(
-          title: 'Pick your voice',
+          title: 'Welcome to ClawCast',
           subtitle:
-              'Welcome to ClawCast! First, the fun part — choose the voice that '
-              'reads your briefing every morning. Tap a card to hear a sample.',
-          children: [_hostVoiceStep()],
+              'A daily briefing podcast, built from the sources you choose. '
+              "Here's what we'll set up — it takes about a minute.",
+          children: const [_WelcomeSteps()],
         );
       case 1:
+        return _shell(
+          title: 'Pick your voice',
+          subtitle:
+              'First, the fun part — choose the voice that reads your briefing '
+              'every morning. Tap a card to hear a sample.',
+          children: [_hostVoiceStep()],
+        );
+      case 2:
         return _shell(
           title: 'What should we call you?',
           subtitle: "We'll greet you by name at the top of each episode.",
@@ -198,7 +206,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
           ],
         );
-      case 2:
+      case 3:
         return _shell(
           title: 'Pick your topics',
           subtitle:
@@ -207,7 +215,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               'tune any time from the Sources tab.',
           children: [_topicsStep()],
         );
-      case 3:
+      case 4:
         return _shell(
           title: 'Tune your pod',
           subtitle:
@@ -220,7 +228,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
           ],
         );
-      case 4:
+      case 5:
         return _shell(
           title: 'Add your Substacks',
           subtitle:
@@ -228,13 +236,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               'and they fold into your pod automatically.',
           children: const [_InboundAddressCard()],
         );
-      case 5:
+      case 6:
         return _shell(
           title: 'Choose a format',
           subtitle: 'How should your briefing be hosted?',
           children: [_showStep()],
         );
-      case 6:
+      case 7:
         return _shell(
           title: _isTwoHost ? 'Add a co-host' : 'Your host',
           subtitle: _isTwoHost
@@ -244,7 +252,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   'here if you like.',
           children: [_coHostStep()],
         );
-      case 7:
+      case 8:
         return _shell(
           title: 'Set your schedule',
           subtitle:
@@ -252,7 +260,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               'at 07:00.',
           children: [_scheduleEditor()],
         );
-      case 8:
+      case 9:
         return _shell(
           title: 'Add a weather note?',
           subtitle:
@@ -625,24 +633,72 @@ class _ShowPresetRow extends StatelessWidget {
   }
 }
 
-/// The "you're all set" recap — the setup agenda shown as completed checks.
+/// The setup agenda, shown two ways: as numbered steps on the welcome screen
+/// and as completed checks on the "you're all set" recap. Kept in one place so
+/// the two never drift — and so it stays an accurate summary of the actual
+/// onboarding steps (voice + format, topics + sources, schedule). Note there is
+/// no length/duration step in onboarding — that lives in the podcast settings.
+const _setupAgenda = [
+  'Pick your voice and show format',
+  'Choose the topics and sources you trust',
+  'Get a fresh briefing on your schedule',
+];
+
+/// The welcome preview: a numbered "here's what we'll do" list. Numbered badges
+/// (not check circles) so it reads as an agenda rather than a tappable form.
+class _WelcomeSteps extends StatelessWidget {
+  const _WelcomeSteps();
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      spacing: DesignTokens.spacingM,
+      children: [
+        for (var i = 0; i < _setupAgenda.length; i++)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 26,
+                height: 26,
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                  color: DesignTokens.colorAmber,
+                  shape: BoxShape.circle,
+                ),
+                child: Text(
+                  '${i + 1}',
+                  style: DesignTokens.typographyCalloutStrong
+                      .copyWith(color: Colors.white),
+                ),
+              ),
+              const SizedBox(width: DesignTokens.spacingM),
+              Expanded(
+                child: Text(
+                  _setupAgenda[i],
+                  style: DesignTokens.typographyBody
+                      .copyWith(color: DesignTokens.colorInk),
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+/// The "you're all set" recap — the same agenda shown as completed checks.
 class _WelcomePoints extends StatelessWidget {
   const _WelcomePoints({this.allChecked = false});
 
   final bool allChecked;
-
-  static const _points = [
-    'Pick the topics and sources you trust',
-    'Choose a format, voice, and length',
-    'Get a fresh briefing on your schedule',
-  ];
 
   @override
   Widget build(BuildContext context) {
     return EditorialCard(
       spacing: DesignTokens.spacingS,
       children: [
-        for (final p in _points)
+        for (final p in _setupAgenda)
           ChecklistRow(label: p, isComplete: allChecked),
       ],
     );

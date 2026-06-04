@@ -225,8 +225,8 @@ void main() {
     await tester.tap(find.text('Get started'));
     await tester.pumpAndSettle();
 
-    // Onboarding (not the dashboard) shows first — voice pick is step one.
-    expect(find.text('Pick your voice'), findsOneWidget);
+    // Onboarding (not the dashboard) shows first.
+    expect(find.text('Welcome to ClawCast'), findsOneWidget);
 
     // Advance through every step until only Finish remains (step count varies).
     for (var guard = 0; guard < 20 && find.text('Next').evaluate().isNotEmpty; guard++) {
@@ -253,9 +253,11 @@ void main() {
 
     await tester.tap(find.text('Get started'));
     await tester.pumpAndSettle();
-    expect(find.text('Pick your voice'), findsOneWidget);
+    expect(find.text('Welcome to ClawCast'), findsOneWidget);
 
-    // Voice -> Name -> Topics.
+    // Welcome -> Voice -> Name -> Topics.
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Next'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Next'));
