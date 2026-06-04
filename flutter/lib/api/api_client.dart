@@ -40,6 +40,31 @@ class SourcePayload {
       };
 }
 
+/// Result of `POST /v1/items/shared` (the share-to-ClawCast endpoint). Hand
+/// -rolled (no json_serializable codegen) since it's only used by the share
+/// flow. `duplicate` is true when an identical share was already queued.
+class SharedItemResult {
+  final String itemId;
+  final String title;
+  final String shareKind;
+  final bool duplicate;
+
+  SharedItemResult({
+    required this.itemId,
+    required this.title,
+    required this.shareKind,
+    required this.duplicate,
+  });
+
+  factory SharedItemResult.fromJson(Map<String, dynamic> json) =>
+      SharedItemResult(
+        itemId: json['item_id']?.toString() ?? '',
+        title: json['title']?.toString() ?? '',
+        shareKind: json['share_kind']?.toString() ?? '',
+        duplicate: json['duplicate'] == true,
+      );
+}
+
 class ApiClient {
   final String _baseUrl;
   final http.Client _client;
@@ -383,6 +408,52 @@ class ApiClient {
           method: 'POST',
           token: token,
           body: {'signed_transaction_info': signedTransactionInfo}));
+
+  // -------------------------------------------------------------------------
+  // Shared items (share-to-ClawCast)
+  // -------------------------------------------------------------------------
+
+  /// Pin a shared link/text/document to the user's next pod
+  /// (`POST /v1/items/shared`, multipart). Mirrors the iOS Share Extension:
+  /// [kind] is one of `url|text|pdf|epub|docx`; a `url` kind sends the link as a
+  /// form field, every other kind uploads [fileBytes] as the `file` part. The
+  /// backend routes extraction by [kind], so the part's content-type is left as
+  /// the default. Surfaces 401 (sign in) / 413 (too large) / `detail` via
+  /// [ApiException].
+  Future<SharedItemResult> submitSharedItem(
+    String token, {
+    required String kind,
+    String? url,
+    List<int>? fileBytes,
+    String? filename,
+    String? title,
+  }) async {
+    final uri = Uri.parse(_baseUrl).replace(path: '/v1/items/shared');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer $token'
+      ..fields['kind'] = kind;
+    if (title != null && title.isNotEmpty) request.fields['title'] = title;
+    if (kind == 'url') {
+      if (url != null) request.fields['url'] = url;
+    } else {
+      request.files.add(http.MultipartFile.fromBytes(
+        'file',
+        fileBytes ?? const <int>[],
+        filename: filename ?? 'shared',
+      ));
+    }
+
+    final streamed = await _client.send(request);
+    final resp = await http.Response.fromStream(streamed);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw ApiException(_errorMessage(resp), statusCode: resp.statusCode);
+    }
+    final decoded = resp.body.isEmpty ? <String, dynamic>{} : jsonDecode(resp.body);
+    if (decoded is Map<String, dynamic>) {
+      return SharedItemResult.fromJson(decoded);
+    }
+    throw ApiException('Unexpected response shape from /v1/items/shared');
+  }
 
   // -------------------------------------------------------------------------
   // Transport
