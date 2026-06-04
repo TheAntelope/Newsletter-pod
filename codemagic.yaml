@@ -404,8 +404,8 @@ workflows:
           flutter build appbundle --release \
             --build-number="$BUILD_NUMBER" \
             --dart-define=ENABLE_GOOGLE_SIGN_IN=true \
-            --dart-define=ENABLE_PURCHASES_REVENUECAT="${ENABLE_PURCHASES_REVENUECAT:-false}" \
-            --dart-define=REVENUECAT_ANDROID_KEY="${REVENUECAT_ANDROID_KEY:-}"
+            --dart-define=ENABLE_PURCHASES_REVENUECAT=true \
+            --dart-define=REVENUECAT_ANDROID_KEY=goog_wmyyscxLmKwzOOzLHfOnruzAbnv
     artifacts:
       - flutter/build/app/outputs/bundle/release/*.aab
       - flutter/build/app/outputs/mapping/release/mapping.txt
@@ -413,6 +413,7 @@ workflows:
       google_play:
         credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
         track: internal
-        # Non-production track: don't submit for review (avoids the "changes
-        # pending review" state on internal/alpha/beta).
-        changes_not_sent_for_review: true
+        # NOTE: do NOT set changes_not_sent_for_review here. Google Play rejects
+        # the changesNotSentForReview param for an app that hasn't been through
+        # production review yet ("Changes are sent for review automatically...").
+        # Re-add it only once the app is established in production.
