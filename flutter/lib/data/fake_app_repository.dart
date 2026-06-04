@@ -406,8 +406,9 @@ class FakeAppRepository implements AppRepository {
   }
 
   @override
-  Future<SwipeDeckEnvelope> fetchSwipeDeck() async {
+  Future<SwipeDeckEnvelope> fetchSwipeDeck({List<String>? topics}) async {
     await Future<void>.delayed(const Duration(milliseconds: 150));
+    if (topics != null && topics.isNotEmpty) return _coldStartDeck(topics);
     final now = DateTime.now();
     return SwipeDeckEnvelope(
       items: [
@@ -450,6 +451,39 @@ class FakeAppRepository implements AppRepository {
 
   @override
   Future<void> submitSwipe(String dedupeKey, int direction) async {}
+
+  /// A cold-start onboarding deck synthesized from the catalog: one card per
+  /// source in the picked [topics] (capped), so the stack visibly reflects the
+  /// categories the user just selected. The live backend builds the real deck
+  /// from freshly-ingested items for the same topics.
+  SwipeDeckEnvelope _coldStartDeck(List<String> topics) {
+    final selected = topics.toSet();
+    final catalog = CatalogEnvelope.fromJson(
+        jsonDecode(kDemoSourcesCatalogJson) as Map<String, dynamic>);
+    final matches = catalog.sources
+        .where((s) => s.topic != null && selected.contains(s.topic))
+        .take(12)
+        .toList();
+    final now = DateTime.now();
+    final items = <SwipeDeckCardDto>[];
+    for (var i = 0; i < matches.length; i++) {
+      final s = matches[i];
+      final topic = s.topic!;
+      items.add(SwipeDeckCardDto(
+        sourceItemDedupeKey: 'cold-${s.sourceId}',
+        title: 'What ${s.name} is covering in $topic',
+        summary: 'A representative $topic story from ${s.name}.',
+        cardSummary:
+            'A representative $topic story from ${s.name} — swipe to teach your '
+            'pod what to pull more of.',
+        sourceId: s.sourceId,
+        sourceName: s.name,
+        link: s.rssUrl,
+        publishedAt: now.subtract(Duration(hours: i + 1)),
+      ));
+    }
+    return SwipeDeckEnvelope(items: items);
+  }
 
   final List<SubstackIntentDto> _createdIntents = [];
 

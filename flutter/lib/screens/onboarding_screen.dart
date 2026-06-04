@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../api/api_client.dart' show SourcePayload;
 import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
@@ -41,10 +42,35 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         'An anchor plus a different guest voice each day.'),
   ];
 
+  /// Curated icon + display order for the catalog's topic categories. The chips
+  /// shown are the intersection of this map with the topics actually present in
+  /// the catalog, so new catalog topics fall back to a default glyph rather than
+  /// disappearing.
+  static const _topicIcons = <String, IconData>{
+    'News': Icons.public,
+    'Politics': Icons.account_balance_outlined,
+    'Business': Icons.trending_up,
+    'Tech': Icons.memory,
+    'Strategy': Icons.lightbulb_outline,
+    'Personal Finance': Icons.savings_outlined,
+    'Science': Icons.science_outlined,
+    'Sports': Icons.sports_basketball_outlined,
+    'Culture': Icons.theater_comedy_outlined,
+    'Health & Wellness': Icons.spa_outlined,
+    'Fitness': Icons.fitness_center,
+    'Family Life': Icons.family_restroom_outlined,
+    'Food & Travel': Icons.restaurant_outlined,
+    'Romantasy': Icons.auto_stories_outlined,
+  };
+
   int _step = 0;
   final _nameController = TextEditingController();
   final _weatherController = TextEditingController();
   String _showPreset = 'two_hosts';
+  // Topic categories the user picks on the sources step. These both enable the
+  // matching catalog sources (pod tuning) on finish and seed the swipe deck.
+  final Set<String> _selectedTopics = {'Tech', 'Business'};
+  Future<CatalogEnvelope>? _catalog;
   String? _anchorVoiceId;
   String? _commentatorVoiceId;
   bool _includeWeather = false;
@@ -67,7 +93,31 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     if (_step < _stepCount - 1) {
       setState(() => _step++);
     } else {
-      AppScope.of(context).completeOnboarding();
+      _finish();
+    }
+  }
+
+  /// Persist the picked topics as enabled sources (pod tuning), then drop into
+  /// the dashboard. The source write is best-effort — onboarding completes even
+  /// if it fails, since the user can still tune from the Sources tab.
+  Future<void> _finish() async {
+    final app = AppScope.of(context);
+    await _persistTopicSources(app);
+    if (!mounted) return;
+    app.completeOnboarding();
+  }
+
+  Future<void> _persistTopicSources(AppState app) async {
+    try {
+      final catalog = await (_catalog ??= app.repository.fetchCatalog());
+      final payloads = catalog.sources
+          .where((s) => s.topic != null && _selectedTopics.contains(s.topic))
+          .map((s) => SourcePayload(sourceId: s.sourceId, isCustom: false))
+          .toList();
+      if (payloads.isEmpty) return;
+      await app.repository.replaceSources(payloads);
+    } catch (_) {
+      // Best-effort; never block finishing onboarding.
     }
   }
 
@@ -133,8 +183,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           title: 'Welcome to ClawCast',
           subtitle:
               'A daily briefing podcast, built from the sources you choose. '
-              "Let's set up your show — it takes about a minute.",
-          children: const [_WelcomePoints()],
+              "Here's what we'll set up — it takes about a minute.",
+          children: const [_WelcomeSteps()],
         );
       case 1:
         return _shell(
@@ -150,11 +200,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         );
       case 2:
         return _shell(
-          title: 'Pick your sources',
+          title: 'Pick your topics',
           subtitle:
-              'Start from a curated catalog of tech and business newsletters — '
-              'you can fine-tune it any time from the Sources tab.',
-          children: const [_SourcePreview()],
+              'Choose what you want in your briefing. We pull sources from these '
+              "categories and build your first stories to swipe — you can fine-"
+              'tune any time from the Sources tab.',
+          children: [_topicsStep()],
         );
       case 3:
         return _shell(
@@ -162,8 +213,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           subtitle:
               "Swipe right on stories you'd want to hear more about, left to "
               'skip. Optional — your picker learns from every card.',
-          children: const [
-            SizedBox(height: 460, child: SwipeDeck()),
+          children: [
+            SizedBox(
+              height: 460,
+              child: SwipeDeck(topics: _selectedTopics.toList()),
+            ),
           ],
         );
       case 4:
@@ -245,6 +299,58 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         ],
       ),
     );
+  }
+
+  Widget _topicsStep() {
+    _catalog ??= AppScope.of(context).repository.fetchCatalog();
+    return FutureBuilder<CatalogEnvelope>(
+      future: _catalog,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Padding(
+            padding: EdgeInsets.all(DesignTokens.spacingL),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final topics = _topicsFrom(snapshot.data);
+        return EditorialCard(
+          children: [
+            const MetaLabel('Topics'),
+            Text(
+              'Tap to add or remove. Your first swipe deck is built from these.',
+              style: DesignTokens.typographyCallout
+                  .copyWith(color: DesignTokens.colorMuted),
+            ),
+            Wrap(
+              spacing: DesignTokens.spacingS,
+              runSpacing: DesignTokens.spacingS,
+              children: [
+                for (final t in topics)
+                  _TopicChip(
+                    label: t,
+                    icon: _topicIcons[t] ?? Icons.label_outline,
+                    selected: _selectedTopics.contains(t),
+                    onTap: () => setState(() {
+                      if (!_selectedTopics.remove(t)) _selectedTopics.add(t);
+                    }),
+                  ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Distinct topic names in catalog order (first appearance wins).
+  List<String> _topicsFrom(CatalogEnvelope? catalog) {
+    final seen = <String>{};
+    final ordered = <String>[];
+    for (final s in catalog?.sources ?? const []) {
+      final t = s.topic;
+      if (t != null && t.isNotEmpty && seen.add(t)) ordered.add(t);
+    }
+    return ordered;
   }
 
   Widget _showStep() {
@@ -463,14 +569,64 @@ class _ShowPresetRow extends StatelessWidget {
   }
 }
 
+/// The welcome preview: a numbered "here's what we'll do" list. Numbered badges
+/// (not check circles) so it reads as an agenda rather than a tappable form.
+class _WelcomeSteps extends StatelessWidget {
+  const _WelcomeSteps();
+
+  static const _steps = [
+    'Pick the topics and sources you trust',
+    'Choose a format, voice, and length',
+    'Get a fresh briefing on your schedule',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      spacing: DesignTokens.spacingM,
+      children: [
+        for (var i = 0; i < _steps.length; i++)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 26,
+                height: 26,
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                  color: DesignTokens.colorAmber,
+                  shape: BoxShape.circle,
+                ),
+                child: Text(
+                  '${i + 1}',
+                  style: DesignTokens.typographyCalloutStrong
+                      .copyWith(color: Colors.white),
+                ),
+              ),
+              const SizedBox(width: DesignTokens.spacingM),
+              Expanded(
+                child: Text(
+                  _steps[i],
+                  style: DesignTokens.typographyBody
+                      .copyWith(color: DesignTokens.colorInk),
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+/// The "you're all set" recap — the same agenda shown as completed checks.
 class _WelcomePoints extends StatelessWidget {
   const _WelcomePoints({this.allChecked = false});
 
   final bool allChecked;
 
   static const _points = [
-    'Pick the newsletters and sources you trust',
-    'Choose a voice and a length',
+    'Pick the topics and sources you trust',
+    'Choose a format, voice, and length',
     'Get a fresh briefing on your schedule',
   ];
 
@@ -486,52 +642,59 @@ class _WelcomePoints extends StatelessWidget {
   }
 }
 
-class _SourcePreview extends StatelessWidget {
-  const _SourcePreview();
+/// A selectable topic pill. Amber fill when selected; cream/outline when not.
+class _TopicChip extends StatelessWidget {
+  const _TopicChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
 
-  static const _topics = [
-    ('Tech', Icons.memory),
-    ('Business', Icons.trending_up),
-    ('Culture', Icons.theater_comedy_outlined),
-    ('Science', Icons.science_outlined),
-  ];
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return EditorialCard(
-      children: [
-        const MetaLabel('Popular topics'),
-        Wrap(
-          spacing: DesignTokens.spacingS,
-          runSpacing: DesignTokens.spacingS,
-          children: [
-            for (final t in _topics)
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: DesignTokens.spacingM,
-                  vertical: DesignTokens.spacingS,
-                ),
-                decoration: BoxDecoration(
-                  color: DesignTokens.colorCream,
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: DesignTokens.colorRule),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(t.$2, size: 16, color: DesignTokens.colorAmberDeep),
-                    const SizedBox(width: 6),
-                    Text(
-                      t.$1,
-                      style: DesignTokens.typographyCalloutStrong
-                          .copyWith(color: DesignTokens.colorInk),
-                    ),
-                  ],
-                ),
+    final fg = selected ? Colors.white : DesignTokens.colorInk;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: DesignTokens.spacingM,
+            vertical: DesignTokens.spacingS,
+          ),
+          decoration: BoxDecoration(
+            color: selected ? DesignTokens.colorAmber : DesignTokens.colorCream,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: selected ? DesignTokens.colorAmber : DesignTokens.colorRule,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                selected ? Icons.check : icon,
+                size: 16,
+                color: selected ? Colors.white : DesignTokens.colorAmberDeep,
               ),
-          ],
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: DesignTokens.typographyCalloutStrong.copyWith(color: fg),
+              ),
+            ],
+          ),
         ),
-      ],
+      ),
     );
   }
 }

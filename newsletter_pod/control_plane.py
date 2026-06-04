@@ -49,6 +49,7 @@ from .mailer import Mailer
 from .models import PodcastUxConfig, PublishStatus, SourceDefinition, SourceItem, SourceItemRecord, SourceItemRef
 from .podcast_api import PodcastApiClient
 from .prompting import build_digest_prompt
+from .regions import region_for_timezone, source_region_matches
 from .card_summary import CardSummarizer, CardSummaryService
 from .ranker import rank_items
 from .shared_items import (
@@ -878,11 +879,55 @@ class ControlPlaneService:
             recipients.append(address)
         return recipients
 
-    def get_cold_start_swipe_deck(self, user_id: str) -> dict[str, Any]:
-        self._require_user(user_id)
-        records = self._swipe_deck_service.get_cold_start_deck(user_id)
+    def get_cold_start_swipe_deck(
+        self, user_id: str, topics: list[str] | None = None
+    ) -> dict[str, Any]:
+        user = self._require_user(user_id)
+        source_ids = self._catalog_source_ids_for_topics(topics)
+        if source_ids:
+            preferred = self._region_preferred_source_ids(user, source_ids)
+            records = self._swipe_deck_service.get_topic_seeded_deck(
+                user_id, source_ids, preferred_source_ids=preferred
+            )
+        else:
+            records = self._swipe_deck_service.get_cold_start_deck(user_id)
         records = self._card_summary_service.ensure_summaries(records)
         return {"items": [_swipe_card_payload(record) for record in records]}
+
+    def _region_preferred_source_ids(
+        self, user: UserRecord, source_ids: list[str]
+    ) -> list[str]:
+        """Within the topic-seeded source set, the catalog sources whose region
+        matches the user's region (derived from their timezone — no location
+        permission). Empty when the timezone is unmapped or nothing matches, in
+        which case the deck is simply not region-biased.
+        """
+        region = region_for_timezone(getattr(user, "timezone", None))
+        if not region:
+            return []
+        candidate = set(source_ids)
+        return [
+            source.id
+            for source in self._catalog.values()
+            if source.id in candidate
+            and source_region_matches(region, source.region)
+        ]
+
+    def _catalog_source_ids_for_topics(self, topics: list[str] | None) -> list[str]:
+        """Resolve catalog topic names (as picked in onboarding) to the ids of the
+        catalog sources tagged with them. Case-insensitive; unknown topics are
+        ignored. Empty result falls back to the global cold-start deck.
+        """
+        if not topics:
+            return []
+        wanted = {topic.strip().casefold() for topic in topics if topic and topic.strip()}
+        if not wanted:
+            return []
+        return [
+            source.id
+            for source in self._catalog.values()
+            if source.topic and source.topic.casefold() in wanted
+        ]
 
     def refresh_cold_start_deck(self) -> dict[str, Any]:
         """Force-refresh the global cold-start swipe deck.

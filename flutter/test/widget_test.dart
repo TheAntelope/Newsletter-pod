@@ -243,6 +243,37 @@ void main() {
     expect(find.text('Generate now'), findsOneWidget);
   });
 
+  testWidgets('onboarding topic step lists every catalog category and toggles',
+      (tester) async {
+    _useTallViewport(tester);
+    final appState = AppState(FakeAppRepository());
+    await tester.pumpWidget(
+      AppScope(notifier: appState, child: const ClawcastApp()),
+    );
+
+    await tester.tap(find.text('Get started'));
+    await tester.pumpAndSettle();
+    expect(find.text('Welcome to ClawCast'), findsOneWidget);
+
+    // Welcome -> Name -> Topics.
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pick your topics'), findsOneWidget);
+    // The full catalog set is offered, not just the old hardcoded four — topics
+    // that only exist deeper in the catalog must render as chips.
+    expect(find.text('Romantasy'), findsOneWidget);
+    expect(find.text('Family Life'), findsOneWidget);
+    expect(find.text('Personal Finance'), findsOneWidget);
+
+    // Chips are tappable (toggling selection rebuilds without throwing).
+    await tester.tap(find.text('Science'));
+    await tester.pumpAndSettle();
+    expect(find.text('Pick your topics'), findsOneWidget);
+  });
+
   testWidgets('adding a substack copies the alias and opens its subscribe form',
       (tester) async {
     // Capture url_launcher channel calls so we can assert the deep-link fires.
