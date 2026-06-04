@@ -12,6 +12,12 @@ class PurchasesController {
 
   static bool _configured = false;
 
+  /// TEMP (billing diagnosis): emit RevenueCat verbose logs so an on-device
+  /// `adb logcat` shows the exact product query + store response while we work
+  /// out why `getProducts` returns empty on the internal track. Flip back to
+  /// false (or delete) once billing is verified.
+  static const bool _verboseBillingLogs = true;
+
   static bool get _enabled =>
       FeatureFlags.purchasesRevenueCat && AppConfig.revenueCatAndroidKey.isNotEmpty;
 
@@ -21,6 +27,9 @@ class PurchasesController {
   static Future<void> configureAndLogin(String appUserId) async {
     if (!_enabled) return;
     if (!_configured) {
+      if (_verboseBillingLogs) {
+        await Purchases.setLogLevel(LogLevel.verbose);
+      }
       await Purchases.configure(
         PurchasesConfiguration(AppConfig.revenueCatAndroidKey)
           ..appUserID = appUserId,
