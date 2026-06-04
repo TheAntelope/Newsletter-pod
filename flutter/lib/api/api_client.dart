@@ -363,6 +363,7 @@ class ApiClient {
     required String environment,
     required String bundleId,
     String platform = 'ios',
+    String transport = 'fcm',
   }) async =>
       DeviceTokenAck.fromJson(
           await _send('/v1/me/device-tokens', method: 'POST', token: token, body: {
@@ -370,6 +371,7 @@ class ApiClient {
         'environment': environment,
         'bundle_id': bundleId,
         'platform': platform,
+        'transport': transport,
       }));
 
   Future<VerifySubscriptionEnvelope> verifySubscription(

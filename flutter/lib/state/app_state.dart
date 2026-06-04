@@ -109,25 +109,42 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Requests notification permission and registers the FCM token with the
-  /// backend (platform=android). No-ops without a live ApiClient/session, and
-  /// never throws into the sign-in flow.
+  /// Requests notification permission, registers the FCM token with the backend
+  /// (platform from the device, transport=fcm on both), and wires foreground
+  /// display + tap routing. No-ops without a live ApiClient/session, and never
+  /// throws into the sign-in flow.
   Future<void> _registerForPush() async {
     final client = _apiClient;
     final session = _sessionToken;
     if (client == null || session == null) return;
+    // Constructed here (not as a field) so the demo build / widget tests never
+    // touch FirebaseMessaging.instance — same reason the original was lazy.
+    final messaging = MessagingController();
     try {
-      final fcmToken = await MessagingController().requestPermissionAndToken();
+      // Wire foreground display + tap handling once; a tap on a "pod ready"
+      // push refreshes the signed-in snapshot so the new episode shows up.
+      await messaging.configure(onOpened: _handlePushOpened);
+      final fcmToken = await messaging.requestPermissionAndToken();
       if (fcmToken == null || fcmToken.isEmpty) return;
       await client.registerDeviceToken(
         session,
         deviceToken: fcmToken,
         environment: 'production',
         bundleId: 'com.newsletterpod.app',
-        platform: 'android',
+        platform: messaging.platform,
+        transport: messaging.transport,
       );
     } catch (_) {
       // Push registration is best-effort; ignore failures.
+    }
+  }
+
+  /// Handles a notification tap. For a "pod ready" push we just reload `me` so
+  /// the freshly-published episode surfaces; the data map also carries
+  /// `episode_id` / `feed_url` for future deep-linking.
+  void _handlePushOpened(Map<String, dynamic> data) {
+    if (data['type'] == 'pod_ready') {
+      unawaited(loadMe());
     }
   }
 

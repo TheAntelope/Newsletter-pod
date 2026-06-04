@@ -1,4 +1,4 @@
-import '../api/api_client.dart' show SourcePayload;
+import '../api/api_client.dart' show SourcePayload, SharedItemResult;
 import '../api/models.dart';
 
 /// The data layer the screens talk to.
@@ -69,4 +69,15 @@ abstract interface class AppRepository {
   Future<SubstackIntentsEnvelope> fetchSubstackIntents();
   Future<SubstackDiscoveryEnvelope> discoverSubstacks(String query);
   Future<SubstackIntentEnvelope> createSubstackIntent(String pubUrl);
+
+  /// Pin a shared link/text/document to the next pod (`POST /v1/items/shared`).
+  /// [kind] is `url|text|pdf|epub|docx`; `url` passes [url], everything else
+  /// uploads [fileBytes]/[filename].
+  Future<SharedItemResult> submitSharedItem({
+    required String kind,
+    String? url,
+    List<int>? fileBytes,
+    String? filename,
+    String? title,
+  });
 }

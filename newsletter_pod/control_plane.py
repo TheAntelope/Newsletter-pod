@@ -3282,7 +3282,15 @@ def _validate_format_preset(value: str) -> None:
 
 
 _TONE_OPTIONS = {"calm_analyst", "warm_friendly", "snappy_news", "playful"}
-_HUMOR_OPTIONS = {"none", "dad_jokes", "dry_wit"}
+_HUMOR_OPTIONS = {
+    "none",
+    "dad_jokes",
+    "dry_wit",
+    "witty",
+    "sarcastic",
+    "punny",
+    "silly",
+}
 # Output-schema keys we don't want users smuggling into the listener-prefs block.
 _GUIDANCE_DENYLIST = ("audio_segments", "episode_title", "show_notes")
 _GUIDANCE_MAX_LEN = 500

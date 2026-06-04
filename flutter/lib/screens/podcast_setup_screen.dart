@@ -29,6 +29,10 @@ const _humorOptions = [
   ('none', 'None'),
   ('dry_wit', 'Dry wit'),
   ('dad_jokes', 'Dad jokes'),
+  ('witty', 'Witty & clever'),
+  ('sarcastic', 'Sarcastic'),
+  ('punny', 'Punny'),
+  ('silly', 'Playful & silly'),
 ];
 
 const _guidanceMaxLength = 500;

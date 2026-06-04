@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import '../api/api_client.dart' show SourcePayload;
+import '../api/api_client.dart' show SourcePayload, SharedItemResult;
 import '../api/models.dart';
 import 'app_repository.dart';
 import 'demo_catalog_data.dart';
@@ -542,6 +542,29 @@ class FakeAppRepository implements AppRepository {
     );
     _createdIntents.add(intent);
     return SubstackIntentEnvelope(intent: intent);
+  }
+
+  /// Tracks shares submitted this session so the demo flags the second identical
+  /// share as a duplicate, mirroring the backend's deterministic de-dupe.
+  final Set<String> _sharedKeys = {};
+
+  @override
+  Future<SharedItemResult> submitSharedItem({
+    required String kind,
+    String? url,
+    List<int>? fileBytes,
+    String? filename,
+    String? title,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    final key = '$kind:${url ?? filename ?? title ?? ''}';
+    final duplicate = !_sharedKeys.add(key);
+    return SharedItemResult(
+      itemId: 'demo-share-${_sharedKeys.length}',
+      title: title ?? url ?? filename ?? 'Shared item',
+      shareKind: kind,
+      duplicate: duplicate,
+    );
   }
 
   List<SubstackIntentDto> _baseIntents() {
