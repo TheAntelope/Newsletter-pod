@@ -1468,10 +1468,20 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         return result
 
     @app.get("/v1/me/swipe-deck/cold-start")
-    def get_cold_start_swipe_deck(authorization: str | None = Header(default=None)) -> dict:
+    def get_cold_start_swipe_deck(
+        topics: str | None = None,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
         user = _require_session_user(container, authorization)
         assert container.control_plane is not None
-        return container.control_plane.get_cold_start_swipe_deck(user.id)
+        # Comma-separated catalog topic names from onboarding; seeds the deck so
+        # the first stories match the categories the user just picked.
+        topic_list = (
+            [topic for topic in topics.split(",") if topic.strip()] if topics else None
+        )
+        return container.control_plane.get_cold_start_swipe_deck(
+            user.id, topics=topic_list
+        )
 
     @app.get("/v1/me/swipe-deck/recent")
     def get_recent_swipe_deck(authorization: str | None = Header(default=None)) -> dict:

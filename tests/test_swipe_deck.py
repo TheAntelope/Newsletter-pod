@@ -154,6 +154,67 @@ def test_refresh_cold_start_deck_returns_none_when_corpus_empty():
     assert repo.get_swipe_deck(COLD_START_DECK_ID) is None
 
 
+def test_topic_seeded_deck_prefers_items_from_topic_sources():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [_record(f"tech-{i}", embedding=[1.0], source_id="techcrunch") for i in range(6)]
+        + [_record(f"other-{i}", embedding=[1.0], source_id="src-other") for i in range(6)]
+    )
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=4, recent_deck_lookback_days=3650),
+    )
+    deck = service.get_topic_seeded_deck("u1", source_ids=["techcrunch"])
+    assert len(deck) == 4
+    assert all(record.source_id == "techcrunch" for record in deck)
+
+
+def test_topic_seeded_deck_backfills_from_cold_start_when_topic_thin():
+    repo = InMemoryControlPlaneRepository()
+    # Only two items from the picked topic's source; the rest of the corpus is
+    # elsewhere, so the diverse cold-start deck must backfill the empty slots.
+    repo.upsert_source_items(
+        [_record(f"tech-{i}", embedding=[float(i), 0.0], source_id="techcrunch") for i in range(2)]
+        + [_record(f"fill-{i}", embedding=[10.0 + i, -5.0], source_id="src-other") for i in range(6)]
+    )
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=5, recent_deck_lookback_days=3650),
+    )
+    deck = service.get_topic_seeded_deck("u1", source_ids=["techcrunch"])
+    assert len(deck) == 5
+    keys = {record.dedupe_key for record in deck}
+    # Both topic items lead; cold-start diversity fills the remainder.
+    assert {"tech-0", "tech-1"}.issubset(keys)
+    assert any(record.source_id == "src-other" for record in deck)
+
+
+def test_topic_seeded_deck_filters_swiped_items():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [_record(f"tech-{i}", embedding=[1.0], source_id="techcrunch") for i in range(5)]
+    )
+    repo.save_swipe(_swipe("u1", "tech-0"))
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=10, recent_deck_lookback_days=3650),
+    )
+    deck = service.get_topic_seeded_deck("u1", source_ids=["techcrunch"])
+    assert "tech-0" not in {record.dedupe_key for record in deck}
+
+
+def test_topic_seeded_deck_empty_topics_falls_back_to_cold_start():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items([_record(f"k{i}", embedding=[float(i), 0.0]) for i in range(6)])
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=3, recent_deck_lookback_days=3650),
+    )
+    seeded = service.get_topic_seeded_deck("u1", source_ids=[])
+    cold = service.get_cold_start_deck("u1")
+    assert [r.dedupe_key for r in seeded] == [r.dedupe_key for r in cold]
+
+
 def test_recent_deck_returns_only_items_from_user_sources():
     repo = InMemoryControlPlaneRepository()
     repo.upsert_source_items(

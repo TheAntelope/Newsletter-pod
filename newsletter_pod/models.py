@@ -22,6 +22,11 @@ class SourceDefinition(BaseModel):
     rss_url: str
     enabled: bool = True
     topic: Optional[str] = None
+    # Geographic relevance as an ISO 3166-1 alpha-2 country code (e.g. "US",
+    # "DK", "GB") or the pseudo-region "EU" for pan-European publishers. None =
+    # globally relevant (no regional bias). Used to nudge region-matching sources
+    # up the onboarding swipe deck based on the user's timezone — see regions.py.
+    region: Optional[str] = None
     # "full"   — feed carries the complete article/post text
     # "excerpt" — feed carries only a teaser; full content lives behind the link
     ingest_mode: Literal["full", "excerpt"] = "excerpt"

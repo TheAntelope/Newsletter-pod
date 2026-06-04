@@ -117,8 +117,10 @@ class ApiAppRepository implements AppRepository {
       _client.fetchVoiceCatalog();
 
   @override
-  Future<SwipeDeckEnvelope> fetchSwipeDeck() =>
-      _client.fetchRecentSwipeDeck(_token);
+  Future<SwipeDeckEnvelope> fetchSwipeDeck({List<String>? topics}) =>
+      topics == null
+          ? _client.fetchRecentSwipeDeck(_token)
+          : _client.fetchColdStartSwipeDeck(_token, topics: topics);
 
   @override
   Future<void> submitSwipe(String dedupeKey, int direction) =>

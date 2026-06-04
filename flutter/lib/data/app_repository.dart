@@ -59,7 +59,11 @@ abstract interface class AppRepository {
     String? localTime,
   });
   Future<VoiceCatalogEnvelope> fetchVoiceCatalog();
-  Future<SwipeDeckEnvelope> fetchSwipeDeck();
+
+  /// The swipe deck. With [topics] (onboarding), returns a cold-start deck seeded
+  /// from those topic categories; without, the recent deck from the user's
+  /// existing sources.
+  Future<SwipeDeckEnvelope> fetchSwipeDeck({List<String>? topics});
   Future<void> submitSwipe(String dedupeKey, int direction);
 
   Future<SubstackIntentsEnvelope> fetchSubstackIntents();

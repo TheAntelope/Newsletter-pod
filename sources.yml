@@ -4,6 +4,7 @@ sources:
   # =====================================================================
   - id: news-npr
     name: NPR News
+    region: US
     rss_url: https://feeds.npr.org/1001/rss.xml
     topic: News
     enabled: true
@@ -12,6 +13,7 @@ sources:
 
   - id: news-bbc
     name: BBC News
+    region: GB
     rss_url: https://feeds.bbci.co.uk/news/rss.xml
     topic: News
     enabled: true
@@ -20,6 +22,7 @@ sources:
 
   - id: news-guardian-us
     name: The Guardian (US)
+    region: US
     rss_url: https://www.theguardian.com/us/rss
     topic: News
     enabled: true
@@ -28,6 +31,7 @@ sources:
 
   - id: news-cbs
     name: CBS News
+    region: US
     rss_url: https://www.cbsnews.com/latest/rss/main
     topic: News
     enabled: true
@@ -36,6 +40,7 @@ sources:
 
   - id: news-cnbc
     name: CNBC Top News
+    region: US
     rss_url: https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114
     topic: News
     enabled: true
@@ -52,6 +57,7 @@ sources:
 
   - id: news-axios
     name: Axios
+    region: US
     rss_url: https://api.axios.com/feed/
     topic: News
     enabled: true
@@ -60,6 +66,7 @@ sources:
 
   - id: news-last-week-denmark
     name: Last Week in Denmark
+    region: DK
     rss_url: https://lastweekdk.substack.com/feed
     topic: News
     enabled: true
@@ -69,6 +76,7 @@ sources:
   # --- European editions ---
   - id: news-guardian-uk
     name: The Guardian (UK)
+    region: GB
     rss_url: https://www.theguardian.com/uk/rss
     topic: News
     enabled: true
@@ -77,6 +85,7 @@ sources:
 
   - id: news-dw
     name: Deutsche Welle (English)
+    region: DE
     rss_url: https://rss.dw.com/rdf/rss-en-all
     topic: News
     enabled: true
@@ -85,6 +94,7 @@ sources:
 
   - id: news-france24
     name: France 24 (English)
+    region: FR
     rss_url: https://www.france24.com/en/rss
     topic: News
     enabled: true
@@ -93,6 +103,7 @@ sources:
 
   - id: news-ansa-english
     name: ANSA English (Italy)
+    region: IT
     rss_url: https://www.ansa.it/english/english_rss.xml
     topic: News
     enabled: true
@@ -101,6 +112,7 @@ sources:
 
   - id: news-dutchnews
     name: DutchNews.nl
+    region: NL
     rss_url: https://www.dutchnews.nl/feed/
     topic: News
     enabled: true
@@ -109,6 +121,7 @@ sources:
 
   - id: news-euronews
     name: Euronews
+    region: EU
     rss_url: https://www.euronews.com/rss
     topic: News
     enabled: true
@@ -117,6 +130,7 @@ sources:
 
   - id: news-local-sweden
     name: The Local Sweden
+    region: SE
     rss_url: https://feeds.thelocal.com/rss/se
     topic: News
     enabled: true
@@ -125,6 +139,7 @@ sources:
 
   - id: news-local-norway
     name: The Local Norway
+    region: "NO"  # quoted: bare NO is YAML boolean false
     rss_url: https://feeds.thelocal.com/rss/no
     topic: News
     enabled: true
@@ -133,6 +148,7 @@ sources:
 
   - id: news-local-germany
     name: The Local Germany
+    region: DE
     rss_url: https://feeds.thelocal.com/rss/de
     topic: News
     enabled: true
@@ -141,6 +157,7 @@ sources:
 
   - id: news-local-france
     name: The Local France
+    region: FR
     rss_url: https://feeds.thelocal.com/rss/fr
     topic: News
     enabled: true
@@ -149,6 +166,7 @@ sources:
 
   - id: news-local-italy
     name: The Local Italy
+    region: IT
     rss_url: https://feeds.thelocal.com/rss/it
     topic: News
     enabled: true
@@ -160,6 +178,7 @@ sources:
   # =====================================================================
   - id: politics-politico-playbook
     name: Politico Playbook
+    region: US
     rss_url: https://rss.politico.com/playbook.xml
     topic: Politics
     enabled: true
@@ -168,6 +187,7 @@ sources:
 
   - id: politics-hcr
     name: Letters from an American (Heather Cox Richardson)
+    region: US
     rss_url: https://heathercoxrichardson.substack.com/feed
     topic: Politics
     enabled: true
@@ -176,6 +196,7 @@ sources:
 
   - id: politics-bulwark
     name: The Bulwark
+    region: US
     rss_url: https://www.thebulwark.com/feed
     topic: Politics
     enabled: true
@@ -184,6 +205,7 @@ sources:
 
   - id: politics-tangle
     name: Tangle
+    region: US
     rss_url: https://www.readtangle.com/feed
     topic: Politics
     enabled: true
@@ -192,6 +214,7 @@ sources:
 
   - id: politics-slow-boring
     name: Slow Boring
+    region: US
     rss_url: https://www.slowboring.com/feed
     topic: Politics
     enabled: true
@@ -200,6 +223,7 @@ sources:
 
   - id: politics-politico-europe
     name: POLITICO Europe
+    region: EU
     rss_url: https://www.politico.eu/feed/
     topic: Politics
     enabled: true
@@ -208,6 +232,7 @@ sources:
 
   - id: politics-new-statesman
     name: New Statesman (UK)
+    region: GB
     rss_url: https://www.newstatesman.com/feed
     topic: Politics
     enabled: true

@@ -55,6 +55,10 @@ dependencies:
   # RevenueCat (Play Billing) purchases. Only configured/used on the real-auth
   # path behind ENABLE_PURCHASES_REVENUECAT; the demo build never touches it.
   purchases_flutter: ^8.0.0
+  # Device location for the optional weather feature ("use my current
+  # location"). Works on web + Android + iOS; reverse-geocoding to a city name
+  # is done over HTTP (see services/location_service.dart), not a plugin.
+  geolocator: ^14.0.2
 
 dev_dependencies:
   flutter_test:
@@ -88,6 +92,10 @@ flutter:
     # lib/data/demo_catalog_data.dart (rootBundle resolves on the real clock, which
     # hangs flutter_test's fake clock) — bundled here too only as readable reference.
     - assets/demo/
+    # Brand attribution. elevenlabs-logo.png is the official ElevenLabs black
+    # wordmark (from elevenlabs.io/brand), shown at the bottom of the onboarding
+    # welcome screen. See lib/screens/onboarding_screen.dart (_ElevenLabsBadge).
+    - assets/brand/
 
   # Spectral: the editorial serif for the display/title/subtitle tokens
   # (fontFamily 'Spectral' in design_tokens.dart). Matches iOS's serif identity

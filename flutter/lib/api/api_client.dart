@@ -253,9 +253,18 @@ class ApiClient {
       SwipeDeckEnvelope.fromJson(
           await _send('/v1/me/swipe-deck/recent', method: 'GET', token: token));
 
-  Future<SwipeDeckEnvelope> fetchColdStartSwipeDeck(String token) async =>
+  /// The onboarding deck. [topics] (catalog topic names) seed it server-side so
+  /// the first stories match the categories the user just picked.
+  Future<SwipeDeckEnvelope> fetchColdStartSwipeDeck(
+    String token, {
+    List<String>? topics,
+  }) async =>
       SwipeDeckEnvelope.fromJson(await _send('/v1/me/swipe-deck/cold-start',
-          method: 'GET', token: token));
+          method: 'GET',
+          token: token,
+          query: (topics != null && topics.isNotEmpty)
+              ? {'topics': topics.join(',')}
+              : null));
 
   Future<void> submitSwipe(
     String token, {

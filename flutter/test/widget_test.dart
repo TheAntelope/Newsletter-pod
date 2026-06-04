@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:app/data/fake_app_repository.dart';
@@ -226,6 +227,8 @@ void main() {
 
     // Onboarding (not the dashboard) shows first.
     expect(find.text('Welcome to ClawCast'), findsOneWidget);
+    // ElevenLabs grant attribution sits at the bottom of the welcome screen.
+    expect(find.text('Voices powered by'), findsOneWidget);
 
     // Advance through every step until only Finish remains (step count varies).
     for (var guard = 0; guard < 20 && find.text('Next').evaluate().isNotEmpty; guard++) {
@@ -240,5 +243,114 @@ void main() {
 
     // Lands on the dashboard.
     expect(find.text('Generate now'), findsOneWidget);
+  });
+
+  testWidgets('onboarding topic step lists every catalog category and toggles',
+      (tester) async {
+    _useTallViewport(tester);
+    final appState = AppState(FakeAppRepository());
+    await tester.pumpWidget(
+      AppScope(notifier: appState, child: const ClawcastApp()),
+    );
+
+    await tester.tap(find.text('Get started'));
+    await tester.pumpAndSettle();
+    expect(find.text('Welcome to ClawCast'), findsOneWidget);
+
+    // Welcome -> Voice -> Name -> Topics.
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pick your topics'), findsOneWidget);
+    // The full catalog set is offered, not just the old hardcoded four — topics
+    // that only exist deeper in the catalog must render as chips.
+    expect(find.text('Romantasy'), findsOneWidget);
+    expect(find.text('Family Life'), findsOneWidget);
+    expect(find.text('Personal Finance'), findsOneWidget);
+
+    // Chips are tappable (toggling selection rebuilds without throwing).
+    await tester.tap(find.text('Science'));
+    await tester.pumpAndSettle();
+    expect(find.text('Pick your topics'), findsOneWidget);
+  });
+
+  testWidgets('weather step offers using the current location', (tester) async {
+    _useTallViewport(tester);
+    final appState = AppState(FakeAppRepository());
+    await tester.pumpWidget(
+      AppScope(notifier: appState, child: const ClawcastApp()),
+    );
+
+    await tester.tap(find.text('Get started'));
+    await tester.pumpAndSettle();
+
+    // Walk to the weather step (step 9: welcome, voice, name, topics, swipe,
+    // substack, format, co-host, schedule, weather).
+    for (var i = 0; i < 9; i++) {
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Add a weather note?'), findsOneWidget);
+
+    // Turning weather on reveals the city field and the location affordance.
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+    expect(find.text('Use my current location'), findsOneWidget);
+    expect(find.byIcon(Icons.my_location), findsOneWidget);
+  });
+
+  testWidgets('adding a substack copies the alias and opens its subscribe form',
+      (tester) async {
+    // Capture url_launcher channel calls so we can assert the deep-link fires.
+    // (Creating the intent alone never subscribes the alias — the user must
+    // complete Substack's own subscribe form, so the screen MUST open it.)
+    final launched = <String>[];
+    const launcherChannel = MethodChannel('plugins.flutter.io/url_launcher');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(launcherChannel, (call) async {
+      final args = call.arguments;
+      if (args is Map && args['url'] is String) {
+        launched.add(args['url'] as String);
+      }
+      return true; // launch/canLaunch/supportsMode all expect a bool
+    });
+    // Capture the alias the screen copies to the clipboard.
+    String? copied;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied = (call.arguments as Map)['text'] as String?;
+      }
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(launcherChannel, null);
+      messenger.setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+
+    await _signIn(tester);
+    await tester.tap(find.text('Sources'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'tech');
+    await tester.tap(find.text('Find'));
+    await tester.pumpAndSettle();
+
+    // Add the first discovered candidate (Platformer → www.platformer.news).
+    final add = find.text('Add').first;
+    await tester.ensureVisible(add);
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+
+    // The two behaviors that were missing before the fix: the alias is copied
+    // and the publication's subscribe form is opened (so Substack mails it).
+    expect(copied, 'demo@theclawcast.com');
+    expect(launched, isNotEmpty);
+    expect(launched.single, endsWith('/subscribe'));
   });
 }

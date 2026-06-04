@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../api/api_client.dart' show SourcePayload;
 import '../api/models.dart';
 import '../design_tokens.dart';
+import '../services/location_service.dart';
 import '../state/app_state.dart';
 import '../widgets/day_toggle.dart';
 import '../widgets/editorial.dart';
@@ -23,7 +25,7 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  static const _stepCount = 10;
+  static const _stepCount = 11;
   static const _weekdays = [
     ('mon', 'M'),
     ('tue', 'T'),
@@ -41,13 +43,43 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         'An anchor plus a different guest voice each day.'),
   ];
 
+  /// Curated icon + display order for the catalog's topic categories. The chips
+  /// shown are the intersection of this map with the topics actually present in
+  /// the catalog, so new catalog topics fall back to a default glyph rather than
+  /// disappearing.
+  static const _topicIcons = <String, IconData>{
+    'News': Icons.public,
+    'Politics': Icons.account_balance_outlined,
+    'Business': Icons.trending_up,
+    'Tech': Icons.memory,
+    'Strategy': Icons.lightbulb_outline,
+    'Personal Finance': Icons.savings_outlined,
+    'Science': Icons.science_outlined,
+    'Sports': Icons.sports_basketball_outlined,
+    'Culture': Icons.theater_comedy_outlined,
+    'Health & Wellness': Icons.spa_outlined,
+    'Fitness': Icons.fitness_center,
+    'Family Life': Icons.family_restroom_outlined,
+    'Food & Travel': Icons.restaurant_outlined,
+    'Romantasy': Icons.auto_stories_outlined,
+  };
+
   int _step = 0;
   final _nameController = TextEditingController();
   final _weatherController = TextEditingController();
   String _showPreset = 'two_hosts';
+  // Topic categories the user picks on the sources step. These both enable the
+  // matching catalog sources (pod tuning) on finish and seed the swipe deck.
+  final Set<String> _selectedTopics = {'Tech', 'Business'};
+  Future<CatalogEnvelope>? _catalog;
   String? _anchorVoiceId;
   String? _commentatorVoiceId;
   bool _includeWeather = false;
+  // "Use my current location" flow for the weather city. Mirrors the iOS
+  // LocationResolver states (idle / requesting / denied / error / resolved).
+  bool _locating = false;
+  bool _locationDenied = false;
+  String? _locationError;
   final Set<String> _selectedDays = {'mon', 'tue', 'wed', 'thu', 'fri'};
   TimeOfDay _deliveryTime = const TimeOfDay(hour: 7, minute: 0);
 
@@ -67,7 +99,31 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     if (_step < _stepCount - 1) {
       setState(() => _step++);
     } else {
-      AppScope.of(context).completeOnboarding();
+      _finish();
+    }
+  }
+
+  /// Persist the picked topics as enabled sources (pod tuning), then drop into
+  /// the dashboard. The source write is best-effort — onboarding completes even
+  /// if it fails, since the user can still tune from the Sources tab.
+  Future<void> _finish() async {
+    final app = AppScope.of(context);
+    await _persistTopicSources(app);
+    if (!mounted) return;
+    app.completeOnboarding();
+  }
+
+  Future<void> _persistTopicSources(AppState app) async {
+    try {
+      final catalog = await (_catalog ??= app.repository.fetchCatalog());
+      final payloads = catalog.sources
+          .where((s) => s.topic != null && _selectedTopics.contains(s.topic))
+          .map((s) => SourcePayload(sourceId: s.sourceId, isCustom: false))
+          .toList();
+      if (payloads.isEmpty) return;
+      await app.repository.replaceSources(payloads);
+    } catch (_) {
+      // Best-effort; never block finishing onboarding.
     }
   }
 
@@ -105,6 +161,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ),
             ),
             Expanded(child: _stepContent()),
+            // ElevenLabs Startup Grant attribution — pinned to the bottom of the
+            // welcome screen only, just above the primary action.
+            if (_step == 0) ...[
+              const ElevenLabsBadge(),
+              const SizedBox(height: DesignTokens.spacingS),
+            ],
             Padding(
               padding: const EdgeInsets.all(DesignTokens.spacingL),
               child: Column(
@@ -133,10 +195,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           title: 'Welcome to ClawCast',
           subtitle:
               'A daily briefing podcast, built from the sources you choose. '
-              "Let's set up your show — it takes about a minute.",
-          children: const [_WelcomePoints()],
+              "Here's what we'll set up — it takes about a minute.",
+          children: const [_WelcomeSteps()],
         );
       case 1:
+        return _shell(
+          title: 'Pick your voice',
+          subtitle:
+              'First, the fun part — choose the voice that reads your briefing '
+              'every morning. Tap a card to hear a sample.',
+          children: [_hostVoiceStep()],
+        );
+      case 2:
         return _shell(
           title: 'What should we call you?',
           subtitle: "We'll greet you by name at the top of each episode.",
@@ -148,25 +218,29 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
           ],
         );
-      case 2:
-        return _shell(
-          title: 'Pick your sources',
-          subtitle:
-              'Start from a curated catalog of tech and business newsletters — '
-              'you can fine-tune it any time from the Sources tab.',
-          children: const [_SourcePreview()],
-        );
       case 3:
+        return _shell(
+          title: 'Pick your topics',
+          subtitle:
+              'Choose what you want in your briefing. We pull sources from these '
+              "categories and build your first stories to swipe — you can fine-"
+              'tune any time from the Sources tab.',
+          children: [_topicsStep()],
+        );
+      case 4:
         return _shell(
           title: 'Tune your pod',
           subtitle:
               "Swipe right on stories you'd want to hear more about, left to "
               'skip. Optional — your picker learns from every card.',
-          children: const [
-            SizedBox(height: 460, child: SwipeDeck()),
+          children: [
+            SizedBox(
+              height: 460,
+              child: SwipeDeck(topics: _selectedTopics.toList()),
+            ),
           ],
         );
-      case 4:
+      case 5:
         return _shell(
           title: 'Add your Substacks',
           subtitle:
@@ -174,21 +248,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               'and they fold into your pod automatically.',
           children: const [_InboundAddressCard()],
         );
-      case 5:
+      case 6:
         return _shell(
           title: 'Choose a format',
           subtitle: 'How should your briefing be hosted?',
           children: [_showStep()],
         );
-      case 6:
-        return _shell(
-          title: _isTwoHost ? 'Choose your voices' : 'Choose a voice',
-          subtitle: _isTwoHost
-              ? 'Pick an anchor and a co-host. You can change these later.'
-              : 'Pick who reads your briefing. You can change this later.',
-          children: [_voiceStep()],
-        );
       case 7:
+        return _shell(
+          title: _isTwoHost ? 'Add a co-host' : 'Your host',
+          subtitle: _isTwoHost
+              ? 'Your show pairs two voices — pick a co-host to trade off with '
+                  'the host you chose. You can change these later.'
+              : 'This is the voice you picked to read your briefing. Change it '
+                  'here if you like.',
+          children: [_coHostStep()],
+        );
+      case 8:
         return _shell(
           title: 'Set your schedule',
           subtitle:
@@ -196,7 +272,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               'at 07:00.',
           children: [_scheduleEditor()],
         );
-      case 8:
+      case 9:
         return _shell(
           title: 'Add a weather note?',
           subtitle:
@@ -247,6 +323,58 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
+  Widget _topicsStep() {
+    _catalog ??= AppScope.of(context).repository.fetchCatalog();
+    return FutureBuilder<CatalogEnvelope>(
+      future: _catalog,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Padding(
+            padding: EdgeInsets.all(DesignTokens.spacingL),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final topics = _topicsFrom(snapshot.data);
+        return EditorialCard(
+          children: [
+            const MetaLabel('Topics'),
+            Text(
+              'Tap to add or remove. Your first swipe deck is built from these.',
+              style: DesignTokens.typographyCallout
+                  .copyWith(color: DesignTokens.colorMuted),
+            ),
+            Wrap(
+              spacing: DesignTokens.spacingS,
+              runSpacing: DesignTokens.spacingS,
+              children: [
+                for (final t in topics)
+                  _TopicChip(
+                    label: t,
+                    icon: _topicIcons[t] ?? Icons.label_outline,
+                    selected: _selectedTopics.contains(t),
+                    onTap: () => setState(() {
+                      if (!_selectedTopics.remove(t)) _selectedTopics.add(t);
+                    }),
+                  ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Distinct topic names in catalog order (first appearance wins).
+  List<String> _topicsFrom(CatalogEnvelope? catalog) {
+    final seen = <String>{};
+    final ordered = <String>[];
+    for (final s in catalog?.sources ?? const []) {
+      final t = s.topic;
+      if (t != null && t.isNotEmpty && seen.add(t)) ordered.add(t);
+    }
+    return ordered;
+  }
+
   Widget _showStep() {
     return EditorialCard(
       spacing: 0,
@@ -264,7 +392,89 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  Widget _voiceStep() {
+  /// The fun opener: pick the primary host voice. Single-select, with audio
+  /// samples. Format-independent so it can be the very first onboarding step.
+  Widget _hostVoiceStep() {
+    return _voiceCatalogBuilder((voices) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final v in voices) ...[
+            VoiceChoiceCard(
+              voice: v,
+              selected: _anchorVoiceId == v.id,
+              onSelect: () => setState(() => _anchorVoiceId = v.id),
+              previewSource: v.previewUrl,
+            ),
+            const SizedBox(height: DesignTokens.spacingM),
+          ],
+        ],
+      );
+    });
+  }
+
+  /// Shown after the format is chosen. For two-host it picks the co-host (the
+  /// host was chosen up front, on step 0); otherwise it re-shows the host picker
+  /// so it can still be changed, plus the rotating-guest note.
+  Widget _coHostStep() {
+    return _voiceCatalogBuilder((voices) {
+      final hostName = _voiceName(voices, _anchorVoiceId);
+      if (_isTwoHost) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (hostName != null) ...[
+              const _FieldLabel('Your host'),
+              const SizedBox(height: DesignTokens.spacingS),
+              Text(
+                hostName,
+                style: DesignTokens.typographyBodyStrong
+                    .copyWith(color: DesignTokens.colorInk),
+              ),
+              const SizedBox(height: DesignTokens.spacingL),
+            ],
+            const _FieldLabel('Co-host'),
+            const SizedBox(height: DesignTokens.spacingS),
+            for (final v in voices) ...[
+              VoiceChoiceCard(
+                voice: v,
+                selected: _commentatorVoiceId == v.id,
+                onSelect: () => setState(() => _commentatorVoiceId = v.id),
+                previewSource: v.previewUrl,
+              ),
+              const SizedBox(height: DesignTokens.spacingM),
+            ],
+          ],
+        );
+      }
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final v in voices) ...[
+            VoiceChoiceCard(
+              voice: v,
+              selected: _anchorVoiceId == v.id,
+              onSelect: () => setState(() => _anchorVoiceId = v.id),
+              previewSource: v.previewUrl,
+            ),
+            const SizedBox(height: DesignTokens.spacingM),
+          ],
+          if (_isRotating)
+            Text(
+              'A different guest voice joins ${hostName ?? 'your host'} each day, '
+              'drawn from the full catalog.',
+              style: DesignTokens.typographyCallout
+                  .copyWith(color: DesignTokens.colorMuted),
+            ),
+        ],
+      );
+    });
+  }
+
+  /// Resolves the voice-catalog future once and hands the list to [builder],
+  /// showing a spinner while it loads. Shared by the host and co-host steps.
+  Widget _voiceCatalogBuilder(
+      Widget Function(List<CatalogVoiceDto> voices) builder) {
     _voices ??= AppScope.of(context).repository.fetchVoiceCatalog();
     return FutureBuilder<VoiceCatalogEnvelope>(
       future: _voices,
@@ -275,45 +485,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             child: Center(child: CircularProgressIndicator()),
           );
         }
-        final voices = snapshot.data?.voices ?? const [];
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _FieldLabel(_isTwoHost ? 'Anchor' : 'Voice'),
-            const SizedBox(height: DesignTokens.spacingS),
-            for (final v in voices) ...[
-              VoiceChoiceCard(
-                voice: v,
-                selected: _anchorVoiceId == v.id,
-                onSelect: () => setState(() => _anchorVoiceId = v.id),
-                previewSource: v.previewUrl,
-              ),
-              const SizedBox(height: DesignTokens.spacingM),
-            ],
-            if (_isTwoHost) ...[
-              const SizedBox(height: DesignTokens.spacingS),
-              const _FieldLabel('Co-host'),
-              const SizedBox(height: DesignTokens.spacingS),
-              for (final v in voices) ...[
-                VoiceChoiceCard(
-                  voice: v,
-                  selected: _commentatorVoiceId == v.id,
-                  onSelect: () => setState(() => _commentatorVoiceId = v.id),
-                  previewSource: v.previewUrl,
-                ),
-                const SizedBox(height: DesignTokens.spacingM),
-              ],
-            ] else if (_isRotating)
-              Text(
-                'A different guest voice joins your anchor each day, drawn from '
-                'the full catalog.',
-                style: DesignTokens.typographyCallout
-                    .copyWith(color: DesignTokens.colorMuted),
-              ),
-          ],
-        );
+        return builder(snapshot.data?.voices ?? const []);
       },
     );
+  }
+
+  String? _voiceName(List<CatalogVoiceDto> voices, String? id) {
+    if (id == null) return null;
+    for (final v in voices) {
+      if (v.id == id) return v.name;
+    }
+    return null;
   }
 
   Widget _scheduleEditor() {
@@ -385,9 +567,82 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               hintText: 'e.g. Copenhagen',
             ),
           ),
+          const SizedBox(height: DesignTokens.spacingS),
+          _locationRow(),
         ],
       ],
     );
+  }
+
+  /// "Use my current location" affordance under the city field. Detects the
+  /// user's city (with permission) and fills the field, or surfaces a denial /
+  /// error inline. Typing stays available for anyone who declines.
+  Widget _locationRow() {
+    if (_locating) {
+      return Row(
+        children: const [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: DesignTokens.spacingS),
+          Text('Detecting your location…'),
+        ],
+      );
+    }
+    final hasCity = _weatherController.text.trim().isNotEmpty;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _resolveLocation,
+            style: TextButton.styleFrom(
+              foregroundColor: DesignTokens.colorAmberDeep,
+              padding: EdgeInsets.zero,
+            ),
+            icon: const Icon(Icons.my_location, size: 18),
+            label: Text(hasCity ? 'Update from my location' : 'Use my current location'),
+          ),
+        ),
+        if (_locationDenied)
+          Text(
+            'Location access denied. Enable it in your settings, or type your '
+            'city above.',
+            style: DesignTokens.typographyCallout
+                .copyWith(color: DesignTokens.colorMuted),
+          )
+        else if (_locationError != null)
+          Text(
+            "Couldn't fetch location: $_locationError",
+            style: DesignTokens.typographyCallout
+                .copyWith(color: DesignTokens.colorMuted),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _resolveLocation() async {
+    setState(() {
+      _locating = true;
+      _locationDenied = false;
+      _locationError = null;
+    });
+    final outcome = await LocationService.resolveCurrentPlace();
+    if (!mounted) return;
+    setState(() {
+      _locating = false;
+      switch (outcome.kind) {
+        case LocationOutcomeKind.resolved:
+          _weatherController.text = outcome.placeName!;
+        case LocationOutcomeKind.denied:
+          _locationDenied = true;
+        case LocationOutcomeKind.error:
+          _locationError = outcome.message;
+      }
+    });
   }
 
   String _formatTime(TimeOfDay t) =>
@@ -463,75 +718,131 @@ class _ShowPresetRow extends StatelessWidget {
   }
 }
 
+/// The setup agenda, shown two ways: as numbered steps on the welcome screen
+/// and as completed checks on the "you're all set" recap. Kept in one place so
+/// the two never drift — and so it stays an accurate summary of the actual
+/// onboarding steps (voice + format, topics + sources, schedule). Note there is
+/// no length/duration step in onboarding — that lives in the podcast settings.
+const _setupAgenda = [
+  'Pick your voice and show format',
+  'Choose the topics and sources you trust',
+  'Get a fresh briefing on your schedule',
+];
+
+/// The welcome preview: a numbered "here's what we'll do" list. Numbered badges
+/// (not check circles) so it reads as an agenda rather than a tappable form.
+class _WelcomeSteps extends StatelessWidget {
+  const _WelcomeSteps();
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      spacing: DesignTokens.spacingM,
+      children: [
+        for (var i = 0; i < _setupAgenda.length; i++)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 26,
+                height: 26,
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                  color: DesignTokens.colorAmber,
+                  shape: BoxShape.circle,
+                ),
+                child: Text(
+                  '${i + 1}',
+                  style: DesignTokens.typographyCalloutStrong
+                      .copyWith(color: Colors.white),
+                ),
+              ),
+              const SizedBox(width: DesignTokens.spacingM),
+              Expanded(
+                child: Text(
+                  _setupAgenda[i],
+                  style: DesignTokens.typographyBody
+                      .copyWith(color: DesignTokens.colorInk),
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+/// The "you're all set" recap — the same agenda shown as completed checks.
 class _WelcomePoints extends StatelessWidget {
   const _WelcomePoints({this.allChecked = false});
 
   final bool allChecked;
-
-  static const _points = [
-    'Pick the newsletters and sources you trust',
-    'Choose a voice and a length',
-    'Get a fresh briefing on your schedule',
-  ];
 
   @override
   Widget build(BuildContext context) {
     return EditorialCard(
       spacing: DesignTokens.spacingS,
       children: [
-        for (final p in _points)
+        for (final p in _setupAgenda)
           ChecklistRow(label: p, isComplete: allChecked),
       ],
     );
   }
 }
 
-class _SourcePreview extends StatelessWidget {
-  const _SourcePreview();
+/// A selectable topic pill. Amber fill when selected; cream/outline when not.
+class _TopicChip extends StatelessWidget {
+  const _TopicChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
 
-  static const _topics = [
-    ('Tech', Icons.memory),
-    ('Business', Icons.trending_up),
-    ('Culture', Icons.theater_comedy_outlined),
-    ('Science', Icons.science_outlined),
-  ];
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return EditorialCard(
-      children: [
-        const MetaLabel('Popular topics'),
-        Wrap(
-          spacing: DesignTokens.spacingS,
-          runSpacing: DesignTokens.spacingS,
-          children: [
-            for (final t in _topics)
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: DesignTokens.spacingM,
-                  vertical: DesignTokens.spacingS,
-                ),
-                decoration: BoxDecoration(
-                  color: DesignTokens.colorCream,
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: DesignTokens.colorRule),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(t.$2, size: 16, color: DesignTokens.colorAmberDeep),
-                    const SizedBox(width: 6),
-                    Text(
-                      t.$1,
-                      style: DesignTokens.typographyCalloutStrong
-                          .copyWith(color: DesignTokens.colorInk),
-                    ),
-                  ],
-                ),
+    final fg = selected ? Colors.white : DesignTokens.colorInk;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: DesignTokens.spacingM,
+            vertical: DesignTokens.spacingS,
+          ),
+          decoration: BoxDecoration(
+            color: selected ? DesignTokens.colorAmber : DesignTokens.colorCream,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: selected ? DesignTokens.colorAmber : DesignTokens.colorRule,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                selected ? Icons.check : icon,
+                size: 16,
+                color: selected ? Colors.white : DesignTokens.colorAmberDeep,
               ),
-          ],
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: DesignTokens.typographyCalloutStrong.copyWith(color: fg),
+              ),
+            ],
+          ),
         ),
-      ],
+      ),
     );
   }
 }

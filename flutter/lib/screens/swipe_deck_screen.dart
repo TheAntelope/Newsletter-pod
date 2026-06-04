@@ -29,7 +29,11 @@ class SwipeDeckScreen extends StatelessWidget {
 /// The reusable deck (card stack + action bar + load/empty/error states).
 /// Used full-screen by [SwipeDeckScreen] and inline in the onboarding wizard.
 class SwipeDeck extends StatefulWidget {
-  const SwipeDeck({super.key});
+  const SwipeDeck({super.key, this.topics});
+
+  /// When set (onboarding), the deck is seeded from these catalog topic names
+  /// instead of the user's existing sources.
+  final List<String>? topics;
 
   @override
   State<SwipeDeck> createState() => _SwipeDeckState();
@@ -73,7 +77,7 @@ class _SwipeDeckState extends State<SwipeDeck>
 
   Future<void> _load() async {
     try {
-      final deck = await _app.repository.fetchSwipeDeck();
+      final deck = await _app.repository.fetchSwipeDeck(topics: widget.topics);
       if (!mounted) return;
       setState(() {
         _cards

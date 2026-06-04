@@ -85,6 +85,58 @@ class SwipeDeckService:
         }
         return [records_by_key[key] for key in keys if key in records_by_key]
 
+    def get_topic_seeded_deck(
+        self,
+        user_id: str,
+        source_ids: list[str],
+        preferred_source_ids: Optional[list[str]] = None,
+    ) -> list[SourceItemRecord]:
+        """Onboarding deck seeded from the catalog sources behind the topics the
+        user just picked. Prefers fresh items from those sources, then backfills
+        from the diverse global cold-start deck so a thin or just-added topic
+        never yields an empty deck. Already-swiped items are filtered out.
+
+        [preferred_source_ids] (a subset of [source_ids], e.g. sources matching
+        the user's region) are floated to the front so region-relevant stories
+        lead the deck without excluding the rest.
+        """
+        if not source_ids:
+            return self.get_cold_start_deck(user_id)
+        deck_size = self._config.cold_start_deck_size
+        if deck_size <= 0:
+            return []
+        already_swiped = self._user_swiped_keys(user_id)
+        seeded = self._repository.list_recent_source_items_for_sources(
+            source_ids=source_ids,
+            lookback_days=self._config.recent_deck_lookback_days,
+            limit=deck_size * 4,
+        )
+        if preferred_source_ids:
+            preferred = set(preferred_source_ids)
+            # Stable sort keeps recency order within the preferred / other groups.
+            seeded = sorted(
+                seeded, key=lambda record: 0 if record.source_id in preferred else 1
+            )
+        deck: list[SourceItemRecord] = []
+        seen: set[str] = set()
+        for record in seeded:
+            if record.dedupe_key in already_swiped or record.dedupe_key in seen:
+                continue
+            deck.append(record)
+            seen.add(record.dedupe_key)
+            if len(deck) >= deck_size:
+                return deck
+        # Backfill from the global cold-start deck (already swipe-filtered) so the
+        # deck always fills, even when the picked topics have little fresh corpus.
+        for record in self.get_cold_start_deck(user_id):
+            if record.dedupe_key in seen:
+                continue
+            deck.append(record)
+            seen.add(record.dedupe_key)
+            if len(deck) >= deck_size:
+                break
+        return deck
+
     def refresh_cold_start_deck(self) -> Optional[SwipeDeckRecord]:
         """Force a recompute of the global cold-start deck regardless of TTL.
 

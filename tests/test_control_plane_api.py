@@ -942,12 +942,78 @@ def test_recent_deck_endpoint_returns_items_from_user_sources_when_exploration_o
     assert keys == {"mine-1", "mine-2"}
 
 
+def test_cold_start_swipe_deck_seeded_by_picked_topics():
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("deck-topic-user", "dt@example.com"))
+
+    # techcrunch is a catalog source tagged "Tech"; src-other is off-topic.
+    for i in range(5):
+        _seed_source_item_with_source(
+            container, f"tech-{i}", source_id="techcrunch", embedding=[1.0, 0.0]
+        )
+    for i in range(5):
+        _seed_source_item_with_source(
+            container, f"other-{i}", source_id="src-other", embedding=[2.0, 0.0]
+        )
+    container.control_plane.settings.cold_start_deck_size = 4
+    # Widen the window so the fixed-date seed items count as "recent".
+    container.control_plane.settings.recent_deck_lookback_days = 3650
+
+    resp = client.get("/v1/me/swipe-deck/cold-start?topics=Tech", headers=headers)
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 4
+    # The picked topic's source fills the deck ahead of off-topic items.
+    assert all(item["source_id"] == "techcrunch" for item in items)
+
+    # An unknown topic resolves to no sources and falls back to the global
+    # cold-start deck, which is not topic-filtered (off-topic items can appear).
+    fallback = client.get(
+        "/v1/me/swipe-deck/cold-start?topics=Nonsense", headers=headers
+    )
+    assert fallback.status_code == 200
+    fallback_sources = {item["source_id"] for item in fallback.json()["items"]}
+    assert fallback_sources, "fallback deck should not be empty"
+    assert "src-other" in fallback_sources
+
+
+def test_cold_start_swipe_deck_biases_toward_user_region():
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("deck-region-user", "dz@example.com"))
+
+    # Put the user in Denmark; only their timezone is used (no location prompt).
+    users = list(container.control_repository._users.values())
+    users[0].timezone = "Europe/Copenhagen"
+
+    # Two News sources: a Danish regional one and a globally-relevant one.
+    for i in range(2):
+        _seed_source_item_with_source(
+            container, f"dk-{i}", source_id="news-last-week-denmark", embedding=[1.0, 0.0]
+        )
+    for i in range(2):
+        _seed_source_item_with_source(
+            container, f"global-{i}", source_id="news-aljazeera", embedding=[1.0, 0.0]
+        )
+    container.control_plane.settings.cold_start_deck_size = 2
+    container.control_plane.settings.recent_deck_lookback_days = 3650
+
+    resp = client.get("/v1/me/swipe-deck/cold-start?topics=News", headers=headers)
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 2
+    # The Danish source floats ahead of the global one for a DK user.
+    assert all(item["source_id"] == "news-last-week-denmark" for item in items)
+
+
 def _seed_source_item_with_source(container, dedupe_key: str, *, source_id: str, embedding) -> None:
     from datetime import datetime, timezone
 
     from newsletter_pod.models import SourceItemRecord
 
-    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    # Seed relative to the wall clock, not a fixed date — the recent-deck path
+    # filters on `last_seen_at >= now - lookback_days`, so a hardcoded date drifts
+    # out of the window over time and silently empties the deck in tests.
+    now = datetime.now(timezone.utc)
     record = SourceItemRecord(
         dedupe_key=dedupe_key,
         source_id=source_id,

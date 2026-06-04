@@ -3,6 +3,9 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <!-- FCM push notifications (Android 13+ runtime permission). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Optional "use my current location" for the weather feature. Coarse
+         (city-level) is enough; we never track precise location. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <application
         android:label="app"
         android:name="${applicationName}"
@@ -53,6 +56,18 @@
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="https"/>
+        </intent>
+        <!-- "Open in Podcast Addict": detect the app + hand it the feed via its
+             podcastaddict:// subscribe scheme, and fall back to the Play Store
+             (market://) to install it when it isn't present. -->
+        <package android:name="com.bambuna.podcastaddict"/>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="podcastaddict"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="market"/>
         </intent>
     </queries>
 </manifest>

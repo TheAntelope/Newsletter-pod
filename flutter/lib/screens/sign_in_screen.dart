@@ -137,6 +137,8 @@ class _SignInScreenState extends State<SignInScreen> {
                         style: DesignTokens.typographyMeta
                             .copyWith(color: DesignTokens.colorMuted),
                       ),
+                    const SizedBox(height: DesignTokens.spacingL),
+                    const Center(child: ElevenLabsBadge()),
                   ],
                 ),
               ),

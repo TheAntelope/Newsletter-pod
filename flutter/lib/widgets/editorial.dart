@@ -155,6 +155,41 @@ class ChecklistRow extends StatelessWidget {
   }
 }
 
+/// ElevenLabs Startup Grant attribution: a "Voices powered by" caption above the
+/// official ElevenLabs wordmark (assets/brand/elevenlabs-logo.png, the black logo
+/// from elevenlabs.io/brand, suited to the cream ground). Shown on the sign-in
+/// and onboarding-welcome screens. Falls back to text if the asset is missing.
+class ElevenLabsBadge extends StatelessWidget {
+  const ElevenLabsBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'Voices powered by',
+          style: DesignTokens.typographyMeta.copyWith(
+            color: DesignTokens.colorMuted,
+            letterSpacing: 0.6,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Image.asset(
+          'assets/brand/elevenlabs-logo.png',
+          height: 20,
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) => Text(
+            'ElevenLabs',
+            style: DesignTokens.typographyBodyStrong
+                .copyWith(color: DesignTokens.colorInk),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// The amber primary/secondary action button — filled (amber fill, white text)
 /// or outlined (amber 1.5pt border, amber-deep text). Full-width by default and
 /// 12pt-cornered, matching iOS `AmberButtonStyle`.
