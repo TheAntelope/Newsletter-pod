@@ -159,6 +159,10 @@ class _Dashboard extends StatelessWidget {
           episode: latestEpisode,
           isGenerating: app.isGenerating,
         ),
+        if (queueEnabled) ...[
+          const SizedBox(height: DesignTokens.spacingL),
+          _NextEpisodeQueueCard(pinnedCount: pinnedCount),
+        ],
         const SizedBox(height: DesignTokens.spacingL),
         _PlanCard(
           subscription: me.subscription,
@@ -166,10 +170,6 @@ class _Dashboard extends StatelessWidget {
         ),
         const SizedBox(height: DesignTokens.spacingL),
         _ScheduleCard(schedule: me.schedule),
-        if (queueEnabled) ...[
-          const SizedBox(height: DesignTokens.spacingL),
-          _NextEpisodeQueueCard(pinnedCount: pinnedCount),
-        ],
         const SizedBox(height: DesignTokens.spacingL),
         _AboutPodcastCard(profile: me.profile),
         const SizedBox(height: DesignTokens.spacingL),
