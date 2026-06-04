@@ -183,3 +183,35 @@ iOS "hand a private RSS feed to the OS player" model doesn't transfer for free. 
 - **Spotify: not viable** for personal delivery (RSS ingestion = public shows only; no API to
   inject audio into a user's library). Any Spotify presence would be a separate *public* sample
   show, never the personal-delivery path.
+
+## Share to ClawCast (shipped 2026-06-04)
+
+Parity with the iOS Share Extension (`ios/NewsletterPodShareExtension`): let users push a link /
+article / document into ClawCast from another app's share sheet, force-included into their next
+pod. **Backend is unchanged** — both clients hit the same `POST /v1/items/shared` (multipart;
+`kind` = `url|text|pdf|epub|docx`; Bearer auth; force-includes the item past tier caps).
+
+- **Dart layer (platform-agnostic), real-auth build only:**
+  - `receive_sharing_intent` plugin surfaces the OS share. `ShareIntakeController`
+    (`flutter/lib/services/share_intake_controller.dart`) normalizes each `SharedMediaFile` to a
+    `PendingShare` (`url|text|pdf|epub|docx|unsupported`) and exposes it via `ShareScope`. A bare
+    link shared as `text/plain` (the Android norm) is promoted to `kind=url` so the backend
+    fetches the article. Started only when `ENABLE_GOOGLE_SIGN_IN=true`; the demo build / widget
+    tests never touch the channel.
+  - `ShareIntakeScreen` (`flutter/lib/screens/share_intake_screen.dart`) is the analogue of the
+    iOS extension UI: "Send to ClawCast" → uploads via the live repository (carries the session
+    token) → per-item "Pinned to your next pod." / duplicate / 401·413 errors → Done.
+  - `RootView` shows it full-screen when `ShareScope.hasPending && signedIn`. A share that
+    cold-launches the app while signed-out waits behind sign-in, then replays — no token
+    persistence needed (the existing Firebase re-auth path provides the session).
+  - `SharedItemResult` + multipart `submitSharedItem` live on `ApiClient`, threaded through
+    `AppRepository` (+ real/fake impls). Tests: `test/services/share_intake_controller_test.dart`,
+    `test/screens/share_intake_screen_test.dart`.
+- **Android (functional now):** `AndroidManifest.xml` declares `ACTION_SEND` (`text/*`) +
+  `ACTION_SEND`/`SEND_MULTIPLE` (pdf/epub/docx) intent filters; `launchMode=singleTask` per the
+  plugin's requirement. **Verify on a real device** that a shared link/PDF lands as a queued
+  shared item.
+- **iOS (scaffold pending, not in this work):** the Dart layer lights up automatically once an
+  iOS **Share Extension** target feeds the shared **App Group** that `receive_sharing_intent`
+  reads. The Flutter `Runner` has no such target yet (the native app's extension is a separate
+  target). Add the extension + App Group + Codemagic signing when iOS migrates off the native app.
