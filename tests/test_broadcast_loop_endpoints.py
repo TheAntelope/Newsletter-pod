@@ -14,6 +14,11 @@ def _build_client() -> tuple[TestClient, InMemoryBroadcastRepository]:
     settings = Settings.from_env()
     settings.use_inmemory_adapters = True
     settings.session_signing_secret = "test-session-secret-32-bytes-long"
+    # Clear the LLM key so the broadcast tests are hermetic — the feedback
+    # summarizer/topic proposer gate on podcast_api_key (a general OpenAI key),
+    # which Settings.from_env() would otherwise pick up from a local .env and
+    # silently flip the "no summarizer" path into a live call.
+    settings.podcast_api_key = None
     settings.podcast_api_enabled = False
     settings.job_trigger_token = None  # auth disabled for tests
     settings.app_base_url = "http://testserver"
