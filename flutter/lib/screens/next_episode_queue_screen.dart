@@ -2,8 +2,24 @@ import 'package:flutter/material.dart';
 
 import '../api/models.dart';
 import '../design_tokens.dart';
+import '../services/link_launcher.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
+
+const _months = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/// "Jun 5, 2026, 2:30 PM" — abbreviated date + short 12-hour time, mirroring
+/// the iOS candidate row's `.abbreviated`/`.shortened` formatting.
+String _formatDateTime(DateTime when) {
+  final d = when.toLocal();
+  final hour12 = d.hour % 12 == 0 ? 12 : d.hour % 12;
+  final minute = d.minute.toString().padLeft(2, '0');
+  final period = d.hour < 12 ? 'AM' : 'PM';
+  return '${_months[d.month - 1]} ${d.day}, ${d.year}, $hour12:$minute $period';
+}
 
 /// Preview of what's likely to land in the next pod, with pin/exclude. Items you
 /// shared via the share sheet are highlighted and floated to the top. Pinning is
@@ -172,6 +188,37 @@ class _CandidateCard extends StatelessWidget {
                 size: 18),
             label: Text(pinned ? 'Pinned' : 'Pin'),
           ),
+        ),
+        Row(
+          children: [
+            const Icon(Icons.calendar_today_outlined,
+                size: 12, color: DesignTokens.colorMuted),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                _formatDateTime(c.publishedAt),
+                style: DesignTokens.typographyCallout
+                    .copyWith(color: DesignTokens.colorMuted),
+              ),
+            ),
+            if (c.link.isNotEmpty)
+              InkWell(
+                onTap: () => openExternal(context, c.link),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Read',
+                      style: DesignTokens.typographyCalloutStrong
+                          .copyWith(color: DesignTokens.colorAmberDeep),
+                    ),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.north_east,
+                        size: 14, color: DesignTokens.colorAmberDeep),
+                  ],
+                ),
+              ),
+          ],
         ),
       ],
     );
