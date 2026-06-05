@@ -43,14 +43,18 @@ class ClawcastTheme {
       dividerColor: DesignTokens.colorRule,
       // Flat, cream chrome — the editorial look has no Material elevation on the
       // navigation bar or app bar (mirrors iOS `editorialBackground()`).
-      appBarTheme: const AppBarTheme(
+      appBarTheme: AppBarTheme(
         backgroundColor: DesignTokens.colorCream,
         foregroundColor: DesignTokens.colorInk,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
         centerTitle: false,
-        titleTextStyle: DesignTokens.typographyTitle,
+        // Bake ink into the title style: when titleTextStyle is set but has no
+        // color, the AppBar skips merging foregroundColor in, so the title
+        // would otherwise fall back to a light default on the cream background.
+        titleTextStyle:
+            DesignTokens.typographyTitle.copyWith(color: DesignTokens.colorInk),
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: DesignTokens.colorCream,
