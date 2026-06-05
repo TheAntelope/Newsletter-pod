@@ -178,37 +178,30 @@ class ClawcastLogo extends StatelessWidget {
   }
 }
 
-/// ElevenLabs Startup Grant attribution: a "Voices powered by" caption above the
-/// official ElevenLabs wordmark (assets/brand/elevenlabs-logo.png, the black logo
-/// from elevenlabs.io/brand, suited to the cream ground). Shown on the sign-in
-/// and onboarding-welcome screens. Falls back to text if the asset is missing.
+/// ElevenLabs Startup Grant attribution: the official "Backed by ElevenLabs
+/// Grants" lockup (assets/brand/backed-by-elevenlabs-grants.webp, from the
+/// ElevenLabs Grants brand kit — transparent ground, suited to the cream
+/// background). The lockup is self-contained ("Backed by" + wordmark + "Grants"),
+/// so no separate caption is stacked on it. Shown on the sign-in and
+/// onboarding-welcome screens. Falls back to text if the asset is missing.
 class ElevenLabsBadge extends StatelessWidget {
   const ElevenLabsBadge({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          'Voices powered by',
-          style: DesignTokens.typographyMeta.copyWith(
-            color: DesignTokens.colorMuted,
-            letterSpacing: 0.6,
-          ),
+    return Semantics(
+      label: 'Backed by ElevenLabs Grants',
+      child: Image.asset(
+        'assets/brand/backed-by-elevenlabs-grants.webp',
+        key: const ValueKey('elevenlabs-grant-badge'),
+        height: 24,
+        fit: BoxFit.contain,
+        errorBuilder: (_, _, _) => Text(
+          'Backed by ElevenLabs Grants',
+          style: DesignTokens.typographyBodyStrong
+              .copyWith(color: DesignTokens.colorInk),
         ),
-        const SizedBox(height: 8),
-        Image.asset(
-          'assets/brand/elevenlabs-logo.png',
-          height: 20,
-          fit: BoxFit.contain,
-          errorBuilder: (_, _, _) => Text(
-            'ElevenLabs',
-            style: DesignTokens.typographyBodyStrong
-                .copyWith(color: DesignTokens.colorInk),
-          ),
-        ),
-      ],
+      ),
     );
   }
 }

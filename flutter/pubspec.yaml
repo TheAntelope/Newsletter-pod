@@ -101,9 +101,10 @@ flutter:
     # lib/data/demo_catalog_data.dart (rootBundle resolves on the real clock, which
     # hangs flutter_test's fake clock) — bundled here too only as readable reference.
     - assets/demo/
-    # Brand attribution. elevenlabs-logo.png is the official ElevenLabs black
-    # wordmark (from elevenlabs.io/brand), shown at the bottom of the onboarding
-    # welcome screen. See lib/screens/onboarding_screen.dart (_ElevenLabsBadge).
+    # Brand attribution. backed-by-elevenlabs-grants.webp is the official "Backed
+    # by ElevenLabs Grants" lockup (black variant, from the ElevenLabs Grants
+    # brand kit), shown on the sign-in and onboarding-welcome screens. See
+    # lib/widgets/editorial.dart (ElevenLabsBadge).
     - assets/brand/
 
   # Spectral: the editorial serif for the display/title/subtitle tokens
