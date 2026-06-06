@@ -8,6 +8,7 @@ import '../state/app_state.dart';
 import '../widgets/day_toggle.dart';
 import '../widgets/editorial.dart';
 import '../widgets/onboarding_progress_dots.dart';
+import '../widgets/topic_icon.dart';
 import '../widgets/voice_choice_card.dart';
 import 'swipe_deck_screen.dart';
 
@@ -76,27 +77,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     ('punny', 'Punny'),
     ('silly', 'Playful & silly'),
   ];
-
-  /// Curated icon + display order for the catalog's topic categories. The chips
-  /// shown are the intersection of this map with the topics actually present in
-  /// the catalog, so new catalog topics fall back to a default glyph rather than
-  /// disappearing.
-  static const _topicIcons = <String, IconData>{
-    'News': Icons.public,
-    'Politics': Icons.account_balance_outlined,
-    'Business': Icons.trending_up,
-    'Tech': Icons.memory,
-    'Strategy': Icons.lightbulb_outline,
-    'Personal Finance': Icons.savings_outlined,
-    'Science': Icons.science_outlined,
-    'Sports': Icons.sports_basketball_outlined,
-    'Culture': Icons.theater_comedy_outlined,
-    'Health & Wellness': Icons.spa_outlined,
-    'Fitness': Icons.fitness_center,
-    'Family Life': Icons.family_restroom_outlined,
-    'Food & Travel': Icons.restaurant_outlined,
-    'Romantasy': Icons.auto_stories_outlined,
-  };
 
   int _step = 0;
   final _nameController = TextEditingController();
@@ -463,7 +443,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 for (final t in topics)
                   _TopicChip(
                     label: t,
-                    icon: _topicIcons[t] ?? Icons.label_outline,
+                    icon: topicIcon(t),
                     selected: _selectedTopics.contains(t),
                     onTap: () => setState(() {
                       if (!_selectedTopics.remove(t)) _selectedTopics.add(t);
