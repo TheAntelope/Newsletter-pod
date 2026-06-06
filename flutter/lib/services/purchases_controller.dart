@@ -45,16 +45,30 @@ class PurchasesController {
     await Purchases.logOut();
   }
 
+  /// Maps an entitlement id (`pro` | `max` — what RevenueCat's
+  /// `entitlements.active` and our backend webhook key off) to the Play Store
+  /// *subscription product id*, which is prefixed `clawcast_` in Play Console.
+  /// These are NOT the same namespace: the empty-`getProducts` billing bug
+  /// (Jun 2026) was caused by sending the entitlement id `max` to Play, which
+  /// has no such product, so Play returned an empty list with no error.
+  static const Map<String, String> _playSubscriptionId = {
+    'pro': 'clawcast_pro',
+    'max': 'clawcast_max',
+  };
+
   /// Purchase [tier] ('pro' | 'max') for the chosen period. Buys the Play
   /// subscription product directly by id — the Play product id has the form
-  /// `subscriptionId:basePlanId` (e.g. `pro:monthly`, `max:annual`), which is
-  /// how the products are configured in RevenueCat — so no Offering is needed.
-  /// Returns true if the entitlement is active afterward; false on user-cancel
-  /// or a missing product. The backend reconciles the real plan from the
-  /// RevenueCat webhook; the UI just calls [AppState.loadMe] after success.
+  /// `subscriptionId:basePlanId` (e.g. `clawcast_pro:monthly`,
+  /// `clawcast_max:annual`), which is how the products are configured in Play
+  /// Console / RevenueCat — so no Offering is needed. Returns true if the
+  /// entitlement is active afterward; false on user-cancel or a missing
+  /// product. The backend reconciles the real plan from the RevenueCat webhook;
+  /// the UI just calls [AppState.loadMe] after success.
   static Future<bool> purchase(String tier, {bool annual = false}) async {
     if (!_enabled) return false;
-    final productId = '$tier:${annual ? 'annual' : 'monthly'}';
+    final subscriptionId = _playSubscriptionId[tier];
+    if (subscriptionId == null) return false;
+    final productId = '$subscriptionId:${annual ? 'annual' : 'monthly'}';
     try {
       final products = await Purchases.getProducts(
         [productId],
