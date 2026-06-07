@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api/api_client.dart' show SourcePayload;
 import '../api/models.dart';
 import '../design_tokens.dart';
+import '../services/link_launcher.dart';
 import '../services/location_service.dart';
 import '../state/app_state.dart';
 import '../widgets/day_toggle.dart';
@@ -350,11 +352,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         );
       case 6:
         return _shell(
-          title: 'Add your Substacks',
+          title: 'Add your newsletters',
           subtitle:
-              'Forward Substack subscriptions to your private ClawCast address '
-              'and they fold into your pod automatically.',
-          children: const [_InboundAddressCard()],
+              'Describe what you read and we\'ll find matching Substacks — or '
+              'paste a handle directly. Add the ones you want, then subscribe '
+              'with your private ClawCast address. Optional; you can do this any '
+              'time from Sources.',
+          children: const [_OnboardingSubstackStep()],
         );
       case 7:
         return _shell(
@@ -1172,6 +1176,403 @@ class _SwitchRow extends StatelessWidget {
   }
 }
 
+/// Onboarding newsletters step: a natural-language / handle search over
+/// Substack ([AppRepository.discoverSubstacks]), add candidates as intents
+/// in-flow, then subscribe each added publication per-item. Mirrors the iOS
+/// `OnboardingNewslettersStep` search engine — with the per-item Subscribe
+/// affordance added: creating an intent alone never starts mail flowing
+/// (Substack's double opt-in needs the alias pasted into its own form), so each
+/// added row gets a Subscribe button that copies the alias and opens the
+/// publication. The inbound alias card stays at the bottom for forwarding
+/// existing subscriptions.
+class _OnboardingSubstackStep extends StatefulWidget {
+  const _OnboardingSubstackStep();
+
+  @override
+  State<_OnboardingSubstackStep> createState() =>
+      _OnboardingSubstackStepState();
+}
+
+class _OnboardingSubstackStepState extends State<_OnboardingSubstackStep> {
+  static const _maxEntries = 5;
+
+  final _searchController = TextEditingController();
+  bool _searching = false;
+  bool _hasSearched = false;
+  String? _error;
+  List<SubstackCandidateDto> _candidates = [];
+  final List<SubstackIntentDto> _registered = [];
+  final Set<String> _adding = {};
+  final Set<String> _subscribing = {};
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  bool get _reachedMax => _registered.length >= _maxEntries;
+
+  String get _trimmed => _searchController.text.trim();
+
+  /// A short, URL-ish or @handle input is a direct paste — skip the search
+  /// (LLM round-trip) and create the intent straight away.
+  bool get _looksLikeHandle =>
+      _trimmed.startsWith('@') ||
+      (_trimmed.contains('.') && !_trimmed.contains(' '));
+
+  void _onSubmit() {
+    final q = _trimmed;
+    if (q.isEmpty || _searching || _reachedMax) return;
+    if (_looksLikeHandle) {
+      _addByUrl(q);
+    } else {
+      _search(q);
+    }
+  }
+
+  Future<void> _search(String query) async {
+    final repo = AppScope.of(context).repository;
+    setState(() {
+      _searching = true;
+      _hasSearched = true;
+      _error = null;
+      _candidates = [];
+    });
+    try {
+      final env = await repo.discoverSubstacks(query);
+      if (!mounted) return;
+      setState(() {
+        _candidates = env.candidates;
+        _searching = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _searching = false;
+        _error = "Couldn't search right now — try again, or paste a handle.";
+      });
+    }
+  }
+
+  Future<void> _addByUrl(String raw) async {
+    setState(() {
+      _searching = true;
+      _error = null;
+    });
+    final intent = await _createIntent(raw);
+    if (!mounted) return;
+    setState(() {
+      _searching = false;
+      if (intent != null) {
+        _searchController.clear();
+        _candidates = [];
+        _hasSearched = false;
+      }
+    });
+  }
+
+  Future<void> _addCandidate(SubstackCandidateDto c) async {
+    if (_reachedMax) return;
+    setState(() => _adding.add(c.pubUrl));
+    await _createIntent(c.pubUrl);
+    if (!mounted) return;
+    setState(() => _adding.remove(c.pubUrl));
+  }
+
+  /// Creates the intent and appends it to the registered list (dedup by id).
+  /// Returns the intent on success; sets [_error] and returns null on failure.
+  Future<SubstackIntentDto?> _createIntent(String pubUrl) async {
+    try {
+      final env =
+          await AppScope.of(context).repository.createSubstackIntent(pubUrl);
+      final intent = env.intent;
+      if (mounted && !_registered.any((i) => i.id == intent.id)) {
+        setState(() => _registered.add(intent));
+      }
+      return intent;
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = "Couldn't add that publication.");
+      }
+      return null;
+    }
+  }
+
+  /// Per-item subscribe: copy the ClawCast alias and open Substack's subscribe
+  /// form so the user can paste it and complete the double opt-in. This is the
+  /// step that actually starts mail flowing — creating the intent alone doesn't.
+  Future<void> _subscribe(SubstackIntentDto intent) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _subscribing.add(intent.id));
+    try {
+      await Clipboard.setData(ClipboardData(text: intent.aliasEmail));
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'ClawCast email copied — paste it into Substack and subscribe. '
+            "We'll auto-confirm the rest.",
+          ),
+        ),
+      );
+      final url = intent.subscribeUrl;
+      if (url != null && mounted) {
+        await openExternal(context, url.toString());
+      }
+    } finally {
+      if (mounted) setState(() => _subscribing.remove(intent.id));
+    }
+  }
+
+  bool _alreadyAdded(String pubHost) =>
+      _registered.any((i) => i.pubHost == pubHost);
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _searchRow(),
+        if (_error != null) ...[
+          const SizedBox(height: DesignTokens.spacingS),
+          Text(
+            _error!,
+            style: DesignTokens.typographyCallout.copyWith(color: Colors.red),
+          ),
+        ],
+        if (_searching) ...[
+          const SizedBox(height: DesignTokens.spacingM),
+          Row(
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: DesignTokens.spacingS),
+              Text(
+                'Searching…',
+                style: DesignTokens.typographyCallout
+                    .copyWith(color: DesignTokens.colorMuted),
+              ),
+            ],
+          ),
+        ],
+        if (!_searching) ...[
+          const SizedBox(height: DesignTokens.spacingM),
+          if (_candidates.isNotEmpty)
+            _suggestions()
+          else
+            _hintOrEmpty(),
+        ],
+        if (_registered.isNotEmpty) ...[
+          const SizedBox(height: DesignTokens.spacingL),
+          const EditorialDivider(),
+          const SizedBox(height: DesignTokens.spacingS),
+          const MetaLabel('Added to your pod'),
+          const SizedBox(height: DesignTokens.spacingM),
+          for (final i in _registered) ...[
+            _registeredRow(i),
+            const SizedBox(height: DesignTokens.spacingM),
+          ],
+        ],
+        const SizedBox(height: DesignTokens.spacingL),
+        const MetaLabel('Already subscribe to newsletters?'),
+        const SizedBox(height: DesignTokens.spacingM),
+        const _InboundAddressCard(),
+      ],
+    );
+  }
+
+  Widget _searchRow() {
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _searchController,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+              labelText: 'Describe what you read, or paste a handle',
+              hintText: 'e.g. "AI strategy", or lenny.substack.com',
+            ),
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (_) => _onSubmit(),
+          ),
+        ),
+        const SizedBox(width: DesignTokens.spacingS),
+        AmberButton.filled(
+          label: _looksLikeHandle ? 'Add' : 'Find',
+          expand: false,
+          loading: _searching,
+          onPressed: (_searching || _reachedMax) ? null : _onSubmit,
+        ),
+      ],
+    );
+  }
+
+  Widget _hintOrEmpty() {
+    final text = _hasSearched
+        ? 'No clear matches — try describing it differently, or paste a handle '
+            'like lenny.substack.com or @lenny.'
+        : 'Try: "AI strategy and regulation", "longevity research and habits", '
+            'or just @stratechery.';
+    return Text(
+      text,
+      style: DesignTokens.typographyCallout
+          .copyWith(color: DesignTokens.colorMuted),
+    );
+  }
+
+  Widget _suggestions() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const MetaLabel('Suggestions'),
+        const SizedBox(height: DesignTokens.spacingM),
+        for (final c in _candidates) ...[
+          _candidateCard(c),
+          const SizedBox(height: DesignTokens.spacingM),
+        ],
+        if (_reachedMax)
+          Text(
+            'Max $_maxEntries reached — continue to keep setting up.',
+            style: DesignTokens.typographyMeta
+                .copyWith(color: DesignTokens.colorMuted),
+          ),
+      ],
+    );
+  }
+
+  Widget _candidateCard(SubstackCandidateDto c) {
+    final added = _alreadyAdded(c.pubHost);
+    final adding = _adding.contains(c.pubUrl);
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                c.title ?? c.pubHost,
+                style: DesignTokens.typographySubtitle
+                    .copyWith(color: DesignTokens.colorInk),
+              ),
+            ),
+            if (c.hasPaidTier) const _PaidTag(),
+          ],
+        ),
+        if (c.author != null && c.author!.isNotEmpty)
+          Text(
+            c.author!,
+            style: DesignTokens.typographyMeta
+                .copyWith(color: DesignTokens.colorMuted),
+          ),
+        if (c.why != null && c.why!.isNotEmpty)
+          Text(
+            c.why!,
+            style: DesignTokens.typographyCallout
+                .copyWith(color: DesignTokens.colorInkSoft),
+          ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: added
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.check_circle,
+                        size: 16, color: DesignTokens.colorAmberDeep),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Added',
+                      style: DesignTokens.typographyCalloutStrong
+                          .copyWith(color: DesignTokens.colorAmberDeep),
+                    ),
+                  ],
+                )
+              : AmberButton.filled(
+                  label: 'Add',
+                  expand: false,
+                  loading: adding,
+                  onPressed:
+                      (adding || _reachedMax) ? null : () => _addCandidate(c),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _registeredRow(SubstackIntentDto i) {
+    final subscribing = _subscribing.contains(i.id);
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.check_circle,
+                size: 18, color: DesignTokens.colorAmberDeep),
+            const SizedBox(width: DesignTokens.spacingS),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    i.displayTitle,
+                    style: DesignTokens.typographySubtitle
+                        .copyWith(color: DesignTokens.colorInk),
+                  ),
+                  if (i.pubAuthor != null && i.pubAuthor!.isNotEmpty)
+                    Text(
+                      i.pubAuthor!,
+                      style: DesignTokens.typographyMeta
+                          .copyWith(color: DesignTokens.colorMuted),
+                    ),
+                ],
+              ),
+            ),
+            if (i.hasPaidTier) const _PaidTag(),
+          ],
+        ),
+        Text(
+          'Subscribe with your ClawCast address to start receiving it.',
+          style: DesignTokens.typographyCallout
+              .copyWith(color: DesignTokens.colorInkSoft),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: AmberButton.outlined(
+            label: 'Subscribe',
+            icon: Icons.open_in_new,
+            expand: false,
+            loading: subscribing,
+            onPressed: subscribing ? null : () => _subscribe(i),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PaidTag extends StatelessWidget {
+  const _PaidTag();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: DesignTokens.colorAmber, width: 1),
+      ),
+      child: Text(
+        'Paid',
+        style: DesignTokens.typographyMeta
+            .copyWith(color: DesignTokens.colorAmberDeep),
+      ),
+    );
+  }
+}
+
 class _InboundAddressCard extends StatelessWidget {
   const _InboundAddressCard();
 
@@ -1183,10 +1584,28 @@ class _InboundAddressCard extends StatelessWidget {
       spacing: DesignTokens.spacingS,
       children: [
         const MetaLabel('Your private inbound address'),
-        Text(
-          address,
-          style: DesignTokens.typographyTitle
-              .copyWith(color: DesignTokens.colorAmberDeep),
+        InkWell(
+          onTap: () async {
+            final messenger = ScaffoldMessenger.of(context);
+            await Clipboard.setData(ClipboardData(text: address));
+            messenger.showSnackBar(
+              const SnackBar(content: Text('Address copied')),
+            );
+          },
+          borderRadius: BorderRadius.circular(8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  address,
+                  style: DesignTokens.typographyTitle
+                      .copyWith(color: DesignTokens.colorAmberDeep),
+                ),
+              ),
+              const Icon(Icons.copy,
+                  size: 18, color: DesignTokens.colorAmberDeep),
+            ],
+          ),
         ),
         Text(
           'Forward newsletters here, or use this address when you subscribe to '
