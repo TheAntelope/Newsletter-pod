@@ -421,11 +421,14 @@ workflows:
     publishing:
       google_play:
         credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
-        # Closed track (built-in "alpha"). Switched from `internal` on 2026-06-07:
-        # a brand-new app won't serve subscription productDetails until it has a
-        # processed closed/production release, which was the remaining empty-
-        # getProducts blocker after the clawcast_* product-id fix (build 260).
-        track: alpha
+        # Default CI track = internal (fast, reviewless iteration). The IAP
+        # unlock for a brand-new app needs ONE processed closed/production
+        # release; do that as a one-time manual promote (internal -> closed) in
+        # Play Console rather than routing every build through closed-track
+        # review. Once that closed release is approved, subscription
+        # productDetails resolve on internal builds too. (Briefly set to `alpha`
+        # 2026-06-07 to seed the first closed release; reverted same day.)
+        track: internal
         # NOTE: do NOT set changes_not_sent_for_review here. Google Play rejects
         # the changesNotSentForReview param for an app that hasn't been through
         # production review yet ("Changes are sent for review automatically...").
