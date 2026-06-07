@@ -27,15 +27,26 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  static const _stepCount = 11;
-  static const _nameStepId = 3;
-
-  /// The visible steps, in order. The name step ("What should we call you?") is
-  /// shown only when the user opted into a personalised greeting on the style
-  /// step (id 2, immediately before it) — otherwise we never ask for a name.
+  /// The visible steps, in display order. This is an explicit sequence (not the
+  /// numeric id order), so the switch in [_stepContent] keys off ids, not
+  /// position. Two steps are conditional:
+  ///   - the name step (3) only when the user opted into a personalised greeting
+  ///     on the style step;
+  ///   - the second-voice / co-host step (8) only for a two-host show — solo and
+  ///     rotating-guest shows use the single host voice picked up front.
+  /// The format step (7) is placed right after the style step (2).
   List<int> get _activeSteps => [
-        for (var id = 0; id < _stepCount; id++)
-          if (id != _nameStepId || _greeting) id,
+        0, // welcome
+        1, // pick your voice (host)
+        2, // style your show
+        7, // choose a format
+        if (_greeting) 3, // what should we call you?
+        4, // pick your topics
+        5, // tune your pod (swipe deck)
+        6, // add your Substacks
+        if (_isTwoHost) 8, // add a co-host (second voice)
+        9, // set your schedule
+        10, // you're all set
       ];
 
   /// The step id currently shown, resolved from the position [_step] within
@@ -106,7 +117,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Future<VoiceCatalogEnvelope>? _voices;
 
   bool get _isTwoHost => _showPreset == 'two_hosts';
-  bool get _isRotating => _showPreset == 'rotating_guest';
 
   @override
   void dispose() {
@@ -331,7 +341,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           children: [
             SizedBox(
               height: 460,
-              child: SwipeDeck(topics: _selectedTopics.toList()),
+              child: SwipeDeck(
+                topics: _selectedTopics.toList(),
+                onboarding: true,
+              ),
             ),
           ],
         );
@@ -350,13 +363,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           children: [_showStep()],
         );
       case 8:
+        // Only reached for a two-host show (see _activeSteps) — solo and
+        // rotating-guest shows skip the second-voice pick entirely.
         return _shell(
-          title: _isTwoHost ? 'Add a co-host' : 'Your host',
-          subtitle: _isTwoHost
-              ? 'Your show pairs two voices — pick a co-host to trade off with '
-                  'the host you chose. You can change these later.'
-              : 'This is the voice you picked to read your briefing. Change it '
-                  'here if you like.',
+          title: 'Add a co-host',
+          subtitle:
+              'Your show pairs two voices — pick a co-host to trade off with '
+              'the host you chose. You can change these later.',
           children: [_coHostStep()],
         );
       case 9:
@@ -506,59 +519,36 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     });
   }
 
-  /// Shown after the format is chosen. For two-host it picks the co-host (the
-  /// host was chosen up front, on step 0); otherwise it re-shows the host picker
-  /// so it can still be changed, plus the rotating-guest note.
+  /// The second-voice pick, shown only for a two-host show (the host was chosen
+  /// up front, on step 1). Solo and rotating-guest shows skip this step, so it
+  /// always renders the co-host picker.
   Widget _coHostStep() {
     return _voiceCatalogBuilder((voices) {
       final hostName = _voiceName(voices, _anchorVoiceId);
-      if (_isTwoHost) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (hostName != null) ...[
-              const _FieldLabel('Your host'),
-              const SizedBox(height: DesignTokens.spacingS),
-              Text(
-                hostName,
-                style: DesignTokens.typographyBodyStrong
-                    .copyWith(color: DesignTokens.colorInk),
-              ),
-              const SizedBox(height: DesignTokens.spacingL),
-            ],
-            const _FieldLabel('Co-host'),
-            const SizedBox(height: DesignTokens.spacingS),
-            for (final v in voices) ...[
-              VoiceChoiceCard(
-                voice: v,
-                selected: _commentatorVoiceId == v.id,
-                onSelect: () => setState(() => _commentatorVoiceId = v.id),
-                previewSource: v.previewUrl,
-              ),
-              const SizedBox(height: DesignTokens.spacingM),
-            ],
-          ],
-        );
-      }
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (hostName != null) ...[
+            const _FieldLabel('Your host'),
+            const SizedBox(height: DesignTokens.spacingS),
+            Text(
+              hostName,
+              style: DesignTokens.typographyBodyStrong
+                  .copyWith(color: DesignTokens.colorInk),
+            ),
+            const SizedBox(height: DesignTokens.spacingL),
+          ],
+          const _FieldLabel('Co-host'),
+          const SizedBox(height: DesignTokens.spacingS),
           for (final v in voices) ...[
             VoiceChoiceCard(
               voice: v,
-              selected: _anchorVoiceId == v.id,
-              onSelect: () => setState(() => _anchorVoiceId = v.id),
+              selected: _commentatorVoiceId == v.id,
+              onSelect: () => setState(() => _commentatorVoiceId = v.id),
               previewSource: v.previewUrl,
             ),
             const SizedBox(height: DesignTokens.spacingM),
           ],
-          if (_isRotating)
-            Text(
-              'A different guest voice joins ${hostName ?? 'your host'} each day, '
-              'drawn from the full catalog.',
-              style: DesignTokens.typographyCallout
-                  .copyWith(color: DesignTokens.colorMuted),
-            ),
         ],
       );
     });
