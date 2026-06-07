@@ -45,30 +45,36 @@ class PurchasesController {
     await Purchases.logOut();
   }
 
-  /// Maps an entitlement id (`pro` | `max` — what RevenueCat's
-  /// `entitlements.active` and our backend webhook key off) to the Play Store
-  /// *subscription product id*, which is prefixed `clawcast_` in Play Console.
-  /// These are NOT the same namespace: the empty-`getProducts` billing bug
-  /// (Jun 2026) was caused by sending the entitlement id `max` to Play, which
-  /// has no such product, so Play returned an empty list with no error.
-  static const Map<String, String> _playSubscriptionId = {
-    'pro': 'clawcast_pro',
-    'max': 'clawcast_max',
+  /// Maps a tier (`pro` | `max` — what RevenueCat's `entitlements.active` and
+  /// our backend webhook key off) to its Play Store subscription product ids,
+  /// in the form `subscriptionId:basePlanId`.
+  ///
+  /// The Play subscription product ids are the bare strings `pro` / `max` — NOT
+  /// `clawcast_`-prefixed. That earlier wrong assumption is what caused the
+  /// empty-`getProducts` billing bug (Jun 2026): Play returns an empty list with
+  /// no error when asked for a product id that doesn't exist, so the purchase
+  /// failed silently. Confirmed against Play Console: the "Product ID" field is
+  /// `pro` / `max` (the page heading `clawcast_*` is just the display name).
+  ///
+  /// Note the per-tier asymmetry in the *yearly* base plan id: Pro's is
+  /// `annual`, but Max's active yearly base plan is `annualmax` (Max's `annual`
+  /// base plan is Inactive in Play Console, so `max:annual` would also come back
+  /// empty).
+  static const Map<String, ({String monthly, String annual})> _playProductId = {
+    'pro': (monthly: 'pro:monthly', annual: 'pro:annual'),
+    'max': (monthly: 'max:monthly', annual: 'max:annualmax'),
   };
 
   /// Purchase [tier] ('pro' | 'max') for the chosen period. Buys the Play
-  /// subscription product directly by id — the Play product id has the form
-  /// `subscriptionId:basePlanId` (e.g. `clawcast_pro:monthly`,
-  /// `clawcast_max:annual`), which is how the products are configured in Play
-  /// Console / RevenueCat — so no Offering is needed. Returns true if the
-  /// entitlement is active afterward; false on user-cancel or a missing
-  /// product. The backend reconciles the real plan from the RevenueCat webhook;
-  /// the UI just calls [AppState.loadMe] after success.
+  /// subscription product directly by id (see [_playProductId]) — so no Offering
+  /// is needed. Returns true if the entitlement is active afterward; false on
+  /// user-cancel or a missing product. The backend reconciles the real plan from
+  /// the RevenueCat webhook; the UI just calls [AppState.loadMe] after success.
   static Future<bool> purchase(String tier, {bool annual = false}) async {
     if (!_enabled) return false;
-    final subscriptionId = _playSubscriptionId[tier];
-    if (subscriptionId == null) return false;
-    final productId = '$subscriptionId:${annual ? 'annual' : 'monthly'}';
+    final ids = _playProductId[tier];
+    if (ids == null) return false;
+    final productId = annual ? ids.annual : ids.monthly;
     try {
       final products = await Purchases.getProducts(
         [productId],
