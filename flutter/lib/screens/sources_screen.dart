@@ -7,6 +7,7 @@ import '../design_tokens.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
 import '../widgets/topic_icon.dart';
+import 'dashboard_scaffold.dart';
 import 'substack_add_screen.dart';
 
 /// Sources tab. Editorial rebuild of the iOS `SourcesView`: the private
@@ -129,9 +130,12 @@ class _SourcesScreenState extends State<SourcesScreen> {
     final inbound = _app.me?.user.inboundAddress;
     return Scaffold(
       appBar: AppBar(
-        leading: const Padding(
-          padding: EdgeInsets.all(8),
-          child: ClawcastLogo(size: 28),
+        leading: Padding(
+          padding: const EdgeInsets.all(8),
+          child: ClawcastLogo(
+            size: 28,
+            onTap: () => DashboardScope.goHome(context),
+          ),
         ),
         title: const Text('Sources'),
         actions: [

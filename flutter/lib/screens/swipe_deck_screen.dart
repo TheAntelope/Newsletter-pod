@@ -6,6 +6,7 @@ import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
+import 'dashboard_scaffold.dart';
 
 /// Interest-learning swipe deck. The top card follows the drag with a clamped
 /// rotation and edge "decision" labels; past the threshold it flies off (right
@@ -21,9 +22,12 @@ class SwipeDeckScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        leading: const Padding(
-          padding: EdgeInsets.all(8),
-          child: ClawcastLogo(size: 28),
+        leading: Padding(
+          padding: const EdgeInsets.all(8),
+          child: ClawcastLogo(
+            size: 28,
+            onTap: () => DashboardScope.goHome(context),
+          ),
         ),
         title: const Text('Tune your pod'),
       ),

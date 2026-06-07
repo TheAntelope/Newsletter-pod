@@ -41,7 +41,7 @@ class EditorialCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final radius = BorderRadius.circular(DesignTokens.radiusCard);
 
-    Widget content = Padding(
+    final Widget inner = Padding(
       padding: padding,
       child: Column(
         crossAxisAlignment: crossAxisAlignment,
@@ -50,17 +50,24 @@ class EditorialCard extends StatelessWidget {
       ),
     );
 
-    if (onTap != null) {
-      content = InkWell(
-        onTap: onTap,
-        borderRadius: radius,
-        child: content,
-      );
-    }
+    // The white fill lives on the Material so an InkWell ripple paints on top of
+    // it (rather than behind the fill, where it would be invisible). The border
+    // + shadow stay on the surrounding DecoratedBox.
+    final Widget surface = Material(
+      color: Colors.white,
+      borderRadius: radius,
+      clipBehavior: Clip.antiAlias,
+      child: onTap == null
+          ? inner
+          : InkWell(
+              onTap: onTap,
+              borderRadius: radius,
+              child: inner,
+            ),
+    );
 
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.white,
         borderRadius: radius,
         border: Border.all(
           color: borderColor ?? DesignTokens.colorRule,
@@ -68,7 +75,7 @@ class EditorialCard extends StatelessWidget {
         ),
         boxShadow: const [_cardShadow],
       ),
-      child: ClipRRect(borderRadius: radius, child: content),
+      child: surface,
     );
   }
 
@@ -158,14 +165,18 @@ class ChecklistRow extends StatelessWidget {
 /// The ClawCast app mark (assets/brand/clawcast-logo.png) as a rounded badge.
 /// The source is a square illustration on a cream ground; it's clipped to a
 /// soft-cornered square so it reads as a brand badge at any [size].
+///
+/// When [onTap] is provided the badge becomes a button (used in the dashboard
+/// AppBars so tapping the mark returns to the Today/home tab).
 class ClawcastLogo extends StatelessWidget {
-  const ClawcastLogo({super.key, this.size = 56});
+  const ClawcastLogo({super.key, this.size = 56, this.onTap});
 
   final double size;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
+    final badge = ClipRRect(
       borderRadius: BorderRadius.circular(size * 0.22),
       child: Image.asset(
         'assets/brand/clawcast-logo.png',
@@ -173,6 +184,16 @@ class ClawcastLogo extends StatelessWidget {
         height: size,
         fit: BoxFit.cover,
         errorBuilder: (_, _, _) => const SizedBox.shrink(),
+      ),
+    );
+    if (onTap == null) return badge;
+    return Semantics(
+      button: true,
+      label: 'ClawCast home',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(size * 0.22),
+        child: badge,
       ),
     );
   }

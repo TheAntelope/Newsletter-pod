@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import '../widgets/editorial.dart';
 import '../widgets/generation_progress_bar.dart';
 import 'account_screen.dart';
+import 'dashboard_scaffold.dart';
 import 'feed_access_screen.dart';
 import 'next_episode_queue_screen.dart';
 import 'paywall_screen.dart';
@@ -82,9 +83,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        leading: const Padding(
-          padding: EdgeInsets.all(8),
-          child: ClawcastLogo(size: 28),
+        leading: Padding(
+          padding: const EdgeInsets.all(8),
+          child: ClawcastLogo(
+            size: 28,
+            onTap: () => DashboardScope.goHome(context),
+          ),
         ),
         title: const Text('Your Briefing'),
         actions: [
