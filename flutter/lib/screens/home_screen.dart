@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
@@ -378,7 +380,7 @@ class _HeroEpisodeCardState extends State<_HeroEpisodeCard> {
           ),
         const EditorialDivider(),
         AmberButton.filled(
-          label: 'Open in your podcast app',
+          label: _openInPodcastAppLabel(),
           icon: Icons.play_arrow,
           onPressed: ep == null
               ? null
@@ -403,6 +405,15 @@ class _HeroEpisodeCardState extends State<_HeroEpisodeCard> {
       ],
     );
   }
+}
+
+/// The "open in podcast app" button names the platform's actual delivery
+/// target: Apple Podcasts on iOS, Podcast Addict on Android (our chosen Android
+/// player — see [PodcastAddict]). Other platforms get a neutral fallback.
+String _openInPodcastAppLabel() {
+  if (Platform.isIOS) return 'Open in Apple Podcasts';
+  if (Platform.isAndroid) return 'Open in Podcast Addict';
+  return 'Open in your podcast app';
 }
 
 /// "2 of 3 premium voice pods left this week" — the weekly premium-voice quota
