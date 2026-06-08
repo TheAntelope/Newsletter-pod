@@ -262,7 +262,7 @@ class AmberButton extends StatelessWidget {
       borderRadius: BorderRadius.all(Radius.circular(12)),
     );
     const textStyle = TextStyle(fontSize: 16, fontWeight: FontWeight.w600);
-    const padding = EdgeInsets.symmetric(vertical: 14);
+    const padding = EdgeInsets.symmetric(horizontal: 20, vertical: 14);
 
     final Widget child = loading
         ? SizedBox(
