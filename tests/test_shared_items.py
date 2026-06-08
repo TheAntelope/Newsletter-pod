@@ -13,6 +13,7 @@ import pytest
 from newsletter_pod.shared_items import (
     MAX_EXTRACTED_CHARS,
     MAX_UPLOAD_BYTES,
+    REDDIT_MAX_COMMENTS,
     SHARE_FROM_NAME,
     SHARE_SENDER_DOMAIN,
     SHARE_SENDER_EMAIL,
@@ -22,6 +23,7 @@ from newsletter_pod.shared_items import (
     extract_from_epub,
     extract_from_pdf,
     extract_from_plain_text,
+    extract_from_reddit,
     extract_from_url,
     normalize_extracted_text,
 )
@@ -217,6 +219,141 @@ def test_extract_from_url_routes_pdf_content_type_through_pdf_extractor():
 
     title, body = extract_from_url("https://example.com/file.pdf", fetcher=fake)
     assert "Body of the PDF" in body
+
+
+# ----------------------------------------------------------------------------
+# Reddit (old.reddit.com HTML, stubbed fetcher)
+# ----------------------------------------------------------------------------
+
+
+def _old_reddit_html(title, subreddit, selftext, comments, sidebar="Subreddit rules and description."):
+    """Build a minimal old.reddit.com post page: a sidebar (must be ignored), a
+    post selftext .md block, and comment .md blocks (marked data-type=comment)."""
+    comment_html = "".join(
+        f'<div class="comment" data-type="comment"><div class="entry">'
+        f'<div class="usertext-body md-container"><div class="md"><p>{c}</p></div></div>'
+        f'</div></div>'
+        for c in comments
+    )
+    selftext_html = (
+        f'<div class="usertext-body md-container"><div class="md"><p>{selftext}</p></div></div>'
+        if selftext else ""
+    )
+    return (
+        f"<html><head><title>{title} : {subreddit}</title></head><body>"
+        f'<div class="side"><div class="md"><p>{sidebar}</p></div></div>'
+        f'<div id="siteTable"><div class="thing"><div class="entry">{selftext_html}</div></div></div>'
+        f'<div class="commentarea">{comment_html}</div>'
+        f"</body></html>"
+    ).encode("utf-8")
+
+
+def test_extract_from_reddit_includes_selftext_and_comments():
+    html = _old_reddit_html(
+        "Interesting discussion", "python",
+        "This is the original post body.",
+        ["First comment.", "Second comment."],
+    )
+    captured = {}
+
+    def fake(url):
+        captured["url"] = url
+        return (html, "text/html")
+
+    title, body = extract_from_reddit(
+        "https://www.reddit.com/r/python/comments/abc123/interesting_discussion/",
+        fetcher=fake,
+    )
+    assert title == "Interesting discussion"  # " : python" suffix stripped
+    assert "original post body" in body
+    assert "Top comments:" in body
+    assert "First comment." in body
+    assert "Second comment." in body
+    # Sidebar content must not leak into the body.
+    assert "Subreddit rules" not in body
+    # We should have fetched old.reddit.com, not the www host.
+    assert captured["url"] == "https://old.reddit.com/r/python/comments/abc123/interesting_discussion/"
+
+
+def test_extract_from_reddit_routed_via_extract_from_url():
+    html = _old_reddit_html("Link post", "news", "", ["Only the comments have content."])
+
+    def fake(url):
+        return (html, "text/html")
+
+    # extract_from_url should detect the reddit host and route to the reddit path.
+    title, body = extract_from_url("https://reddit.com/r/news/comments/x/y/", fetcher=fake)
+    assert title == "Link post"
+    assert "Only the comments have content." in body
+
+
+def test_extract_from_reddit_rewrites_host_and_strips_query():
+    html = _old_reddit_html("T", "x", "Body.", [])
+    captured = {}
+
+    def fake(url):
+        captured["url"] = url
+        return (html, "text/html")
+
+    extract_from_reddit(
+        "https://www.reddit.com/r/x/comments/a/b/?utm_source=share",
+        fetcher=fake,
+    )
+    assert captured["url"] == "https://old.reddit.com/r/x/comments/a/b/"
+
+
+def test_extract_from_reddit_maps_short_link():
+    html = _old_reddit_html("Short", "x", "Body via short link.", [])
+    captured = {}
+
+    def fake(url):
+        captured["url"] = url
+        return (html, "text/html")
+
+    # redd.it/<id> -> old.reddit.com/comments/<id> (resolves to the permalink).
+    title, body = extract_from_url("https://redd.it/abc123", fetcher=fake)
+    assert captured["url"] == "https://old.reddit.com/comments/abc123"
+    assert "Body via short link." in body
+
+
+def test_extract_from_reddit_ignores_sidebar_md_blocks():
+    html = _old_reddit_html(
+        "T", "x", "The actual post.", ["A real comment."],
+        sidebar="Do not include this sidebar text.",
+    )
+
+    def fake(url):
+        return (html, "text/html")
+
+    _title, body = extract_from_reddit("https://www.reddit.com/r/x/comments/a/b/", fetcher=fake)
+    assert "The actual post." in body
+    assert "A real comment." in body
+    assert "Do not include this sidebar" not in body
+
+
+def test_extract_from_reddit_caps_comment_count():
+    many = [f"Comment number {i}." for i in range(REDDIT_MAX_COMMENTS + 5)]
+    html = _old_reddit_html("T", "x", "Post.", many)
+
+    def fake(url):
+        return (html, "text/html")
+
+    _title, body = extract_from_reddit("https://www.reddit.com/r/x/comments/a/b/", fetcher=fake)
+    assert f"Comment number {REDDIT_MAX_COMMENTS - 1}." in body
+    assert f"Comment number {REDDIT_MAX_COMMENTS}." not in body
+
+
+def test_extract_from_reddit_falls_back_when_no_post_markup():
+    # A page with no post/comment .md blocks (e.g. a subreddit listing) should
+    # fall back to the generic article extractor over the same bytes.
+    html = b"<html><head><title>Fallback</title></head><body><article><p>HTML body.</p></article></body></html>"
+
+    def fake(url):
+        return (html, "text/html")
+
+    title, body = extract_from_reddit("https://www.reddit.com/r/python/", fetcher=fake)
+    assert title == "Fallback"
+    assert "HTML body." in body
 
 
 # ----------------------------------------------------------------------------
