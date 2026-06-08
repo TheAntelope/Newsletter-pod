@@ -1,5 +1,6 @@
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -16,9 +17,9 @@ import '../widgets/topic_icon.dart';
 import '../widgets/voice_choice_card.dart';
 import 'swipe_deck_screen.dart';
 
-/// Onboarding wizard (welcome → voice → style+weather → name → topics → swipe →
-/// Substack → format → co-host → schedule → done). Editorial rebuild on the
-/// shared step-shell pattern from iOS: serif display title, body subtitle, a
+/// Onboarding wizard (welcome → voice → style+weather → format → co-host → name
+/// → topics → swipe → Substack → share → schedule → done). Editorial rebuild on
+/// the shared step-shell pattern from iOS: serif display title, body subtitle, a
 /// scrollable content well, and a bottom amber primary / outlined-back button
 /// pair, with the progress dots up top. On finish the picks are written through
 /// to the podcast profile + schedule (best-effort) before completeOnboarding
@@ -38,18 +39,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   ///     on the style step;
   ///   - the second-voice / co-host step (8) only for a two-host show — solo and
   ///     rotating-guest shows use the single host voice picked up front.
-  /// The format step (7) is placed right after the style step (2).
+  /// The format step (7) is placed right after the style step (2), and the
+  /// co-host step (8) directly follows the format step when two hosts is picked.
   List<int> get _activeSteps => [
         0, // welcome
         1, // pick your voice (host)
         2, // style your show
         7, // choose a format
+        if (_isTwoHost) 8, // add a co-host (second voice)
         if (_greeting) 3, // what should we call you?
         4, // pick your topics
         5, // tune your pod (swipe deck)
         6, // add your Substacks
         11, // add from anywhere (OS share sheet)
-        if (_isTwoHost) 8, // add a co-host (second voice)
         9, // set your schedule
         10, // you're all set
       ];
@@ -1008,7 +1010,8 @@ class _ShareFromAnywhereStep extends StatelessWidget {
   Widget build(BuildContext context) {
     // Match the platform's name for the affordance: "Share" on Android, "the
     // Share button" on iOS — so the instruction matches what the user sees.
-    final shareVerb = Platform.isIOS ? 'the Share button' : 'Share';
+    final shareVerb =
+        (!kIsWeb && Platform.isIOS) ? 'the Share button' : 'Share';
     final steps = [
       'Reading something good? Tap $shareVerb in your browser, Mail, or Substack.',
       'Pick ClawCast from the share sheet.',
