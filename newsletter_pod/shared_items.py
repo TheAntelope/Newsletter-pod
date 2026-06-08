@@ -21,7 +21,7 @@ import re
 from datetime import datetime
 from html.parser import HTMLParser
 from typing import Callable, Optional
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -41,6 +41,19 @@ URL_FETCH_TIMEOUT_SECONDS = 15
 URL_FETCH_USER_AGENT = (
     "Mozilla/5.0 (compatible; ClawCast-Share/1.0; +https://theclawcast.com)"
 )
+# Reddit 403/429s our bot-shaped UA, and its post pages are JS-rendered with no
+# server-side article body, so the generic HTML extractor finds nothing. We hit
+# the public .json endpoint with a browser-ish UA instead — it returns the post
+# title, selftext, and the comment tree as structured data. See extract_from_reddit.
+REDDIT_HOSTS = {"reddit.com", "redd.it"}
+REDDIT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+# How many top-level comments to fold into the body. Reddit returns them already
+# sorted by the listing's default ("confidence"/top), so we just take the first N
+# real ones. Keeps discussion threads useful without burying the post itself.
+REDDIT_MAX_COMMENTS = 8
 
 SHARE_SENDER_EMAIL = "share@theclawcast.com"
 SHARE_SENDER_DOMAIN = "share"
@@ -172,12 +185,12 @@ class _ArticleHTMLExtractor(HTMLParser):
 UrlFetcher = Callable[[str], tuple[bytes, str]]
 
 
-def _default_url_fetcher(url: str) -> tuple[bytes, str]:
+def _fetch_url(url: str, user_agent: str) -> tuple[bytes, str]:
     """Return (body_bytes, content_type). Raises SharedItemError on failure."""
     try:
         response = requests.get(
             url,
-            headers={"User-Agent": URL_FETCH_USER_AGENT},
+            headers={"User-Agent": user_agent},
             timeout=URL_FETCH_TIMEOUT_SECONDS,
             allow_redirects=True,
         )
@@ -190,6 +203,21 @@ def _default_url_fetcher(url: str) -> tuple[bytes, str]:
     return response.content, response.headers.get("Content-Type", "")
 
 
+def _default_url_fetcher(url: str) -> tuple[bytes, str]:
+    return _fetch_url(url, URL_FETCH_USER_AGENT)
+
+
+def _reddit_url_fetcher(url: str) -> tuple[bytes, str]:
+    return _fetch_url(url, REDDIT_USER_AGENT)
+
+
+def _host_matches(netloc: str, suffixes: set[str]) -> bool:
+    """True if the host equals one of `suffixes` or is a subdomain of it
+    (so www.reddit.com and old.reddit.com both match "reddit.com")."""
+    host = netloc.lower().split(":", 1)[0]
+    return any(host == s or host.endswith("." + s) for s in suffixes)
+
+
 def extract_from_url(
     url: str,
     fetcher: Optional[UrlFetcher] = None,
@@ -199,6 +227,8 @@ def extract_from_url(
     parsed = urlsplit(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise SharedItemError("Only http(s) URLs are supported")
+    if _host_matches(parsed.netloc, REDDIT_HOSTS):
+        return extract_from_reddit(url, fetcher=fetcher)
     fetch = fetcher or _default_url_fetcher
     body_bytes, content_type = fetch(url)
     _check_size(body_bytes)
@@ -210,6 +240,13 @@ def extract_from_url(
         title, body = extract_from_pdf(body_bytes)
         return (title or parsed.netloc, body)
 
+    return _parse_html_article(body_bytes, url, parsed.netloc)
+
+
+def _parse_html_article(body_bytes: bytes, url: str, fallback_title: str) -> tuple[str, str]:
+    """Run the article HTML extractor over raw bytes and apply the title/body
+    fallbacks. Split out so Reddit (and other site-specific paths) can reuse it
+    without re-entering extract_from_url's host routing."""
     try:
         html_text = body_bytes.decode("utf-8", errors="replace")
     except Exception as exc:  # pragma: no cover — decode("utf-8", errors=...) shouldn't raise
@@ -221,7 +258,7 @@ def extract_from_url(
     except Exception:
         logger.warning("HTML parse failed for %s; falling back to raw strip", url, exc_info=True)
 
-    title = (parser.title or parser.og_title or parsed.netloc).strip()
+    title = (parser.title or parser.og_title or fallback_title).strip()
     body = parser.best_body() or parser.og_description
     if not body.strip():
         logger.info(
@@ -230,6 +267,160 @@ def extract_from_url(
         )
         body = parser.og_description or ""
     return (title, normalize_extracted_text(body))
+
+
+def _old_reddit_url(url: str) -> str:
+    """Rewrite a Reddit URL to old.reddit.com, dropping query/fragment.
+
+    The modern site (www/np/new reddit) and the public .json API both sit behind
+    an anti-bot wall ("snooserv") that 403s server/datacenter requests regardless
+    of User-Agent. old.reddit.com still serves fully server-rendered HTML, so we
+    target it and parse the markup directly. A redd.it short link is just the
+    post id (redd.it/<id>); old.reddit.com/comments/<id> redirects to the
+    canonical permalink, which requests follows."""
+    parsed = urlsplit(url)
+    host = parsed.netloc.lower().split(":", 1)[0]
+    if host == "redd.it" or host.endswith(".redd.it"):
+        post_id = parsed.path.strip("/").split("/")[0]
+        return urlunsplit((parsed.scheme, "old.reddit.com", f"/comments/{post_id}", "", ""))
+    netloc = "old.reddit.com" if host.endswith("reddit.com") else parsed.netloc
+    return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+
+
+class _OldRedditExtractor(HTMLParser):
+    """Pull the post body and top-level comments out of an old.reddit.com page.
+
+    Post selftext and every comment body render as <div class="md"> blocks. The
+    subreddit sidebar (rules, description) is also full of <div class="md">, so
+    we suppress anything inside <div class="side"> or the footer. A block that
+    closes before we've seen the first comment is the post; everything after is a
+    comment. Title comes from <title> ("Post title : Subreddit")."""
+
+    _SKIP_TAGS = {"script", "style", "noscript"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._in_title = False
+        self._div_stack: list[tuple[bool, bool]] = []  # (is_skip_region, is_md)
+        self._region_skip_depth = 0
+        self._md_depth = 0
+        self._buf: list[str] = []
+        self._seen_comment = False
+        self.title: str = ""
+        self.post_body: str = ""
+        self.comments: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        tag = tag.lower()
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+            return
+        if tag == "title":
+            self._in_title = True
+            return
+        attr_map = {k.lower(): (v or "") for k, v in attrs}
+        if attr_map.get("data-type") == "comment":
+            self._seen_comment = True
+        if tag == "div":
+            cls = attr_map.get("class", "")
+            classes = set(cls.split())
+            is_skip = ("side" in classes) or cls.startswith("footer")
+            is_md = "md" in classes
+            self._div_stack.append((is_skip, is_md))
+            if is_skip:
+                self._region_skip_depth += 1
+            if is_md and self._region_skip_depth == 0:
+                if self._md_depth == 0:
+                    self._buf = []
+                self._md_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in self._SKIP_TAGS:
+            if self._skip_depth > 0:
+                self._skip_depth -= 1
+            return
+        if tag == "title":
+            self._in_title = False
+            return
+        if tag == "div" and self._div_stack:
+            is_skip, is_md = self._div_stack.pop()
+            if is_md and self._region_skip_depth == 0 and self._md_depth > 0:
+                self._md_depth -= 1
+                if self._md_depth == 0:
+                    text = "".join(self._buf).strip()
+                    if text:
+                        if self._seen_comment:
+                            self.comments.append(text)
+                        else:
+                            self.post_body = text
+            if is_skip and self._region_skip_depth > 0:
+                self._region_skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth > 0:
+            return
+        if self._in_title:
+            self.title += data
+            return
+        if self._md_depth > 0 and self._region_skip_depth == 0:
+            self._buf.append(data)
+
+
+def _clean_reddit_title(raw: str, subreddit: str) -> str:
+    """old.reddit's <title> is "Post title : Subreddit". Strip the suffix.
+
+    When the subreddit is known from the URL we match it exactly; otherwise
+    (e.g. a redd.it short link) we drop a trailing " : <name>" where <name> looks
+    like a subreddit (no spaces, valid sub-name chars)."""
+    title = raw.strip()
+    if subreddit and title.endswith(f" : {subreddit}"):
+        return title[: -len(f" : {subreddit}")].strip()
+    return re.sub(r"\s:\s[A-Za-z0-9_]{1,21}$", "", title).strip()
+
+
+def extract_from_reddit(
+    url: str,
+    fetcher: Optional[UrlFetcher] = None,
+) -> tuple[str, str]:
+    """Fetch a Reddit post via old.reddit.com and return (title, body).
+
+    Body is the post's selftext followed by up to REDDIT_MAX_COMMENTS top-level
+    comments. Link/image posts have no selftext, so for those the comments carry
+    the discussion. If the page has no recognizable post markup (e.g. a subreddit
+    listing or user page), falls back to the generic article extractor."""
+    fetch = fetcher or _reddit_url_fetcher
+    fetch_url = _old_reddit_url(url)
+    body_bytes, _content_type = fetch(fetch_url)
+    _check_size(body_bytes)
+
+    html_text = body_bytes.decode("utf-8", errors="replace")
+    parser = _OldRedditExtractor()
+    try:
+        parser.feed(html_text)
+    except Exception:
+        logger.warning("old.reddit parse failed for %s; falling back to generic", url, exc_info=True)
+        return _parse_html_article(body_bytes, url, urlsplit(url).netloc)
+
+    # Derive the subreddit from the path (/r/<sub>/...) to clean the title.
+    path_parts = [p for p in urlsplit(url).path.split("/") if p]
+    subreddit = path_parts[1] if len(path_parts) >= 2 and path_parts[0].lower() == "r" else ""
+    title = _clean_reddit_title(parser.title, subreddit)
+
+    if not parser.post_body and not parser.comments:
+        logger.info("old.reddit page had no post markup; falling back to generic: url=%s", url)
+        return _parse_html_article(body_bytes, url, urlsplit(url).netloc)
+
+    parts: list[str] = []
+    if parser.post_body:
+        parts.append(parser.post_body)
+    if parser.comments:
+        parts.append("Top comments:")
+        parts.extend(parser.comments[:REDDIT_MAX_COMMENTS])
+
+    title = title or urlsplit(url).netloc
+    return (title, normalize_extracted_text("\n\n".join(parts)))
 
 
 # ----------------------------------------------------------------------------
