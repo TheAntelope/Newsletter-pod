@@ -101,6 +101,23 @@ void main() {
     expect(find.text('Pinned'), findsNWidgets(2));
   });
 
+  testWidgets('dashboard share tip teaches the share sheet and dismisses',
+      (tester) async {
+    await _signIn(tester);
+
+    // The teach card surfaces the otherwise-invisible OS share-sheet feature.
+    final tip = find.text('Add anything you read');
+    await tester.ensureVisible(tip);
+    await tester.pumpAndSettle();
+    expect(tip, findsOneWidget);
+    expect(find.textContaining('work it into your next pod'), findsOneWidget);
+
+    // Dismissing hides it for the session.
+    await tester.tap(find.byIcon(Icons.close));
+    await tester.pumpAndSettle();
+    expect(find.text('Add anything you read'), findsNothing);
+  });
+
   testWidgets('podcast setup loads, edits length, and saves', (tester) async {
     await _signIn(tester);
 
@@ -243,6 +260,33 @@ void main() {
 
     // Lands on the dashboard.
     expect(find.text('Generate now'), findsOneWidget);
+  });
+
+  testWidgets('onboarding teaches the share sheet with the ClawCast target',
+      (tester) async {
+    _useTallViewport(tester);
+    final appState = AppState(FakeAppRepository());
+    await tester.pumpWidget(
+      AppScope(notifier: appState, child: const ClawcastApp()),
+    );
+
+    await tester.tap(find.text('Get started'));
+    await tester.pumpAndSettle();
+
+    // Walk forward until the share-sheet teach step appears (its position
+    // depends on the conditional steps, so don't hardcode a count).
+    for (var guard = 0;
+        guard < 20 && find.text('Add from anywhere').evaluate().isEmpty;
+        guard++) {
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+    }
+
+    expect(find.text('Add from anywhere'), findsOneWidget);
+    // The mock highlights ClawCast as the share destination.
+    expect(find.text('ClawCast'), findsWidgets);
+    expect(find.textContaining('Pick ClawCast from the share sheet'),
+        findsOneWidget);
   });
 
   testWidgets('onboarding topic step lists every catalog category and toggles',
