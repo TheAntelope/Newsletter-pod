@@ -119,7 +119,9 @@ class _NextEpisodeQueueScreenState extends State<NextEpisodeQueueScreen> {
                 if (i == 0) {
                   return Text(
                     'Pin the stories you want to make sure land in your next '
-                    'pod. Remove anything you’d rather skip.',
+                    'pod. Remove anything you’d rather skip. Want to guarantee a '
+                    'story makes it in? Share it to ClawCast from any app — '
+                    'browser, Mail, or Substack — and it shows up here.',
                     style: DesignTokens.typographyBody
                         .copyWith(color: DesignTokens.colorMuted),
                   );

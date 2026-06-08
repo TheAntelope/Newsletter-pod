@@ -68,6 +68,11 @@ dependencies:
   # location"). Works on web + Android + iOS; reverse-geocoding to a city name
   # is done over HTTP (see services/location_service.dart), not a plugin.
   geolocator: ^14.0.2
+  # Local persistence for the handful of client-only UI flags we keep across
+  # launches (currently just the dashboard share-tip dismissal). Only the
+  # real-auth build constructs the prefs-backed store (see main.dart); the demo
+  # build + widget tests use InMemoryShareTipStore and never touch the channel.
+  shared_preferences: ^2.3.2
 
 dev_dependencies:
   flutter_test:

@@ -38,14 +38,35 @@ class _HomeScreenState extends State<HomeScreen> {
   int _enabledSourceCount = 0;
   bool _loadedSources = false;
 
+  bool _wasGenerating = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (!_initialized) {
       _initialized = true;
       _app = AppScope.of(context);
+      _wasGenerating = _app.isGenerating;
+      _app.addListener(_onAppStateChanged);
       _loadExtras();
     }
+  }
+
+  /// When a generation run finishes (isGenerating true -> false), refetch the
+  /// latest episode + queue/sources so a freshly-published pod surfaces in the
+  /// hero card without a manual reload.
+  void _onAppStateChanged() {
+    final nowGenerating = _app.isGenerating;
+    if (_wasGenerating && !nowGenerating) {
+      _loadExtras();
+    }
+    _wasGenerating = nowGenerating;
+  }
+
+  @override
+  void dispose() {
+    if (_initialized) _app.removeListener(_onAppStateChanged);
+    super.dispose();
   }
 
   Future<void> _loadExtras() async {
@@ -172,6 +193,13 @@ class _Dashboard extends StatelessWidget {
           _GenerationBanner(
             hasEpisode: latestEpisode != null,
             message: app.lastRunMessage,
+            startedAt: app.generationStartedAt,
+          ),
+          const SizedBox(height: DesignTokens.spacingL),
+        ] else if (app.runNotice != null) ...[
+          _RunNoticeBanner(
+            message: app.runNotice!,
+            onDismiss: app.clearRunNotice,
           ),
           const SizedBox(height: DesignTokens.spacingL),
         ],
@@ -184,6 +212,10 @@ class _Dashboard extends StatelessWidget {
         if (queueEnabled) ...[
           const SizedBox(height: DesignTokens.spacingL),
           _NextEpisodeQueueCard(pinnedCount: pinnedCount),
+        ],
+        if (!app.shareTipDismissed) ...[
+          const SizedBox(height: DesignTokens.spacingL),
+          _ShareTipCard(onDismiss: app.dismissShareTip),
         ],
         const SizedBox(height: DesignTokens.spacingL),
         _PlanCard(
@@ -245,10 +277,15 @@ class _GreetingHeader extends StatelessWidget {
 }
 
 class _GenerationBanner extends StatelessWidget {
-  const _GenerationBanner({required this.hasEpisode, required this.message});
+  const _GenerationBanner({
+    required this.hasEpisode,
+    required this.message,
+    required this.startedAt,
+  });
 
   final bool hasEpisode;
   final String? message;
+  final DateTime? startedAt;
 
   @override
   Widget build(BuildContext context) {
@@ -286,7 +323,57 @@ class _GenerationBanner extends StatelessWidget {
             ),
           ],
         ),
-        const GenerationProgressBar(isGenerating: true),
+        GenerationProgressBar(isGenerating: true, startedAt: startedAt),
+      ],
+    );
+  }
+}
+
+/// Shown after a run finishes without producing an episode (quota reached, no
+/// sources, no fresh content, or a failure) — replaces the silent hang at 95%.
+class _RunNoticeBanner extends StatelessWidget {
+  const _RunNoticeBanner({required this.message, required this.onDismiss});
+
+  final String message;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.info_outline,
+                size: 22, color: DesignTokens.colorAmberDeep),
+            const SizedBox(width: DesignTokens.spacingM),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'No episode this time',
+                    style: DesignTokens.typographySubtitle
+                        .copyWith(color: DesignTokens.colorInk),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    message,
+                    style: DesignTokens.typographyCallout
+                        .copyWith(color: DesignTokens.colorInkSoft),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Dismiss',
+              onPressed: onDismiss,
+              icon: const Icon(Icons.close, size: 18),
+              color: DesignTokens.colorInkSoft,
+            ),
+          ],
+        ),
       ],
     );
   }
@@ -819,6 +906,69 @@ class _NextEpisodeQueueCard extends StatelessWidget {
     );
   }
 }
+
+/// One-time teach card for the OS share-sheet integration. ClawCast can ingest
+/// anything the user reads elsewhere (an article in the browser, a newsletter in
+/// Mail, a Substack post), but that flow lives entirely in the system share
+/// sheet — there's no in-app button — so users never discover it on their own.
+/// Dismissible; the dismissal persists across launches on the real build (see
+/// [AppState.shareTipDismissed] / [ShareTipStore]).
+class _ShareTipCard extends StatelessWidget {
+  const _ShareTipCard({required this.onDismiss});
+
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        Row(
+          children: [
+            const Expanded(child: MetaLabel('Tip')),
+            InkWell(
+              onTap: onDismiss,
+              child: const Icon(Icons.close,
+                  size: 18, color: DesignTokens.colorMuted),
+            ),
+          ],
+        ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.ios_share,
+                size: 22, color: DesignTokens.colorAmberDeep),
+            const SizedBox(width: DesignTokens.spacingM),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Add anything you read',
+                    style: DesignTokens.typographySubtitle
+                        .copyWith(color: DesignTokens.colorInk),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Found a great article or newsletter in your browser, Mail, '
+                    'or Substack? Tap $_shareVerb → ClawCast and we’ll work it '
+                    'into your next pod.',
+                    style: DesignTokens.typographyCallout
+                        .copyWith(color: DesignTokens.colorInkSoft),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// The platform's name for the share affordance: "Share" on Android, "the Share
+/// button" on iOS. Keeps the tip's instruction matching what the user sees.
+String get _shareVerb => Platform.isIOS ? 'the Share button' : 'Share';
 
 class _SetupChecklistCard extends StatelessWidget {
   const _SetupChecklistCard({

@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -46,6 +48,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         4, // pick your topics
         5, // tune your pod (swipe deck)
         6, // add your Substacks
+        11, // add from anywhere (OS share sheet)
         if (_isTwoHost) 8, // add a co-host (second voice)
         9, // set your schedule
         10, // you're all set
@@ -383,6 +386,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               'Choose which mornings your pod is ready. We default to weekdays '
               'at 07:00.',
           children: [_scheduleEditor()],
+        );
+      case 11:
+        return _shell(
+          title: 'Add from anywhere',
+          subtitle:
+              'One more thing worth knowing: outside the app — reading in your '
+              'browser, Mail, or Substack — you can send anything straight to '
+              'ClawCast and we’ll work it into your next pod. No copy-paste.',
+          children: const [_ShareFromAnywhereStep()],
         );
       default:
         return _shell(
@@ -980,6 +992,173 @@ class _WelcomePoints extends StatelessWidget {
         for (final p in _setupAgenda)
           ChecklistRow(label: p, isComplete: allChecked),
       ],
+    );
+  }
+}
+
+/// Onboarding teach step for the OS share sheet. ClawCast ingests whatever the
+/// user reads elsewhere, but that flow lives entirely in the system share sheet
+/// (there's no in-app button), so onboarding surfaces it once — a mock of the
+/// share sheet plus a three-step how-to. The dashboard's `_ShareTipCard` is the
+/// recurring reminder; this is the first introduction.
+class _ShareFromAnywhereStep extends StatelessWidget {
+  const _ShareFromAnywhereStep();
+
+  @override
+  Widget build(BuildContext context) {
+    // Match the platform's name for the affordance: "Share" on Android, "the
+    // Share button" on iOS — so the instruction matches what the user sees.
+    final shareVerb = Platform.isIOS ? 'the Share button' : 'Share';
+    final steps = [
+      'Reading something good? Tap $shareVerb in your browser, Mail, or Substack.',
+      'Pick ClawCast from the share sheet.',
+      'We work it into your next pod — automatically.',
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _ShareSheetMock(),
+        const SizedBox(height: DesignTokens.spacingL),
+        EditorialCard(
+          spacing: DesignTokens.spacingM,
+          children: [
+            for (var i = 0; i < steps.length; i++)
+              _NumberedRow(index: i, text: steps[i]),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// A numbered "agenda" row: amber badge with the 1-based index, then the label.
+class _NumberedRow extends StatelessWidget {
+  const _NumberedRow({required this.index, required this.text});
+
+  final int index;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 26,
+          height: 26,
+          alignment: Alignment.center,
+          decoration: const BoxDecoration(
+            color: DesignTokens.colorAmber,
+            shape: BoxShape.circle,
+          ),
+          child: Text(
+            '${index + 1}',
+            style: DesignTokens.typographyCalloutStrong
+                .copyWith(color: Colors.white),
+          ),
+        ),
+        const SizedBox(width: DesignTokens.spacingM),
+        Expanded(
+          child: Text(
+            text,
+            style:
+                DesignTokens.typographyBody.copyWith(color: DesignTokens.colorInk),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A stylised mock of the OS share sheet with the ClawCast row highlighted, so
+/// users recognise the target when they open the real sheet. Purely decorative.
+class _ShareSheetMock extends StatelessWidget {
+  const _ShareSheetMock();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(DesignTokens.spacingM),
+      decoration: BoxDecoration(
+        color: DesignTokens.colorCream,
+        borderRadius: BorderRadius.circular(DesignTokens.radiusCard),
+        border: Border.all(color: DesignTokens.colorRule),
+      ),
+      child: Column(
+        children: [
+          // Grabber handle, like a bottom sheet.
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: DesignTokens.colorRule,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          const SizedBox(height: DesignTokens.spacingM),
+          Row(
+            children: [
+              const Icon(Icons.ios_share,
+                  size: 16, color: DesignTokens.colorMuted),
+              const SizedBox(width: 6),
+              Text(
+                'Share',
+                style: DesignTokens.typographyCalloutStrong
+                    .copyWith(color: DesignTokens.colorMuted),
+              ),
+            ],
+          ),
+          const SizedBox(height: DesignTokens.spacingM),
+          // The highlighted ClawCast destination.
+          Container(
+            padding: const EdgeInsets.all(DesignTokens.spacingS),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(DesignTokens.radiusCard),
+              border: Border.all(color: DesignTokens.colorAmber, width: 1.5),
+            ),
+            child: Row(
+              children: [
+                const ClawcastLogo(size: 36),
+                const SizedBox(width: DesignTokens.spacingM),
+                Expanded(
+                  child: Text(
+                    'ClawCast',
+                    style: DesignTokens.typographyBodyStrong
+                        .copyWith(color: DesignTokens.colorInk),
+                  ),
+                ),
+                const Icon(Icons.check_circle,
+                    size: 20, color: DesignTokens.colorAmberDeep),
+              ],
+            ),
+          ),
+          const SizedBox(height: DesignTokens.spacingS),
+          // Dimmed sibling rows so it reads as one option among many.
+          for (final sib in const ['Messages', 'Mail', 'Notes'])
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: DesignTokens.colorRule,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  const SizedBox(width: DesignTokens.spacingM),
+                  Text(
+                    sib,
+                    style: DesignTokens.typographyBody
+                        .copyWith(color: DesignTokens.colorMuted),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
