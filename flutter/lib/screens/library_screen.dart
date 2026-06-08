@@ -4,6 +4,7 @@ import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
+import 'dashboard_scaffold.dart';
 
 const _months = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
@@ -42,9 +43,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        leading: const Padding(
-          padding: EdgeInsets.all(8),
-          child: ClawcastLogo(size: 28),
+        leading: Padding(
+          padding: const EdgeInsets.all(8),
+          child: ClawcastLogo(
+            size: 28,
+            onTap: () => DashboardScope.goHome(context),
+          ),
         ),
         title: const Text('Library'),
       ),

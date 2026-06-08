@@ -421,6 +421,13 @@ workflows:
     publishing:
       google_play:
         credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+        # Default CI track = internal (fast, reviewless iteration). The IAP
+        # unlock for a brand-new app needs ONE processed closed/production
+        # release; do that as a one-time manual promote (internal -> closed) in
+        # Play Console rather than routing every build through closed-track
+        # review. Once that closed release is approved, subscription
+        # productDetails resolve on internal builds too. (Briefly set to `alpha`
+        # 2026-06-07 to seed the first closed release; reverted same day.)
         track: internal
         # NOTE: do NOT set changes_not_sent_for_review here. Google Play rejects
         # the changesNotSentForReview param for an app that hasn't been through

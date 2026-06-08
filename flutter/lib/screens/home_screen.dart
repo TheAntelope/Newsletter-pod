@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
@@ -7,6 +9,7 @@ import '../state/app_state.dart';
 import '../widgets/editorial.dart';
 import '../widgets/generation_progress_bar.dart';
 import 'account_screen.dart';
+import 'dashboard_scaffold.dart';
 import 'feed_access_screen.dart';
 import 'next_episode_queue_screen.dart';
 import 'paywall_screen.dart';
@@ -80,9 +83,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        leading: const Padding(
-          padding: EdgeInsets.all(8),
-          child: ClawcastLogo(size: 28),
+        leading: Padding(
+          padding: const EdgeInsets.all(8),
+          child: ClawcastLogo(
+            size: 28,
+            onTap: () => DashboardScope.goHome(context),
+          ),
         ),
         title: const Text('Your Briefing'),
         actions: [
@@ -162,6 +168,8 @@ class _Dashboard extends StatelessWidget {
         _HeroEpisodeCard(
           episode: latestEpisode,
           isGenerating: app.isGenerating,
+          app: app,
+          entitlements: me.entitlements,
         ),
         if (queueEnabled) ...[
           const SizedBox(height: DesignTokens.spacingL),
@@ -187,13 +195,6 @@ class _Dashboard extends StatelessWidget {
           hasShow: me.profile.title.isNotEmpty,
           hasSchedule: me.schedule.weekdays.isNotEmpty,
           hasEpisode: latestEpisode != null,
-        ),
-        const SizedBox(height: DesignTokens.spacingL),
-        AmberButton.filled(
-          label: 'Generate now',
-          icon: Icons.auto_awesome,
-          loading: app.isGenerating,
-          onPressed: app.isGenerating ? null : app.generateNow,
         ),
         if (app.error != null) ...[
           const SizedBox(height: DesignTokens.spacingM),
@@ -282,10 +283,17 @@ class _GenerationBanner extends StatelessWidget {
 }
 
 class _HeroEpisodeCard extends StatefulWidget {
-  const _HeroEpisodeCard({required this.episode, required this.isGenerating});
+  const _HeroEpisodeCard({
+    required this.episode,
+    required this.isGenerating,
+    required this.app,
+    required this.entitlements,
+  });
 
   final LibraryEpisodeDto? episode;
   final bool isGenerating;
+  final AppState app;
+  final EntitlementsDto entitlements;
 
   @override
   State<_HeroEpisodeCard> createState() => _HeroEpisodeCardState();
@@ -376,7 +384,7 @@ class _HeroEpisodeCardState extends State<_HeroEpisodeCard> {
           ),
         const EditorialDivider(),
         AmberButton.filled(
-          label: 'Open in your podcast app',
+          label: _openInPodcastAppLabel(),
           icon: Icons.play_arrow,
           onPressed: ep == null
               ? null
@@ -384,9 +392,43 @@ class _HeroEpisodeCardState extends State<_HeroEpisodeCard> {
                     MaterialPageRoute(builder: (_) => const FeedAccessScreen()),
                   ),
         ),
+        const SizedBox(height: DesignTokens.spacingM),
+        AmberButton.filled(
+          label: 'Generate now',
+          icon: Icons.auto_awesome,
+          loading: widget.isGenerating,
+          onPressed: widget.isGenerating ? null : widget.app.generateNow,
+        ),
+        const SizedBox(height: DesignTokens.spacingXs),
+        Text(
+          _premiumRemainingLabel(widget.entitlements),
+          textAlign: TextAlign.center,
+          style: DesignTokens.typographyCallout
+              .copyWith(color: DesignTokens.colorInkSoft),
+        ),
       ],
     );
   }
+}
+
+/// The "open in podcast app" button names the platform's actual delivery
+/// target: Apple Podcasts on iOS, Podcast Addict on Android (our chosen Android
+/// player — see [PodcastAddict]). Other platforms get a neutral fallback.
+String _openInPodcastAppLabel() {
+  if (Platform.isIOS) return 'Open in Apple Podcasts';
+  if (Platform.isAndroid) return 'Open in Podcast Addict';
+  return 'Open in your podcast app';
+}
+
+/// "2 of 3 premium voice pods left this week" — the weekly premium-voice quota
+/// shown under the Generate action. Trial users see their trial allowance.
+String _premiumRemainingLabel(EntitlementsDto ent) {
+  if (ent.isInTrial) {
+    final n = ent.trialPremiumPodsRemaining;
+    return 'Trial: $n premium voice pod${n == 1 ? '' : 's'} left';
+  }
+  return '${ent.premiumPodsRemainingThisWeek} of ${ent.premiumPodsPerWeek} '
+      'premium voice pods left this week';
 }
 
 class _Disclosure extends StatelessWidget {
@@ -441,8 +483,17 @@ class _AboutPodcastCard extends StatelessWidget {
     ].join(' & ');
     return EditorialCard(
       spacing: DesignTokens.spacingS,
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const PodcastSetupScreen()),
+      ),
       children: [
-        const MetaLabel('Your show'),
+        Row(
+          children: [
+            const Expanded(child: MetaLabel('Your show')),
+            const Icon(Icons.chevron_right,
+                size: 18, color: DesignTokens.colorMuted),
+          ],
+        ),
         Text(
           profile.title,
           style: DesignTokens.typographyTitle.copyWith(color: DesignTokens.colorInk),
@@ -690,8 +741,21 @@ class _ScheduleCard extends StatelessWidget {
         .join(' · ');
     return EditorialCard(
       spacing: DesignTokens.spacingS,
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => const PodcastSetupScreen(
+            initialSection: PodcastSetupSection.schedule,
+          ),
+        ),
+      ),
       children: [
-        const MetaLabel('Schedule'),
+        Row(
+          children: [
+            const Expanded(child: MetaLabel('Schedule')),
+            const Icon(Icons.chevron_right,
+                size: 18, color: DesignTokens.colorMuted),
+          ],
+        ),
         Text(
           'Delivered at ${schedule.localTime}',
           style: DesignTokens.typographyTitle.copyWith(color: DesignTokens.colorInk),

@@ -160,12 +160,20 @@ def _launch_persistent(headless: bool):
         viewport={"width": 1440, "height": 900},
     )
 
-    # Enforce the allowlist on every navigation attempt (page.goto,
-    # link clicks, form posts that change the top-level URL). Resource
-    # loads inside an allowed page are not blocked — that would break
-    # most of Google's UI.
+    # Enforce the allowlist on MAIN-FRAME navigations only (page.goto,
+    # link clicks, form posts that change the top-level URL). Playwright's
+    # `is_navigation_request()` is True for iframe loads too — and Looker
+    # legitimately embeds iframes from recaptcha, gapi-proxy hosts, etc.
+    # `frame.parent_frame is None` is the main-frame test. Sub-resource
+    # loads and iframe content aren't restricted; the goal is preventing
+    # the SCRIPT from being driven somewhere unexpected, not firewalling
+    # Google's CDN.
     def _block_disallowed(route, request):
-        if request.is_navigation_request() and not _is_allowed(request.url):
+        if (
+            request.is_navigation_request()
+            and request.frame.parent_frame is None
+            and not _is_allowed(request.url)
+        ):
             print(f"  blocked navigation to {request.url}", file=sys.stderr)
             route.abort()
         else:
@@ -181,16 +189,25 @@ def _launch_persistent(headless: bool):
 def _print_session_status(context) -> str:
     """Probe Looker Studio's home page; return 'signed-in', 'signed-out',
     or 'unreachable'. Used by `login` to know when to stop blocking and
-    by `check` as the whole point."""
+    by `check` as the whole point.
+
+    Looker has two domains in active use — `lookerstudio.google.com`
+    (current) and `datastudio.google.com` (legacy redirect, still serves
+    a marketing /overview page for unauthenticated visitors). The auth
+    state is "are we looking at app chrome or marketing chrome", which
+    we infer from the URL path."""
     page = context.pages[0] if context.pages else context.new_page()
     page.goto(LOOKER_HOME, wait_until="networkidle", timeout=45_000)
-    # When signed in, Looker shows the reports grid with a "Create" CTA.
-    # When signed out it redirects to accounts.google.com and the URL
-    # changes. That's the cheapest tell.
-    final_url = page.url
-    if "accounts.google.com" in final_url:
+    final_url = page.url.lower()
+    print(f"  landed at: {page.url}", file=sys.stderr)
+    if "accounts.google.com" in final_url or "/signin" in final_url:
         return "signed-out"
-    if "lookerstudio.google.com" in final_url:
+    if "/overview" in final_url:
+        # Marketing page — headless Chrome often lands here even with
+        # valid cookies because Google's bot heuristics treat it as
+        # untrusted. Headed mode usually passes through to the app.
+        return "signed-out"
+    if "lookerstudio.google.com" in final_url or "datastudio.google.com" in final_url:
         return "signed-in"
     return "unreachable"
 
@@ -336,6 +353,336 @@ def cmd_create_report(args: argparse.Namespace) -> int:
         pw.stop()
 
 
+# --- full-build automation (the brittle bit) -----------------------------
+#
+# Selectors are written against Looker Studio's UI as of 2026-05-26. If
+# Google ships a redesign, expect breakage at the screenshotted step
+# below. Each step is wrapped in `_step(...)` which catches the
+# exception, dumps a screenshot to `.playwright-profile/last-error.png`,
+# and re-raises with the step label so the operator knows where to
+# resume from. `--start-at N` lets you re-run from a specific step
+# without re-doing the work that's already on the report.
+
+# The 4 views that are live today. The 2 commented-out lines need the
+# Firestore export pipeline to materialize their source tables.
+DASHBOARD_VIEWS: list[tuple[str, str, str]] = [
+    # (data-source name, view name, suggested chart type)
+    ("DAU / WAU / MAU",     "vw_dau_wau_mau",       "Time series chart"),
+    ("Activation funnel",   "vw_activation_funnel", "Bar chart"),
+    ("Cohort retention",    "vw_cohort_retention",  "Pivot table"),
+    ("Episode completion",  "vw_episode_completion","Combo chart"),
+    # ("Tier breakdown",    "vw_tier_breakdown",    "Table"),     # needs Firestore export
+    # ("Churn-risk users",  "vw_churn_risk_users",  "Table"),     # needs Firestore export
+]
+
+
+class StepError(RuntimeError):
+    """Raised when a build step fails. Carries the step label so the
+    caller can print a resume hint without having to parse the message."""
+
+    def __init__(self, label: str, original: Exception) -> None:
+        super().__init__(f"{label}: {original}")
+        self.label = label
+        self.original = original
+
+
+def _step(page, step_num: int, label: str, fn) -> None:
+    """Wrap a build step. On failure, screenshot the page to the
+    profile dir and re-raise as StepError with the step index so
+    --start-at <n> can resume."""
+    print(f"  [{step_num}] {label}...", file=sys.stderr)
+    try:
+        fn()
+    except Exception as exc:
+        screenshot = PROFILE_DIR / f"last-error-step-{step_num}.png"
+        try:
+            page.screenshot(path=str(screenshot), full_page=True)
+            print(f"      screenshot: {screenshot}", file=sys.stderr)
+        except Exception:
+            pass
+        raise StepError(f"step {step_num}: {label}", exc) from exc
+
+
+def _click_first_match(page, selectors: list, timeout: int = 15_000) -> None:
+    """Try a list of (kind, name) selectors and click the first one that
+    appears. Lets us write fallbacks per step (aria-role first, then
+    visible text, then a manual locator) without exploding the call
+    site. `kind` is one of: 'role', 'text', 'locator'."""
+    last_err: Exception | None = None
+    for kind, value, *extra in selectors:
+        try:
+            if kind == "role":
+                role, name = value, (extra[0] if extra else None)
+                page.get_by_role(role, name=name).first.click(timeout=timeout)
+            elif kind == "text":
+                page.get_by_text(value, exact=(extra[0] if extra else False)).first.click(timeout=timeout)
+            elif kind == "locator":
+                page.locator(value).first.click(timeout=timeout)
+            else:
+                raise ValueError(f"unknown selector kind {kind!r}")
+            return
+        except Exception as exc:
+            last_err = exc
+            continue
+    raise last_err or RuntimeError("no selectors provided to _click_first_match")
+
+
+def _create_blank_report(page) -> None:
+    """Click the home page 'Create' button and land in the editor.
+    Modern Looker often skips the 'Blank report' submenu — the Create
+    button goes straight to a new blank report. Detect both flows by
+    checking whether the URL has moved to /reporting/.../edit; only
+    click 'Blank report' if we haven't yet."""
+    _click_first_match(page, [
+        ("role", "button", "Create"),
+        ("text", "Create", True),
+    ])
+    # Give Looker time to either open a submenu OR navigate to the editor.
+    page.wait_for_timeout(1_500)
+    if "/reporting/" in page.url and "/edit" in page.url:
+        # Direct-to-editor flow; nothing more to click.
+        return
+    # Otherwise expect a submenu with "Blank report" / "Empty report".
+    try:
+        _click_first_match(page, [
+            ("text", "Blank report"),
+            ("text", "Empty report"),
+        ], timeout=5_000)
+        page.wait_for_timeout(3_000)
+    except Exception:
+        # Some flows go straight from Create to editor with no submenu;
+        # if we're now in the editor, that's a success.
+        if "/reporting/" in page.url and "/edit" in page.url:
+            return
+        raise
+
+
+def _is_picker_already_open(page) -> bool:
+    """Detect whether Looker's 'Add data to report' picker (the
+    connector grid with BigQuery, Sheets, etc.) is already visible on
+    screen. When yes, we skip the Resource → Manage flow and use the
+    open picker directly."""
+    try:
+        # BigQuery card is visible on the picker; quick visibility probe.
+        page.get_by_text("BigQuery", exact=True).first.wait_for(
+            state="visible", timeout=1_500
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _close_add_data_dialog_if_present(page) -> None:
+    """Tolerant dismissal of the 'Add data to report' dialog when we
+    don't want to use it. Tries the X button (aria-label), text-button
+    labels, and finally ESC. No-op if no dialog is open."""
+    try:
+        for selector in [
+            "button[aria-label='Close']",
+            "[role='dialog'] button[aria-label*='close' i]",
+            "button[aria-label='Dismiss']",
+        ]:
+            try:
+                page.locator(selector).first.click(timeout=1_500)
+                return
+            except Exception:
+                continue
+        for label in ("Cancel", "Close", "Skip", "Dismiss"):
+            try:
+                page.get_by_role("button", name=label).first.click(timeout=1_500)
+                return
+            except Exception:
+                continue
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+
+
+def _add_bigquery_data_source(page, name: str, view: str) -> None:
+    """Walk to the BigQuery custom-query flow and add a data source
+    pointing at `analytics.<view>`. The most-repeated tedious flow in
+    the whole dashboard build — automating just this saves the bulk
+    of the click-time.
+
+    Branch: if Looker's 'Add data to report' picker is already on
+    screen (auto-opened after blank-report create, or left open from
+    a previous add), reuse it. Otherwise open the picker via
+    Resource → Manage added data sources → Add.
+    """
+    if not _is_picker_already_open(page):
+        _click_first_match(page, [
+            ("role", "menuitem", "Resource"),
+            ("text", "Resource", True),
+        ])
+        page.wait_for_timeout(500)
+        _click_first_match(page, [
+            ("text", "Manage added data sources"),
+            ("text", "Manage data sources"),
+        ])
+        page.wait_for_timeout(1_000)
+        _click_first_match(page, [
+            ("role", "button", "Add a data source"),
+            ("text", "Add a data source"),
+        ])
+        page.wait_for_timeout(1_500)
+
+    # BigQuery connector. There are many connectors; the search box
+    # filters them.
+    try:
+        page.get_by_placeholder("Search").first.fill("BigQuery", timeout=5_000)
+        page.wait_for_timeout(500)
+    except Exception:
+        pass
+    _click_first_match(page, [
+        ("text", "BigQuery", True),
+        ("locator", "[aria-label*='BigQuery']"),
+    ])
+    page.wait_for_timeout(1_500)
+
+    # Switch to Custom Query tab.
+    _click_first_match(page, [
+        ("text", "CUSTOM QUERY", False),
+        ("text", "Custom query", False),
+        ("text", "Custom Query", False),
+    ])
+    page.wait_for_timeout(500)
+
+    # Pick the billing project. The project picker shows
+    # "newsletter-pod" or your default project.
+    try:
+        _click_first_match(page, [
+            ("text", "newsletter-pod", True),
+        ], timeout=5_000)
+    except Exception:
+        # Sometimes the project is pre-selected; ignore.
+        pass
+
+    # Paste the SQL. The custom-query editor is a contenteditable or
+    # ace-editor — try both.
+    sql = f"SELECT * FROM `analytics.{view}`"
+    pasted = False
+    for selector in [
+        "textarea[aria-label*='query']",
+        "div[contenteditable='true']",
+        "[role='textbox']",
+        ".ace_text-input",
+    ]:
+        try:
+            page.locator(selector).first.fill(sql, timeout=3_000)
+            pasted = True
+            break
+        except Exception:
+            continue
+    if not pasted:
+        raise RuntimeError("couldn't find the custom-query textbox")
+    page.wait_for_timeout(500)
+
+    # Click "Add" to register the data source.
+    _click_first_match(page, [
+        ("role", "button", "Add"),
+    ])
+    page.wait_for_timeout(2_000)
+
+    # "Add to report" confirmation dialog.
+    try:
+        _click_first_match(page, [
+            ("role", "button", "Add to report"),
+        ], timeout=5_000)
+        page.wait_for_timeout(1_500)
+    except Exception:
+        # Some flows skip the confirmation; ignore.
+        pass
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    """Full automation: blank report → 4 BigQuery data sources →
+    handoff. Stops short of actual tile config — that part of Looker's
+    editor is too unstable to script reliably (different selectors per
+    chart type, deeply nested dialogs)."""
+    _ensure_playwright_installed()
+    _ensure_chromium_installed()
+    if not PROFILE_DIR.exists():
+        print("no profile yet — run `login` first.", file=sys.stderr)
+        return 1
+
+    start_at = args.start_at
+    report_id = args.report_id
+    pw, context = _launch_persistent(headless=False)
+    try:
+        page = context.new_page()
+        page.set_default_timeout(15_000)
+        # Sequence each step with the wrapper so a failure prints a
+        # screenshot path + the step number to resume from.
+        steps: list[tuple[str, callable]] = []
+
+        if report_id:
+            # Resume on an existing report — skip Create flow entirely.
+            edit_url = f"https://lookerstudio.google.com/reporting/{report_id}/edit"
+            steps.append((f"Open existing report {report_id}", lambda: page.goto(
+                edit_url, wait_until="domcontentloaded", timeout=45_000
+            )))
+            # Spacer so subsequent step numbers match the from-scratch flow,
+            # keeping --start-at semantics stable.
+            steps.append(("(skipped: Create + Blank report)", lambda: None))
+        else:
+            steps.append(("Open Looker Studio home", lambda: page.goto(
+                LOOKER_HOME, wait_until="domcontentloaded", timeout=45_000
+            )))
+            steps.append(("Click 'Create' → 'Blank report'",
+                          lambda: _create_blank_report(page)))
+
+        for ds_name, view, _chart in DASHBOARD_VIEWS:
+            label = f"Add data source: {ds_name} ({view})"
+            steps.append((label, (lambda v=view, n=ds_name:
+                                  _add_bigquery_data_source(page, n, v))))
+
+        failed_step = None
+        for i, (label, fn) in enumerate(steps, start=1):
+            if i < start_at:
+                print(f"  [{i}] skipping (start-at={start_at})", file=sys.stderr)
+                continue
+            try:
+                _step(page, i, label, fn)
+            except StepError as exc:
+                failed_step = (i, exc)
+                break
+
+        if failed_step is not None:
+            i, exc = failed_step
+            print()
+            print("=" * 64, file=sys.stderr)
+            print(f"FAILED at {exc.label}", file=sys.stderr)
+            print(f"  underlying: {exc.original}", file=sys.stderr)
+            print(f"  fix the issue (or update the selector), then re-run:")
+            print(f"  python scripts/looker/build_dashboard.py build --start-at {i}")
+            print("=" * 64, file=sys.stderr)
+            print("Window stays open so you can inspect the page state.")
+            context.wait_for_event("close", timeout=0)
+            return 1
+
+        print()
+        print("=" * 64)
+        print(f"Added {len(DASHBOARD_VIEWS)} BigQuery data sources to the report.")
+        print()
+        print("Now do the visual tile config (Looker editor is too varied")
+        print("to script reliably per chart type). For each data source,")
+        print("Insert → <chart type> per docs/looker_studio_setup.md:")
+        for ds_name, view, chart in DASHBOARD_VIEWS:
+            print(f"  - {ds_name:<22} → {chart}")
+        print()
+        print("Then Share → schedule weekly to vincemartin1991@gmail.com.")
+        print("Close the window when done.")
+        print("=" * 64)
+        context.wait_for_event("close", timeout=0)
+        return 0
+    finally:
+        try:
+            context.close()
+        except Exception:
+            pass
+        pw.stop()
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="build_dashboard.py",
@@ -348,6 +695,20 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("check", help="Headless probe of the saved session.")
     sub.add_parser("open", help="Open Looker Studio home with the saved session.")
     sub.add_parser("create-report", help="Open the new-report editor; manual tile config from there.")
+    build = sub.add_parser(
+        "build",
+        help="Full automation: create blank report + add the 4 BigQuery "
+             "data sources. Stops at tile config (too varied per chart type).",
+    )
+    build.add_argument(
+        "--start-at", type=int, default=1, metavar="N",
+        help="Resume from step N (printed on failure). Default 1 = full run.",
+    )
+    build.add_argument(
+        "--report-id", type=str, default=None, metavar="ID",
+        help="Resume on an existing report (skip Create flow). "
+             "ID is the UUID in the URL after /reporting/.",
+    )
     return parser
 
 
@@ -361,6 +722,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         return cmd_open(args)
     if args.cmd == "create-report":
         return cmd_create_report(args)
+    if args.cmd == "build":
+        return cmd_build(args)
     return 1
 
 

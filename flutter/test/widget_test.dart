@@ -228,7 +228,7 @@ void main() {
     // Onboarding (not the dashboard) shows first.
     expect(find.text('Welcome to ClawCast'), findsOneWidget);
     // ElevenLabs grant attribution sits at the bottom of the welcome screen.
-    expect(find.text('Voices powered by'), findsOneWidget);
+    expect(find.byKey(const ValueKey('elevenlabs-grant-badge')), findsOneWidget);
 
     // Advance through every step until only Finish remains (step count varies).
     for (var guard = 0; guard < 20 && find.text('Next').evaluate().isNotEmpty; guard++) {
@@ -257,8 +257,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Welcome to ClawCast'), findsOneWidget);
 
-    // Welcome -> Voice -> Style -> Name -> Topics.
-    for (var i = 0; i < 4; i++) {
+    // Advance to the topics step. The number of intervening steps varies
+    // (voice, style, format, optional name), so tap Next until it appears
+    // rather than hardcoding a count.
+    for (var guard = 0;
+        guard < 20 && find.text('Pick your topics').evaluate().isEmpty;
+        guard++) {
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
     }

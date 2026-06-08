@@ -26,6 +26,10 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // Required by flutter_local_notifications (uses java.time APIs that
+        // need desugaring to run on minSdk 23). Paired with the
+        // coreLibraryDesugaring dependency below.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -83,4 +87,10 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Backs isCoreLibraryDesugaringEnabled above (required by
+    // flutter_local_notifications). 2.1.x is the version range AGP 8 expects.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

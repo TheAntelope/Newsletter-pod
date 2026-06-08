@@ -6,6 +6,7 @@ import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
+import 'dashboard_scaffold.dart';
 
 /// Interest-learning swipe deck. The top card follows the drag with a clamped
 /// rotation and edge "decision" labels; past the threshold it flies off (right
@@ -21,9 +22,12 @@ class SwipeDeckScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        leading: const Padding(
-          padding: EdgeInsets.all(8),
-          child: ClawcastLogo(size: 28),
+        leading: Padding(
+          padding: const EdgeInsets.all(8),
+          child: ClawcastLogo(
+            size: 28,
+            onTap: () => DashboardScope.goHome(context),
+          ),
         ),
         title: const Text('Tune your pod'),
       ),
@@ -35,11 +39,15 @@ class SwipeDeckScreen extends StatelessWidget {
 /// The reusable deck (card stack + action bar + load/empty/error states).
 /// Used full-screen by [SwipeDeckScreen] and inline in the onboarding wizard.
 class SwipeDeck extends StatefulWidget {
-  const SwipeDeck({super.key, this.topics});
+  const SwipeDeck({super.key, this.topics, this.onboarding = false});
 
   /// When set (onboarding), the deck is seeded from these catalog topic names
   /// instead of the user's existing sources.
   final List<String>? topics;
+
+  /// When true the empty state reads as an onboarding completion ("tap Next")
+  /// rather than the Discover-tab "check back later" copy.
+  final bool onboarding;
 
   @override
   State<SwipeDeck> createState() => _SwipeDeckState();
@@ -175,7 +183,7 @@ class _SwipeDeckState extends State<SwipeDeck>
   Widget _body() {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null) return Center(child: Text(_error!));
-    if (_cards.isEmpty) return const _EmptyState();
+    if (_cards.isEmpty) return _EmptyState(onboarding: widget.onboarding);
 
     final busy = _controller.isAnimating;
     final depth = math.min(_stackDepth, _cards.length);
@@ -421,7 +429,12 @@ class _ActionButton extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+  const _EmptyState({this.onboarding = false});
+
+  /// In onboarding the deck sits inline in the wizard, so the empty state
+  /// points the user at the wizard's Next button instead of telling them to
+  /// check back after a briefing.
+  final bool onboarding;
 
   @override
   Widget build(BuildContext context) {
@@ -434,14 +447,17 @@ class _EmptyState extends StatelessWidget {
             const ClawcastLogo(size: 56),
             const SizedBox(height: DesignTokens.spacingM),
             Text(
-              'All caught up',
+              onboarding ? "That's the deck" : 'All caught up',
               style: DesignTokens.typographyTitle
                   .copyWith(color: DesignTokens.colorInk),
             ),
             const SizedBox(height: DesignTokens.spacingS),
             Text(
-              "You've swiped through everything we've pulled in for your "
-              'sources. Check back after your next briefing.',
+              onboarding
+                  ? "You're all done here — tap Next to keep setting up your "
+                      'pod. Your picker learned from every card.'
+                  : "You've swiped through everything we've pulled in for your "
+                      'sources. Check back after your next briefing.',
               textAlign: TextAlign.center,
               style: DesignTokens.typographyCallout
                   .copyWith(color: DesignTokens.colorInkSoft),

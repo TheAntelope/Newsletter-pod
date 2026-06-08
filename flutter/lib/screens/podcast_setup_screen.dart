@@ -96,12 +96,20 @@ const _guidancePresets = [
   ),
 ];
 
+/// Which section the screen should scroll to once its form has loaded.
+/// `show` (the default) lands at the top; `schedule` jumps to the day-circle
+/// schedule editor near the bottom.
+enum PodcastSetupSection { show, schedule }
+
 /// Podcast setup + schedule editor. Editorial rebuild of the iOS `PodcastSetupView`
 /// + `ScheduleSection` with the full config surface: show fields, format, voice
 /// cards, length, style (tone / humor / key-takeaways / greeting / takeaways),
 /// custom-guidance presets + free text, weather, and the day-circle schedule.
 class PodcastSetupScreen extends StatefulWidget {
-  const PodcastSetupScreen({super.key});
+  const PodcastSetupScreen({super.key, this.initialSection});
+
+  /// When `schedule`, the form auto-scrolls to the Schedule section after load.
+  final PodcastSetupSection? initialSection;
 
   @override
   State<PodcastSetupScreen> createState() => _PodcastSetupScreenState();
@@ -142,6 +150,9 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
   PodcastProfileDto? _loadedProfile;
   EntitlementsDto? _entitlements;
   List<CatalogVoiceDto> _voices = const [];
+
+  /// Anchor for the Schedule section so a deep-link can scroll it into view.
+  final _scheduleKey = GlobalKey();
 
   @override
   void didChangeDependencies() {
@@ -189,6 +200,18 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
         _timezone = s.timezone;
         _loading = false;
       });
+      if (widget.initialSection == PodcastSetupSection.schedule) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final ctx = _scheduleKey.currentContext;
+          if (ctx != null) {
+            Scrollable.ensureVisible(
+              ctx,
+              duration: const Duration(milliseconds: 350),
+              alignment: 0.05,
+            );
+          }
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -486,7 +509,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
               ),
           ],
         ),
-        _section('Schedule'),
+        _section('Schedule', key: _scheduleKey),
         EditorialCard(
           children: [
             Row(
@@ -536,7 +559,8 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
     );
   }
 
-  Widget _section(String label) => Padding(
+  Widget _section(String label, {Key? key}) => Padding(
+        key: key,
         padding: const EdgeInsets.fromLTRB(
           0,
           DesignTokens.spacingL,

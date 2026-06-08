@@ -424,9 +424,10 @@ final class AppViewModel: ObservableObject {
     func probeSubstack(url: String) async -> SubstackProbeDTO? {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        let normalized = Self.normalizeSubstackInput(trimmed)
         do {
             errorMessage = nil
-            return try await apiClient.probeSubstack(url: trimmed)
+            return try await apiClient.probeSubstack(url: normalized)
         } catch let APIError.server(message) {
             errorMessage = message
             return nil
@@ -434,6 +435,16 @@ final class AppViewModel: ObservableObject {
             errorMessage = "Could not reach that Substack — double-check the URL."
             return nil
         }
+    }
+
+    /// Bare handles like `lenny` should probe `lenny.substack.com`, otherwise
+    /// the backend rejects them as not-a-host. Leave anything with a dot, a
+    /// scheme, or an `@`-prefix alone — the server already canonicalizes those.
+    static func normalizeSubstackInput(_ value: String) -> String {
+        if value.hasPrefix("@") { return value }
+        if value.contains("://") { return value }
+        if value.contains(".") { return value }
+        return "\(value).substack.com"
     }
 
     /// Create (or fetch existing) intent for a publication. Returns the

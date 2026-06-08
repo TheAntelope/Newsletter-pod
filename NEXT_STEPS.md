@@ -245,6 +245,21 @@ Status: not started. Logged 2026-05-18. Driver: D handles per-user selection wel
 
 Ideas that were scoped and **explicitly deferred** — parked here so future sessions don't re-propose them from scratch. Resurfacing one = update its **Revisit trigger** line, don't append a new section.
 
+### Unify iOS billing under RevenueCat at the Flutter cutover (logged 2026-06-04)
+
+**Context:** today billing is two separate integrations — iOS uses **native StoreKit 2** (`SubscriptionStoreView`, products `com.newsletterpod.{pro,max}.{monthly,annual}`) posting to `/v1/billing/app-store/notifications` (`apply_app_store_notification`); Android (Flutter) uses **RevenueCat** (`pro:monthly` ids → `/webhooks/revenuecat`). When Flutter replaces the SwiftUI iOS app, the native Swift paywall disappears and the Flutter `purchases_controller` (Android-only, hardcoded `tier:period` ids) has no iOS path — so iOS payments do **not** carry over as-is.
+
+**The plan (Option A — adopt RevenueCat for iOS too):**
+- Backend: **no change** — `/webhooks/revenuecat` + entitlement-based (`pro`/`max`) tier resolution is already platform-agnostic; one webhook serves both stores. Eventually retire `apply_app_store_notification`.
+- RevenueCat dashboard: add an iOS app (App Store Connect App-Specific Shared Secret + In-App Purchase Key), import the `com.newsletterpod.*` products, map to the same `pro`/`max` entitlements.
+- App Store Connect: repoint App Store Server Notifications from our endpoint to RevenueCat.
+- Flutter: add the iOS RC key (`appl_…`) and **move the purchase flow off hardcoded `tier:period` ids onto RevenueCat Offerings/packages** (per-store product ids differ; Offerings is the abstraction). This refactor is small and worth doing on the Android side *first*.
+- **Migration risk (the real work):** existing iOS subscribers have live StoreKit subs tied to Apple, not RevenueCat. RevenueCat picks up existing entitlements on first SDK configure (receipt validation) so they keep access, but the cutover must be clean so events flow via RevenueCat afterward without double-counting.
+
+Option B (keep native StoreKit on iOS via `in_app_purchase`) avoids migration but leaves two billing code paths + two webhooks forever — rejected unless migration proves too risky.
+
+**Revisit trigger:** once **Android RevenueCat is confirmed working end-to-end** (a real Play purchase flips the user's tier via `/webhooks/revenuecat`) — currently blocked on Play product propagation, see [[revenuecat_android_setup]]. Start the iOS unification immediately after that's green and before the Flutter-iOS cutover.
+
 ### Cold-start personalization — extras (logged 2026-05-15)
 
 Context: stacked recommendation 1+2+3a+3b+4a+5 was shipped (voice intake, swipe onboarding, Substack paste, forwarded-mail weighting, alias-prominence, name-check). The items below were scoped at the same time but deferred.

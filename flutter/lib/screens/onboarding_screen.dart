@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api/api_client.dart' show SourcePayload;
 import '../api/models.dart';
 import '../design_tokens.dart';
+import '../services/link_launcher.dart';
 import '../services/location_service.dart';
 import '../state/app_state.dart';
 import '../widgets/day_toggle.dart';
 import '../widgets/editorial.dart';
 import '../widgets/onboarding_progress_dots.dart';
+import '../widgets/topic_icon.dart';
 import '../widgets/voice_choice_card.dart';
 import 'swipe_deck_screen.dart';
 
@@ -26,15 +29,26 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  static const _stepCount = 11;
-  static const _nameStepId = 3;
-
-  /// The visible steps, in order. The name step ("What should we call you?") is
-  /// shown only when the user opted into a personalised greeting on the style
-  /// step (id 2, immediately before it) — otherwise we never ask for a name.
+  /// The visible steps, in display order. This is an explicit sequence (not the
+  /// numeric id order), so the switch in [_stepContent] keys off ids, not
+  /// position. Two steps are conditional:
+  ///   - the name step (3) only when the user opted into a personalised greeting
+  ///     on the style step;
+  ///   - the second-voice / co-host step (8) only for a two-host show — solo and
+  ///     rotating-guest shows use the single host voice picked up front.
+  /// The format step (7) is placed right after the style step (2).
   List<int> get _activeSteps => [
-        for (var id = 0; id < _stepCount; id++)
-          if (id != _nameStepId || _greeting) id,
+        0, // welcome
+        1, // pick your voice (host)
+        2, // style your show
+        7, // choose a format
+        if (_greeting) 3, // what should we call you?
+        4, // pick your topics
+        5, // tune your pod (swipe deck)
+        6, // add your Substacks
+        if (_isTwoHost) 8, // add a co-host (second voice)
+        9, // set your schedule
+        10, // you're all set
       ];
 
   /// The step id currently shown, resolved from the position [_step] within
@@ -77,27 +91,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     ('silly', 'Playful & silly'),
   ];
 
-  /// Curated icon + display order for the catalog's topic categories. The chips
-  /// shown are the intersection of this map with the topics actually present in
-  /// the catalog, so new catalog topics fall back to a default glyph rather than
-  /// disappearing.
-  static const _topicIcons = <String, IconData>{
-    'News': Icons.public,
-    'Politics': Icons.account_balance_outlined,
-    'Business': Icons.trending_up,
-    'Tech': Icons.memory,
-    'Strategy': Icons.lightbulb_outline,
-    'Personal Finance': Icons.savings_outlined,
-    'Science': Icons.science_outlined,
-    'Sports': Icons.sports_basketball_outlined,
-    'Culture': Icons.theater_comedy_outlined,
-    'Health & Wellness': Icons.spa_outlined,
-    'Fitness': Icons.fitness_center,
-    'Family Life': Icons.family_restroom_outlined,
-    'Food & Travel': Icons.restaurant_outlined,
-    'Romantasy': Icons.auto_stories_outlined,
-  };
-
   int _step = 0;
   final _nameController = TextEditingController();
   final _weatherController = TextEditingController();
@@ -126,7 +119,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Future<VoiceCatalogEnvelope>? _voices;
 
   bool get _isTwoHost => _showPreset == 'two_hosts';
-  bool get _isRotating => _showPreset == 'rotating_guest';
 
   @override
   void dispose() {
@@ -351,17 +343,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           children: [
             SizedBox(
               height: 460,
-              child: SwipeDeck(topics: _selectedTopics.toList()),
+              child: SwipeDeck(
+                topics: _selectedTopics.toList(),
+                onboarding: true,
+              ),
             ),
           ],
         );
       case 6:
         return _shell(
-          title: 'Add your Substacks',
+          title: 'Add your newsletters',
           subtitle:
-              'Forward Substack subscriptions to your private ClawCast address '
-              'and they fold into your pod automatically.',
-          children: const [_InboundAddressCard()],
+              'Describe what you read and we\'ll find matching Substacks — or '
+              'paste a handle directly. Add the ones you want, then subscribe '
+              'with your private ClawCast address. Optional; you can do this any '
+              'time from Sources.',
+          children: const [_OnboardingSubstackStep()],
         );
       case 7:
         return _shell(
@@ -370,13 +367,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           children: [_showStep()],
         );
       case 8:
+        // Only reached for a two-host show (see _activeSteps) — solo and
+        // rotating-guest shows skip the second-voice pick entirely.
         return _shell(
-          title: _isTwoHost ? 'Add a co-host' : 'Your host',
-          subtitle: _isTwoHost
-              ? 'Your show pairs two voices — pick a co-host to trade off with '
-                  'the host you chose. You can change these later.'
-              : 'This is the voice you picked to read your briefing. Change it '
-                  'here if you like.',
+          title: 'Add a co-host',
+          subtitle:
+              'Your show pairs two voices — pick a co-host to trade off with '
+              'the host you chose. You can change these later.',
           children: [_coHostStep()],
         );
       case 9:
@@ -463,7 +460,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 for (final t in topics)
                   _TopicChip(
                     label: t,
-                    icon: _topicIcons[t] ?? Icons.label_outline,
+                    icon: topicIcon(t),
                     selected: _selectedTopics.contains(t),
                     onTap: () => setState(() {
                       if (!_selectedTopics.remove(t)) _selectedTopics.add(t);
@@ -526,59 +523,36 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     });
   }
 
-  /// Shown after the format is chosen. For two-host it picks the co-host (the
-  /// host was chosen up front, on step 0); otherwise it re-shows the host picker
-  /// so it can still be changed, plus the rotating-guest note.
+  /// The second-voice pick, shown only for a two-host show (the host was chosen
+  /// up front, on step 1). Solo and rotating-guest shows skip this step, so it
+  /// always renders the co-host picker.
   Widget _coHostStep() {
     return _voiceCatalogBuilder((voices) {
       final hostName = _voiceName(voices, _anchorVoiceId);
-      if (_isTwoHost) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (hostName != null) ...[
-              const _FieldLabel('Your host'),
-              const SizedBox(height: DesignTokens.spacingS),
-              Text(
-                hostName,
-                style: DesignTokens.typographyBodyStrong
-                    .copyWith(color: DesignTokens.colorInk),
-              ),
-              const SizedBox(height: DesignTokens.spacingL),
-            ],
-            const _FieldLabel('Co-host'),
-            const SizedBox(height: DesignTokens.spacingS),
-            for (final v in voices) ...[
-              VoiceChoiceCard(
-                voice: v,
-                selected: _commentatorVoiceId == v.id,
-                onSelect: () => setState(() => _commentatorVoiceId = v.id),
-                previewSource: v.previewUrl,
-              ),
-              const SizedBox(height: DesignTokens.spacingM),
-            ],
-          ],
-        );
-      }
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (hostName != null) ...[
+            const _FieldLabel('Your host'),
+            const SizedBox(height: DesignTokens.spacingS),
+            Text(
+              hostName,
+              style: DesignTokens.typographyBodyStrong
+                  .copyWith(color: DesignTokens.colorInk),
+            ),
+            const SizedBox(height: DesignTokens.spacingL),
+          ],
+          const _FieldLabel('Co-host'),
+          const SizedBox(height: DesignTokens.spacingS),
           for (final v in voices) ...[
             VoiceChoiceCard(
               voice: v,
-              selected: _anchorVoiceId == v.id,
-              onSelect: () => setState(() => _anchorVoiceId = v.id),
+              selected: _commentatorVoiceId == v.id,
+              onSelect: () => setState(() => _commentatorVoiceId = v.id),
               previewSource: v.previewUrl,
             ),
             const SizedBox(height: DesignTokens.spacingM),
           ],
-          if (_isRotating)
-            Text(
-              'A different guest voice joins ${hostName ?? 'your host'} each day, '
-              'drawn from the full catalog.',
-              style: DesignTokens.typographyCallout
-                  .copyWith(color: DesignTokens.colorMuted),
-            ),
         ],
       );
     });
@@ -1202,8 +1176,422 @@ class _SwitchRow extends StatelessWidget {
   }
 }
 
-class _InboundAddressCard extends StatelessWidget {
+/// Onboarding newsletters step: a natural-language / handle search over
+/// Substack ([AppRepository.discoverSubstacks]), add candidates as intents
+/// in-flow, then subscribe each added publication per-item. Mirrors the iOS
+/// `OnboardingNewslettersStep` search engine — with the per-item Subscribe
+/// affordance added: creating an intent alone never starts mail flowing
+/// (Substack's double opt-in needs the alias pasted into its own form), so each
+/// added row gets a Subscribe button that copies the alias and opens the
+/// publication. The inbound alias card stays at the bottom for forwarding
+/// existing subscriptions.
+class _OnboardingSubstackStep extends StatefulWidget {
+  const _OnboardingSubstackStep();
+
+  @override
+  State<_OnboardingSubstackStep> createState() =>
+      _OnboardingSubstackStepState();
+}
+
+class _OnboardingSubstackStepState extends State<_OnboardingSubstackStep> {
+  static const _maxEntries = 5;
+
+  final _searchController = TextEditingController();
+  bool _searching = false;
+  bool _hasSearched = false;
+  String? _error;
+  List<SubstackCandidateDto> _candidates = [];
+  final List<SubstackIntentDto> _registered = [];
+  final Set<String> _adding = {};
+  final Set<String> _subscribing = {};
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  bool get _reachedMax => _registered.length >= _maxEntries;
+
+  String get _trimmed => _searchController.text.trim();
+
+  /// A short, URL-ish or @handle input is a direct paste — skip the search
+  /// (LLM round-trip) and create the intent straight away.
+  bool get _looksLikeHandle =>
+      _trimmed.startsWith('@') ||
+      (_trimmed.contains('.') && !_trimmed.contains(' '));
+
+  void _onSubmit() {
+    final q = _trimmed;
+    if (q.isEmpty || _searching || _reachedMax) return;
+    if (_looksLikeHandle) {
+      _addByUrl(q);
+    } else {
+      _search(q);
+    }
+  }
+
+  Future<void> _search(String query) async {
+    final repo = AppScope.of(context).repository;
+    setState(() {
+      _searching = true;
+      _hasSearched = true;
+      _error = null;
+      _candidates = [];
+    });
+    try {
+      final env = await repo.discoverSubstacks(query);
+      if (!mounted) return;
+      setState(() {
+        _candidates = env.candidates;
+        _searching = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _searching = false;
+        _error = "Couldn't search right now — try again, or paste a handle.";
+      });
+    }
+  }
+
+  Future<void> _addByUrl(String raw) async {
+    setState(() {
+      _searching = true;
+      _error = null;
+    });
+    final intent = await _createIntent(raw);
+    if (!mounted) return;
+    setState(() {
+      _searching = false;
+      if (intent != null) {
+        _searchController.clear();
+        _candidates = [];
+        _hasSearched = false;
+      }
+    });
+  }
+
+  Future<void> _addCandidate(SubstackCandidateDto c) async {
+    if (_reachedMax) return;
+    setState(() => _adding.add(c.pubUrl));
+    await _createIntent(c.pubUrl);
+    if (!mounted) return;
+    setState(() => _adding.remove(c.pubUrl));
+  }
+
+  /// Creates the intent and appends it to the registered list (dedup by id).
+  /// Returns the intent on success; sets [_error] and returns null on failure.
+  Future<SubstackIntentDto?> _createIntent(String pubUrl) async {
+    try {
+      final env =
+          await AppScope.of(context).repository.createSubstackIntent(pubUrl);
+      final intent = env.intent;
+      if (mounted && !_registered.any((i) => i.id == intent.id)) {
+        setState(() => _registered.add(intent));
+      }
+      return intent;
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = "Couldn't add that publication.");
+      }
+      return null;
+    }
+  }
+
+  /// Per-item subscribe: copy the ClawCast alias and open Substack's subscribe
+  /// form so the user can paste it and complete the double opt-in. This is the
+  /// step that actually starts mail flowing — creating the intent alone doesn't.
+  Future<void> _subscribe(SubstackIntentDto intent) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _subscribing.add(intent.id));
+    try {
+      await Clipboard.setData(ClipboardData(text: intent.aliasEmail));
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'ClawCast email copied — paste it into Substack and subscribe. '
+            "We'll auto-confirm the rest.",
+          ),
+        ),
+      );
+      final url = intent.subscribeUrl;
+      if (url != null && mounted) {
+        await openExternal(context, url.toString());
+      }
+    } finally {
+      if (mounted) setState(() => _subscribing.remove(intent.id));
+    }
+  }
+
+  bool _alreadyAdded(String pubHost) =>
+      _registered.any((i) => i.pubHost == pubHost);
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _searchRow(),
+        if (_error != null) ...[
+          const SizedBox(height: DesignTokens.spacingS),
+          Text(
+            _error!,
+            style: DesignTokens.typographyCallout.copyWith(color: Colors.red),
+          ),
+        ],
+        if (_searching) ...[
+          const SizedBox(height: DesignTokens.spacingM),
+          Row(
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: DesignTokens.spacingS),
+              Text(
+                'Searching…',
+                style: DesignTokens.typographyCallout
+                    .copyWith(color: DesignTokens.colorMuted),
+              ),
+            ],
+          ),
+        ],
+        if (!_searching) ...[
+          const SizedBox(height: DesignTokens.spacingM),
+          if (_candidates.isNotEmpty)
+            _suggestions()
+          else
+            _hintOrEmpty(),
+        ],
+        if (_registered.isNotEmpty) ...[
+          const SizedBox(height: DesignTokens.spacingL),
+          const EditorialDivider(),
+          const SizedBox(height: DesignTokens.spacingS),
+          const MetaLabel('Added to your pod'),
+          const SizedBox(height: DesignTokens.spacingM),
+          for (final i in _registered) ...[
+            _registeredRow(i),
+            const SizedBox(height: DesignTokens.spacingM),
+          ],
+        ],
+        const SizedBox(height: DesignTokens.spacingL),
+        const MetaLabel('Already subscribe to newsletters?'),
+        const SizedBox(height: DesignTokens.spacingM),
+        const _InboundAddressCard(),
+      ],
+    );
+  }
+
+  Widget _searchRow() {
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _searchController,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+              labelText: 'Describe what you read, or paste a handle',
+              hintText: 'e.g. "AI strategy", or lenny.substack.com',
+            ),
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (_) => _onSubmit(),
+          ),
+        ),
+        const SizedBox(width: DesignTokens.spacingS),
+        AmberButton.filled(
+          label: _looksLikeHandle ? 'Add' : 'Find',
+          expand: false,
+          loading: _searching,
+          onPressed: (_searching || _reachedMax) ? null : _onSubmit,
+        ),
+      ],
+    );
+  }
+
+  Widget _hintOrEmpty() {
+    final text = _hasSearched
+        ? 'No clear matches — try describing it differently, or paste a handle '
+            'like lenny.substack.com or @lenny.'
+        : 'Try: "AI strategy and regulation", "longevity research and habits", '
+            'or just @stratechery.';
+    return Text(
+      text,
+      style: DesignTokens.typographyCallout
+          .copyWith(color: DesignTokens.colorMuted),
+    );
+  }
+
+  Widget _suggestions() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const MetaLabel('Suggestions'),
+        const SizedBox(height: DesignTokens.spacingM),
+        for (final c in _candidates) ...[
+          _candidateCard(c),
+          const SizedBox(height: DesignTokens.spacingM),
+        ],
+        if (_reachedMax)
+          Text(
+            'Max $_maxEntries reached — continue to keep setting up.',
+            style: DesignTokens.typographyMeta
+                .copyWith(color: DesignTokens.colorMuted),
+          ),
+      ],
+    );
+  }
+
+  Widget _candidateCard(SubstackCandidateDto c) {
+    final added = _alreadyAdded(c.pubHost);
+    final adding = _adding.contains(c.pubUrl);
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                c.title ?? c.pubHost,
+                style: DesignTokens.typographySubtitle
+                    .copyWith(color: DesignTokens.colorInk),
+              ),
+            ),
+            if (c.hasPaidTier) const _PaidTag(),
+          ],
+        ),
+        if (c.author != null && c.author!.isNotEmpty)
+          Text(
+            c.author!,
+            style: DesignTokens.typographyMeta
+                .copyWith(color: DesignTokens.colorMuted),
+          ),
+        if (c.why != null && c.why!.isNotEmpty)
+          Text(
+            c.why!,
+            style: DesignTokens.typographyCallout
+                .copyWith(color: DesignTokens.colorInkSoft),
+          ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: added
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.check_circle,
+                        size: 16, color: DesignTokens.colorAmberDeep),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Added',
+                      style: DesignTokens.typographyCalloutStrong
+                          .copyWith(color: DesignTokens.colorAmberDeep),
+                    ),
+                  ],
+                )
+              : AmberButton.filled(
+                  label: 'Add',
+                  expand: false,
+                  loading: adding,
+                  onPressed:
+                      (adding || _reachedMax) ? null : () => _addCandidate(c),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _registeredRow(SubstackIntentDto i) {
+    final subscribing = _subscribing.contains(i.id);
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.check_circle,
+                size: 18, color: DesignTokens.colorAmberDeep),
+            const SizedBox(width: DesignTokens.spacingS),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    i.displayTitle,
+                    style: DesignTokens.typographySubtitle
+                        .copyWith(color: DesignTokens.colorInk),
+                  ),
+                  if (i.pubAuthor != null && i.pubAuthor!.isNotEmpty)
+                    Text(
+                      i.pubAuthor!,
+                      style: DesignTokens.typographyMeta
+                          .copyWith(color: DesignTokens.colorMuted),
+                    ),
+                ],
+              ),
+            ),
+            if (i.hasPaidTier) const _PaidTag(),
+          ],
+        ),
+        Text(
+          'Subscribe with your ClawCast address to start receiving it.',
+          style: DesignTokens.typographyCallout
+              .copyWith(color: DesignTokens.colorInkSoft),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: AmberButton.outlined(
+            label: 'Subscribe',
+            icon: Icons.open_in_new,
+            expand: false,
+            loading: subscribing,
+            onPressed: subscribing ? null : () => _subscribe(i),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PaidTag extends StatelessWidget {
+  const _PaidTag();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: DesignTokens.colorAmber, width: 1),
+      ),
+      child: Text(
+        'Paid',
+        style: DesignTokens.typographyMeta
+            .copyWith(color: DesignTokens.colorAmberDeep),
+      ),
+    );
+  }
+}
+
+class _InboundAddressCard extends StatefulWidget {
   const _InboundAddressCard();
+
+  @override
+  State<_InboundAddressCard> createState() => _InboundAddressCardState();
+}
+
+class _InboundAddressCardState extends State<_InboundAddressCard> {
+  bool _copied = false;
+
+  Future<void> _copy(String address) async {
+    final messenger = ScaffoldMessenger.of(context);
+    await Clipboard.setData(ClipboardData(text: address));
+    if (!mounted) return;
+    setState(() => _copied = true);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Email address copied')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1213,10 +1601,21 @@ class _InboundAddressCard extends StatelessWidget {
       spacing: DesignTokens.spacingS,
       children: [
         const MetaLabel('Your private inbound address'),
-        Text(
+        // Selectable so the address can be long-pressed/copied manually too,
+        // alongside the explicit Copy button below.
+        SelectableText(
           address,
           style: DesignTokens.typographyTitle
               .copyWith(color: DesignTokens.colorAmberDeep),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: AmberButton.filled(
+            label: _copied ? 'Copied' : 'Copy email address',
+            icon: _copied ? Icons.check : Icons.copy,
+            expand: false,
+            onPressed: () => _copy(address),
+          ),
         ),
         Text(
           'Forward newsletters here, or use this address when you subscribe to '
