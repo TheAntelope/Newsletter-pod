@@ -111,7 +111,17 @@ class _HomeScreenState extends State<HomeScreen> {
       body: SafeArea(
         child: switch ((app.loading, me)) {
           (true, null) => const Center(child: CircularProgressIndicator()),
-          (_, null) => Center(child: Text(app.error ?? 'Something went wrong')),
+          (_, null) => Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: DesignTokens.spacingXl,
+                ),
+                child: Text(
+                  app.error ?? 'Something went wrong',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
           (_, final MeEnvelope loaded) => _Dashboard(
               me: loaded,
               app: app,
