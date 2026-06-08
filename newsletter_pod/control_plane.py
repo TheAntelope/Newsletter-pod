@@ -880,23 +880,51 @@ class ControlPlaneService:
         return recipients
 
     def get_cold_start_swipe_deck(
-        self, user_id: str, topics: list[str] | None = None
+        self,
+        user_id: str,
+        topics: list[str] | None = None,
+        *,
+        defer_summaries: bool = False,
     ) -> dict[str, Any]:
+        """Build the onboarding deck. With ``defer_summaries`` the (potentially
+        slow) LLM card-summary pass is skipped so the response returns
+        immediately — cards fall back to their cleaned raw summary, and the
+        caller is expected to run :meth:`warm_cold_start_card_summaries` in the
+        background to upgrade them for the next read. This is what keeps the
+        onboarding "Tune your pod" step from hanging on a cold corpus.
+        """
         user = self._require_user(user_id)
+        records = self._build_cold_start_records(user, topics)
+        if not defer_summaries:
+            records = self._card_summary_service.ensure_summaries(records)
+        return {"items": [_swipe_card_payload(record) for record in records]}
+
+    def _build_cold_start_records(
+        self, user: UserRecord, topics: list[str] | None
+    ) -> list[SourceItemRecord]:
         source_id_groups = self._catalog_source_id_groups_for_topics(topics)
         source_ids = [sid for group in source_id_groups for sid in group]
         if source_ids:
             preferred = self._region_preferred_source_ids(user, source_ids)
-            records = self._swipe_deck_service.get_topic_seeded_deck(
-                user_id,
+            return self._swipe_deck_service.get_topic_seeded_deck(
+                user.id,
                 source_ids,
                 preferred_source_ids=preferred,
                 source_id_groups=source_id_groups,
             )
-        else:
-            records = self._swipe_deck_service.get_cold_start_deck(user_id)
-        records = self._card_summary_service.ensure_summaries(records)
-        return {"items": [_swipe_card_payload(record) for record in records]}
+        return self._swipe_deck_service.get_cold_start_deck(user.id)
+
+    def warm_cold_start_card_summaries(
+        self, user_id: str, topics: list[str] | None = None
+    ) -> None:
+        """Generate + persist card summaries for the cold-start deck out of band.
+        Rebuilds the same record set (cheap, corpus-only) and runs the LLM pass,
+        which writes results back to ``source_items`` so the next deck read is
+        free. Paired with ``get_cold_start_swipe_deck(defer_summaries=True)``.
+        """
+        user = self._require_user(user_id)
+        records = self._build_cold_start_records(user, topics)
+        self._card_summary_service.ensure_summaries(records)
 
     def _region_preferred_source_ids(
         self, user: UserRecord, source_ids: list[str]
@@ -999,8 +1027,16 @@ class ControlPlaneService:
             raise ControlPlaneError("Candidate queue is not enabled")
         return self._candidate_queue_service.clear_override(user_id, dedupe_key)
 
-    def get_recent_swipe_deck(self, user_id: str) -> dict[str, Any]:
+    def get_recent_swipe_deck(
+        self, user_id: str, *, defer_summaries: bool = False
+    ) -> dict[str, Any]:
         self._require_user(user_id)
+        records = self._build_recent_records(user_id)
+        if not defer_summaries:
+            records = self._card_summary_service.ensure_summaries(records)
+        return {"items": [_swipe_card_payload(record) for record in records]}
+
+    def _build_recent_records(self, user_id: str) -> list[SourceItemRecord]:
         sources = self.repository.list_user_sources(user_id)
         source_ids = [source.source_id for source in sources if source.enabled]
         records = self._swipe_deck_service.get_recent_deck(user_id, source_ids)
@@ -1018,8 +1054,15 @@ class ControlPlaneService:
                     exc_info=True,
                 )
             records = self._swipe_deck_service.get_recent_deck(user_id, source_ids)
-        records = self._card_summary_service.ensure_summaries(records)
-        return {"items": [_swipe_card_payload(record) for record in records]}
+        return records
+
+    def warm_recent_card_summaries(self, user_id: str) -> None:
+        """Generate + persist card summaries for the recent deck out of band.
+        Paired with ``get_recent_swipe_deck(defer_summaries=True)``.
+        """
+        self._require_user(user_id)
+        records = self._build_recent_records(user_id)
+        self._card_summary_service.ensure_summaries(records)
 
     def warm_user_corpus(self, user_id: str) -> dict[str, Any]:
         """Fetch + embed items from the user's currently-attached sources

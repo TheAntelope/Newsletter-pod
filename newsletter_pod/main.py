@@ -1422,6 +1422,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
 
     @app.get("/v1/me/swipe-deck/cold-start")
     def get_cold_start_swipe_deck(
+        background_tasks: BackgroundTasks,
         topics: str | None = None,
         authorization: str | None = Header(default=None),
     ) -> dict:
@@ -1432,15 +1433,30 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         topic_list = (
             [topic for topic in topics.split(",") if topic.strip()] if topics else None
         )
-        return container.control_plane.get_cold_start_swipe_deck(
-            user.id, topics=topic_list
+        # Return the deck immediately (cards fall back to their cleaned raw
+        # summary) and generate the nicer LLM card summaries after the response
+        # is sent. Generating them inline blocks the response on serial OpenAI
+        # calls, which made the onboarding "Tune your pod" step appear to hang.
+        deck = container.control_plane.get_cold_start_swipe_deck(
+            user.id, topics=topic_list, defer_summaries=True
         )
+        background_tasks.add_task(
+            _warm_cold_start_summaries_safely, container, user.id, topic_list
+        )
+        return deck
 
     @app.get("/v1/me/swipe-deck/recent")
-    def get_recent_swipe_deck(authorization: str | None = Header(default=None)) -> dict:
+    def get_recent_swipe_deck(
+        background_tasks: BackgroundTasks,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
         user = _require_session_user(container, authorization)
         assert container.control_plane is not None
-        return container.control_plane.get_recent_swipe_deck(user.id)
+        deck = container.control_plane.get_recent_swipe_deck(
+            user.id, defer_summaries=True
+        )
+        background_tasks.add_task(_warm_recent_summaries_safely, container, user.id)
+        return deck
 
     @app.post("/v1/me/corpus/refresh")
     def refresh_corpus(authorization: str | None = Header(default=None)) -> dict:
@@ -1855,6 +1871,43 @@ def _warm_corpus_safely(container, user_id: str) -> None:
         container.control_plane.warm_user_corpus(user_id)
     except Exception:  # pragma: no cover — best-effort
         logger.warning("Background corpus warm failed for user=%s", user_id, exc_info=True)
+
+
+def _warm_cold_start_summaries_safely(
+    container, user_id: str, topics: Optional[list[str]]
+) -> None:
+    """Background-task wrapper that generates + persists cold-start (onboarding)
+    swipe-deck card summaries after the deck response has already been returned.
+    ``topics`` is None for the global cold-start deck. Swallows exceptions so a
+    failed summarization never affects the request that already succeeded.
+    """
+    if container.control_plane is None:
+        return
+    try:
+        container.control_plane.warm_cold_start_card_summaries(user_id, topics)
+    except Exception:  # pragma: no cover — best-effort
+        logger.warning(
+            "Background cold-start card-summary warm failed for user=%s",
+            user_id,
+            exc_info=True,
+        )
+
+
+def _warm_recent_summaries_safely(container, user_id: str) -> None:
+    """Background-task wrapper that generates + persists recent swipe-deck card
+    summaries after the deck response has already been returned. Swallows
+    exceptions so a failed summarization never affects the request.
+    """
+    if container.control_plane is None:
+        return
+    try:
+        container.control_plane.warm_recent_card_summaries(user_id)
+    except Exception:  # pragma: no cover — best-effort
+        logger.warning(
+            "Background recent card-summary warm failed for user=%s",
+            user_id,
+            exc_info=True,
+        )
 
 
 def _build_control_plane(

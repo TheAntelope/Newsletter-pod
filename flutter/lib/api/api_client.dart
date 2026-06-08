@@ -4,6 +4,7 @@
 // envelope, ISO8601 dates (DateTime.parse handles both fractional and plain).
 // Adds signInWithFirebase for the Android/Flutter client (Phase 1 endpoint);
 // the Apple path is kept for parity.
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -66,6 +67,11 @@ class SharedItemResult {
 }
 
 class ApiClient {
+  /// Upper bound on any single request. Generous enough for the slowest first
+  /// reads (cold-start deck, corpus warm) yet short enough that a genuinely
+  /// stuck request fails fast instead of leaving the UI spinning.
+  static const _requestTimeout = Duration(seconds: 30);
+
   final String _baseUrl;
   final http.Client _client;
 
@@ -471,20 +477,32 @@ class ApiClient {
     if (token != null) headers['Authorization'] = 'Bearer $token';
     final encoded = body == null ? null : jsonEncode(body);
 
-    final http.Response resp;
+    final Future<http.Response> pending;
     switch (method) {
       case 'GET':
-        resp = await _client.get(uri, headers: headers);
+        pending = _client.get(uri, headers: headers);
       case 'POST':
-        resp = await _client.post(uri, headers: headers, body: encoded);
+        pending = _client.post(uri, headers: headers, body: encoded);
       case 'PUT':
-        resp = await _client.put(uri, headers: headers, body: encoded);
+        pending = _client.put(uri, headers: headers, body: encoded);
       case 'PATCH':
-        resp = await _client.patch(uri, headers: headers, body: encoded);
+        pending = _client.patch(uri, headers: headers, body: encoded);
       case 'DELETE':
-        resp = await _client.delete(uri, headers: headers, body: encoded);
+        pending = _client.delete(uri, headers: headers, body: encoded);
       default:
         throw ApiException('Unsupported method: $method');
+    }
+
+    // Bound every request so a stuck backend surfaces an error the UI can show
+    // (retry / empty state) instead of spinning forever — the onboarding swipe
+    // deck previously appeared to hang on a slow response.
+    final http.Response resp;
+    try {
+      resp = await pending.timeout(_requestTimeout);
+    } on TimeoutException {
+      throw ApiException(
+        'The request timed out. Check your connection and try again.',
+      );
     }
 
     if (resp.statusCode < 200 || resp.statusCode >= 300) {

@@ -1573,8 +1573,25 @@ class _PaidTag extends StatelessWidget {
   }
 }
 
-class _InboundAddressCard extends StatelessWidget {
+class _InboundAddressCard extends StatefulWidget {
   const _InboundAddressCard();
+
+  @override
+  State<_InboundAddressCard> createState() => _InboundAddressCardState();
+}
+
+class _InboundAddressCardState extends State<_InboundAddressCard> {
+  bool _copied = false;
+
+  Future<void> _copy(String address) async {
+    final messenger = ScaffoldMessenger.of(context);
+    await Clipboard.setData(ClipboardData(text: address));
+    if (!mounted) return;
+    setState(() => _copied = true);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Email address copied')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1584,27 +1601,20 @@ class _InboundAddressCard extends StatelessWidget {
       spacing: DesignTokens.spacingS,
       children: [
         const MetaLabel('Your private inbound address'),
-        InkWell(
-          onTap: () async {
-            final messenger = ScaffoldMessenger.of(context);
-            await Clipboard.setData(ClipboardData(text: address));
-            messenger.showSnackBar(
-              const SnackBar(content: Text('Address copied')),
-            );
-          },
-          borderRadius: BorderRadius.circular(8),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  address,
-                  style: DesignTokens.typographyTitle
-                      .copyWith(color: DesignTokens.colorAmberDeep),
-                ),
-              ),
-              const Icon(Icons.copy,
-                  size: 18, color: DesignTokens.colorAmberDeep),
-            ],
+        // Selectable so the address can be long-pressed/copied manually too,
+        // alongside the explicit Copy button below.
+        SelectableText(
+          address,
+          style: DesignTokens.typographyTitle
+              .copyWith(color: DesignTokens.colorAmberDeep),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: AmberButton.filled(
+            label: _copied ? 'Copied' : 'Copy email address',
+            icon: _copied ? Icons.check : Icons.copy,
+            expand: false,
+            onPressed: () => _copy(address),
           ),
         ),
         Text(

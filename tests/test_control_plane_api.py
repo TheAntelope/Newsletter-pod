@@ -2617,8 +2617,10 @@ def test_discover_substacks_rejects_empty_query():
 
 
 def test_cold_start_deck_runs_card_summaries():
-    """Cold-start deck items get card_summary populated by the configured
-    summarizer service before being serialized."""
+    """Card summaries are generated out of band: the first deck read returns
+    immediately (no card_summary yet, so cards fall back to the raw summary),
+    and a background pass persists them so the next read carries them. This
+    keeps the onboarding deck from blocking on serial OpenAI calls."""
     container, client = _build_app()
     _, headers = _auth_headers(
         client, FakeAppleVerifier("card-summary-user", "cs@example.com")
@@ -2640,11 +2642,20 @@ def test_cold_start_deck_runs_card_summaries():
         summarizer=_StubSummarizer(),
     )
 
-    response = client.get("/v1/me/swipe-deck/cold-start", headers=headers)
-    assert response.status_code == 200
-    items = response.json()["items"]
-    assert items, "deck should not be empty"
-    assert items[0]["card_summary"].startswith("brief: ")
+    # First read: deck returns straight away; summaries are deferred to the
+    # background task (which TestClient runs before this call returns).
+    first = client.get("/v1/me/swipe-deck/cold-start", headers=headers)
+    assert first.status_code == 200
+    first_items = first.json()["items"]
+    assert first_items, "deck should not be empty"
+    assert not first_items[0].get("card_summary")
+
+    # Second read: the background pass persisted the summary, so it's served.
+    second = client.get("/v1/me/swipe-deck/cold-start", headers=headers)
+    assert second.status_code == 200
+    second_items = second.json()["items"]
+    assert second_items, "deck should not be empty"
+    assert second_items[0]["card_summary"].startswith("brief: ")
 
 
 def test_forwarded_mail_does_not_seed_when_sender_does_not_match_user_email():
