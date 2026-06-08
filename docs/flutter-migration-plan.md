@@ -148,6 +148,21 @@ reconciles RC and ASN subscription state without double-counting.
 **Tasks**
 - Enable the Flutter iOS target: Apple Sign-In via Firebase, RevenueCat on iOS (wraps
   StoreKit — existing subscribers migrate, do not re-purchase), APNs via `firebase_messaging`.
+- **Cross-provider account linking (same email → one account).** Today Apple Sign-In
+  ([control_plane.py `authenticate_with_apple`](../newsletter_pod/control_plane.py#L274)) and
+  Google/Firebase Sign-In ([`authenticate_with_firebase`](../newsletter_pod/control_plane.py#L293))
+  each create a **separate** `UserRecord` even for the same verified email, because resolution is
+  by a single identity key (`apple_subject` *or* one `(identity_provider, provider_subject)` pair).
+  A user who signs in with Apple on iOS and Google on Android gets two accounts; shares, sources,
+  subscription and history split across them with no signal (this bit testing on 2026-06-08 —
+  see [[duplicate_account_apple_google_2026_06_08]]). **Fix:** support multiple identities per
+  `UserRecord` (e.g. an `identities: [{provider, subject}]` array, indexed) so any provider whose
+  token carries an already-known **verified** email resolves to the existing account instead of
+  minting a new one; add a one-time backfill that links existing same-email Apple+Google dupes
+  (and a chooser when their data conflicts). Gate the auto-link on a *verified* email claim only.
+  Until this lands, the single free neutral-pair slot on Apple rows is a manual stopgap (Apple
+  uses the legacy `apple_subject` field, leaving `(identity_provider, provider_subject)` free to
+  hold a second provider's identity) — fine for one test account, not a general solution.
 - Re-create the native-only pieces that Flutter cannot do in Dart (assessment §2/§7):
   the **Share Extension** (stays native Swift) and its **App-Group shared keychain**
   ([ShareViewController.swift](../ios/NewsletterPodShareExtension/ShareViewController.swift),
@@ -314,3 +329,13 @@ _(Update as work proceeds.)_
   onboarding swipe step** (deck extracted to a reusable `SwipeDeck`; onboarding is 10 steps).
   Committed per-unit. **Only the account-gated wiring remains** (Firebase auth / RevenueCat /
   FCM / Play CI), plus the optional standalone OnboardingVoiceIntakeStep (submitVoiceIntake).
+- 2026-06-08 — **Duplicate-account split surfaced during testing → account linking added to
+  Phase 3.** A "shared Substacks aren't in my next-pod queue" report turned out to be working
+  as designed: the shares (`201 Created`, `kind="share"`, `[unused]`) landed on the **Apple
+  Sign-In** account (`5c7ef3a8`, alias `6hk6266a`), while the queue was being viewed on a
+  **second account with the same email** created by **Google Sign-In** on the Flutter Android
+  app (`05a58a0f`, alias `t5adekmx`, `identity_provider=firebase`). Root cause = no
+  cross-provider identity linking (see the new Phase 3 task above). **Test-account merge**
+  (fold the Google dupe into the canonical Apple account via the free neutral-pair slot, then
+  remove the dupe) is the immediate cleanup — pending an explicit prod-DB approval. Detail in
+  [[duplicate_account_apple_google_2026_06_08]].
