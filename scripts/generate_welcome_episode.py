@@ -31,6 +31,17 @@ from dataclasses import dataclass
 
 import requests
 
+# Reuse the exact MP3 stitching the runtime uses for real episodes. Byte-joining
+# complete per-line TTS MP3s buries each chunk's Xing/Info header mid-stream;
+# spec-compliant players (ExoPlayer/just_audio on Android, Podcast Addict) trust
+# the FIRST chunk's Xing frame count and stop after it — which is why the welcome
+# pod cut off at ~3s (the length of Vinnie's opening line). See memory
+# `mp3_concat_xing_header_cutoff.md`.
+from newsletter_pod.podcast_api import (
+    _concat_mp3_chunks,
+    _measure_mp3_duration_seconds,
+)
+
 ELEVENLABS_BASE_URL = "https://api.elevenlabs.io"
 ELEVENLABS_MODEL = "eleven_multilingual_v2"
 
@@ -159,16 +170,22 @@ def main() -> int:
         chunks.append(synthesize(line.text, voice_id, api_key))
         estimated_seconds += estimate_duration_seconds(line.text)
 
-    audio_bytes = b"".join(chunks)
+    # Strip each chunk's container framing before joining so the result is one
+    # clean, fully-playable stream (not just the first ~3s).
+    audio_bytes = _concat_mp3_chunks(chunks)
     with open(args.output, "wb") as f:
         f.write(audio_bytes)
 
     size = len(audio_bytes)
-    duration = int(round(estimated_seconds))
+    # Prefer the duration decoded from the actual MP3 frames (what the player and
+    # RSS itunes:duration should report); fall back to the wpm estimate.
+    measured = _measure_mp3_duration_seconds(audio_bytes)
+    duration = measured if measured is not None else int(round(estimated_seconds))
     print()
     print(f"Wrote {args.output}")
     print(f"  size:               {size:,} bytes")
-    print(f"  estimated duration: ~{duration} seconds (~{duration / 60:.1f} min)")
+    measured_label = "measured" if measured is not None else "estimated"
+    print(f"  {measured_label} duration: ~{duration} seconds (~{duration / 60:.1f} min)")
     print()
     print("Next steps:")
     print(f"  1. Listen to {args.output} and confirm it sounds right.")
@@ -177,7 +194,7 @@ def main() -> int:
     print(f"  3. Set deployment env vars:")
     print(f"       WELCOME_EPISODE_OBJECT_NAME=static/welcome-v2.mp3")
     print(f"       WELCOME_EPISODE_SIZE_BYTES={size}")
-    print(f"       WELCOME_EPISODE_DURATION_SECONDS=<actual duration once you've measured>")
+    print(f"       WELCOME_EPISODE_DURATION_SECONDS={duration}")
     print(f"       WELCOME_EPISODE_VERSION=v2")
     return 0
 
