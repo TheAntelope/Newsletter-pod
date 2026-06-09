@@ -32,59 +32,63 @@ final class OnboardingFlowTests: XCTestCase {
     }
 
     func testOnboardingHappyPath() throws {
-        // Step 1 of 8 — Welcome
+        // The wizard mirrors the Flutter flow. With the seeded two-host profile and
+        // the default greeting toggle on, both conditional steps (co-host + name)
+        // appear, giving the full 12-step path.
+
+        // Step 1 of 12 — Welcome
         let welcome = app.staticTexts["Welcome to ClawCast."]
         XCTAssertTrue(
             welcome.waitForExistence(timeout: 8),
             "Onboarding welcome screen did not appear"
         )
         attach("01-welcome")
-
         tapPrimary(label: "Set up my podcast")
 
-        // Step 2 of 8 — Voice intake (skippable; simulator can't dictate)
-        XCTAssertTrue(
-            app.staticTexts["Tell me what's on your mind."].waitForExistence(timeout: 5),
-            "Voice intake step did not appear"
-        )
-        attach("02-voice-intake")
-        tapSkipInStep(matching: "Skip — let the system learn from swipes")
-
-        // Step 3 of 8 — Swipe deck (no real backend, so deck loads empty and
-        // primary Continue is enabled immediately)
-        XCTAssertTrue(
-            app.staticTexts["What grabs you?"].waitForExistence(timeout: 5),
-            "Swipe deck step did not appear"
-        )
-        attach("03-swipe-deck")
+        // Step 2 of 12 — Pick your voice (catalog is unseeded, so the picker falls
+        // back to the static voice list and pre-selects a host → Continue enabled)
+        assertStep("Pick your voice", screenshot: "02-pick-voice")
         tapPrimary(label: "Continue")
 
-        // Step 4 of 8 — Newsletters (search + voice + paste)
-        XCTAssertTrue(
-            app.staticTexts["What newsletters do you read?"].waitForExistence(timeout: 5),
-            "Newsletters step did not appear"
-        )
-        attach("04-newsletters")
+        // Step 3 of 12 — Style your show
+        assertStep("Style your show", screenshot: "03-style")
         tapPrimary(label: "Continue")
 
-        // Step 5 of 8 — Show shape
-        waitForAnyContinue()
-        attach("05-show-shape")
+        // Step 4 of 12 — Choose a format (two_hosts is the default selection)
+        assertStep("Pick a show shape.", screenshot: "04-show-shape")
         tapPrimary(label: "Continue")
 
-        // Step 6 of 8 — Voices (two_hosts preset is the default → shown)
-        waitForAnyContinue()
-        attach("06-voices")
+        // Step 5 of 12 — Add a co-host (shown because two_hosts is selected)
+        assertStep("Add a co-host", screenshot: "05-co-host")
         tapPrimary(label: "Continue")
 
-        // Step 7 of 8 — Schedule
-        waitForAnyContinue()
-        attach("07-schedule")
+        // Step 6 of 12 — What should we call you? (shown because greeting is on)
+        assertStep("What should we call you?", screenshot: "06-name")
         tapPrimary(label: "Continue")
 
-        // Step 8 of 8 — Alias card + first-episode generation kickoff
-        Thread.sleep(forTimeInterval: 1.5)
-        attach("08-alias")
+        // Step 7 of 12 — Pick your topics
+        assertStep("Pick your topics", screenshot: "07-topics")
+        tapPrimary(label: "Continue")
+
+        // Step 8 of 12 — Tune your pod (swipe deck loads empty with no backend)
+        assertStep("Tune your pod", screenshot: "08-swipe")
+        tapPrimary(label: "Continue")
+
+        // Step 9 of 12 — Newsletters (search + voice + paste)
+        assertStep("What newsletters do you read?", screenshot: "09-newsletters")
+        tapPrimary(label: "Continue")
+
+        // Step 10 of 12 — Add from anywhere (share-sheet teach)
+        assertStep("Add from anywhere", screenshot: "10-share")
+        tapPrimary(label: "Continue")
+
+        // Step 11 of 12 — Schedule. Tapping Continue persists the profile, name,
+        // and schedule (best-effort network) before advancing, so allow extra time.
+        assertStep("When should it land?", screenshot: "11-schedule")
+        tapPrimary(label: "Continue")
+
+        // Step 12 of 12 — You're all set + first-episode generation kickoff
+        assertStep("You're all set", screenshot: "12-done", timeout: 20)
     }
 
     func testWelcomeGreetingDropsEmailPrefixUser() throws {
@@ -114,21 +118,13 @@ final class OnboardingFlowTests: XCTestCase {
         }
     }
 
-    private func tapSkipInStep(matching label: String) {
-        // The optional skip buttons inside voice intake / newsletters use long,
-        // copy-driven labels. Match by prefix in case the copy shifts.
-        let predicate = NSPredicate(format: "label BEGINSWITH %@", String(label.prefix(20)))
-        let button = app.buttons.matching(predicate).firstMatch
-        if button.waitForExistence(timeout: 5) {
-            button.tap()
-        } else {
-            XCTFail("Skip button matching '\(label)' never appeared")
-        }
-    }
-
-    private func waitForAnyContinue() {
-        let anyContinue = app.buttons["Continue"].firstMatch
-        _ = anyContinue.waitForExistence(timeout: 5)
+    /// Wait for a step's title to appear, then capture a screenshot.
+    private func assertStep(_ title: String, screenshot: String, timeout: TimeInterval = 8) {
+        XCTAssertTrue(
+            app.staticTexts[title].waitForExistence(timeout: timeout),
+            "Step '\(title)' did not appear"
+        )
+        attach(screenshot)
     }
 
     private func attach(_ name: String) {

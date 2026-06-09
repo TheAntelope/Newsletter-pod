@@ -1854,7 +1854,7 @@ struct PodcastSetupView: View {
     @State private var configSaveTask: Task<Void, Never>?
 
     /// Full voice catalog with the legacy 2-voice list as fallback when the
-    /// server catalog hasn't loaded yet. Mirrors `OnboardingVoicesStep`.
+    /// server catalog hasn't loaded yet. Mirrors the onboarding voice steps.
     private var voices: [CatalogVoiceDTO] {
         if !viewModel.catalogVoices.isEmpty { return viewModel.catalogVoices }
         return PodcastSetupView.voiceOptions.map {
@@ -2921,26 +2921,52 @@ enum OnboardingScheduleChoice: String, CaseIterable, Identifiable {
 
 struct OnboardingFlowView: View {
     @EnvironmentObject private var viewModel: AppViewModel
-    @State private var step: Int = 0
+    @State private var stepIndex: Int = 0
+
+    // Host / format / co-host picks
     @State private var selectedShowPresetID: String = "twohost"
     @State private var selectedAnchorVoiceID: String? = nil
     @State private var selectedCommentatorVoiceID: String? = nil
+
+    // Style picks (mirrors the Flutter "Style your show" step)
+    @State private var selectedTone: String = "playful"
+    @State private var selectedHumor: String = "dad_jokes"
+    @State private var keyFindingsCount: Int = 3
+    @State private var personalizedGreeting: Bool = true
+    @State private var includeTopTakeaways: Bool = true
+    @State private var includeWeather: Bool = false
+    @State private var weatherLocation: String = ""
+    @State private var displayName: String = ""
+
+    // Topics + schedule picks
+    @State private var selectedTopics: Set<String> = ["Tech", "Business"]
     @State private var selectedWeekdays: Set<String> = Set(OnboardingScheduleChoice.weekdays.weekdays)
     @State private var selectedDeliveryTime: Date = OnboardingScheduleStep.defaultDeliveryTime()
 
-    /// True when the user picked the solo-host preset; the Voices step is skipped
-    /// since there's no commentator role to assign.
-    private var isSoloHostPreset: Bool {
-        OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID })?.formatPreset == "solo_host"
+    /// The onboarding steps, in display order. Mirrors the Flutter wizard. Two
+    /// steps are conditional: the co-host step only appears for a two-host show,
+    /// and the name step only when the personalised-greeting toggle is on.
+    private enum Step {
+        case welcome, hostVoice, style, format, coHost, name, topics, swipe, newsletters, shareAnywhere, schedule, done
     }
 
-    private var requiresCommentator: Bool {
-        OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID })?.requiresCommentatorPick ?? false
+    private var activeSteps: [Step] {
+        var steps: [Step] = [.welcome, .hostVoice, .style, .format]
+        if isTwoHost { steps.append(.coHost) }
+        if personalizedGreeting { steps.append(.name) }
+        steps += [.topics, .swipe, .newsletters, .shareAnywhere, .schedule, .done]
+        return steps
     }
 
-    private var totalSteps: Int {
-        // Welcome, Voice intake, Swipe deck, Newsletters, Show, [Voices], Schedule, Alias card
-        isSoloHostPreset ? 7 : 8
+    /// The step currently shown, resolved from `stepIndex` (which indexes the
+    /// visible list, not a fixed id space).
+    private var currentStep: Step {
+        let steps = activeSteps
+        return steps[min(max(stepIndex, 0), steps.count - 1)]
+    }
+
+    private var isTwoHost: Bool {
+        OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID })?.formatPreset == "two_hosts"
     }
 
     var body: some View {
@@ -2951,10 +2977,10 @@ struct OnboardingFlowView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    OnboardingProgressDots(current: step, total: totalSteps)
+                    OnboardingProgressDots(current: stepIndex, total: activeSteps.count)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    if step < totalSteps - 1 {
+                    if stepIndex < activeSteps.count - 1 {
                         Button("Skip") { viewModel.completeOnboarding() }
                             .foregroundStyle(Theme.Palette.muted)
                     }
@@ -2968,67 +2994,93 @@ struct OnboardingFlowView: View {
 
     @ViewBuilder
     private var stepContent: some View {
-        switch step {
-        case 0:
+        switch currentStep {
+        case .welcome:
             OnboardingWelcomeStep(
                 firstName: firstName,
-                onContinue: { step = 1 }
+                onContinue: advance
             )
-        case 1:
-            OnboardingVoiceIntakeStep(
-                onBack: { step = 0 },
-                onContinue: { step = 2 }
+        case .hostVoice:
+            OnboardingHostVoiceStep(
+                selectedVoiceID: $selectedAnchorVoiceID,
+                onBack: back,
+                onContinue: advance
             )
-        case 2:
-            OnboardingSwipeStep(
-                onBack: { step = 1 },
-                onContinue: { step = 3 }
+        case .style:
+            OnboardingStyleStep(
+                tone: $selectedTone,
+                humor: $selectedHumor,
+                keyFindingsCount: $keyFindingsCount,
+                personalizedGreeting: $personalizedGreeting,
+                includeTopTakeaways: $includeTopTakeaways,
+                includeWeather: $includeWeather,
+                weatherLocation: $weatherLocation,
+                onBack: back,
+                onContinue: advance
             )
-        case 3:
-            OnboardingNewslettersStep(
-                onBack: { step = 2 },
-                onContinue: { step = 4 }
-            )
-        case 4:
+        case .format:
             OnboardingShowStep(
                 selected: $selectedShowPresetID,
                 isPaid: viewModel.isPaid,
-                onBack: { step = 3 },
+                onBack: back,
+                onContinue: advance
+            )
+        case .coHost:
+            OnboardingCoHostStep(
+                hostVoiceID: selectedAnchorVoiceID,
+                selectedVoiceID: $selectedCommentatorVoiceID,
+                onBack: back,
+                onContinue: advance
+            )
+        case .name:
+            OnboardingNameStep(
+                name: $displayName,
+                suggestedName: firstName,
+                onBack: back,
+                onContinue: advance
+            )
+        case .topics:
+            OnboardingTopicsStep(
+                selectedTopics: $selectedTopics,
+                onBack: back,
                 onContinue: {
                     Task {
-                        await saveShowPreset()
-                        // Solo-host has no commentator role, so skip the Voices step.
-                        step = isSoloHostPreset ? 6 : 5
+                        await saveTopicSources()
+                        advance()
                     }
                 }
             )
-        case 5:
-            OnboardingVoicesStep(
-                anchorVoiceID: $selectedAnchorVoiceID,
-                commentatorVoiceID: $selectedCommentatorVoiceID,
-                requiresCommentator: requiresCommentator,
-                onBack: { step = 4 },
-                onContinue: {
-                    Task {
-                        await saveVoicesSelection()
-                        step = 6
-                    }
-                }
+        case .swipe:
+            OnboardingSwipeStep(
+                onBack: back,
+                onContinue: advance
             )
-        case 6:
+        case .newsletters:
+            OnboardingNewslettersStep(
+                onBack: back,
+                onContinue: advance
+            )
+        case .shareAnywhere:
+            OnboardingShareFromAnywhereStep(
+                onBack: back,
+                onContinue: advance
+            )
+        case .schedule:
             OnboardingScheduleStep(
                 selectedWeekdays: $selectedWeekdays,
                 deliveryTime: $selectedDeliveryTime,
                 maxDeliveryDays: viewModel.entitlements?.maxDeliveryDays ?? 5,
-                onBack: { step = isSoloHostPreset ? 4 : 5 },
+                onBack: back,
                 onContinue: {
                     Task {
+                        await persistProfile()
+                        await persistNameIfNeeded()
                         await saveSchedule()
-                        step = 7
+                        advance()
                     }
                 }
             )
-        default:
+        case .done:
             OnboardingAliasStep(
                 onFinish: { viewModel.completeOnboarding() }
             )
@@ -3039,12 +3091,33 @@ struct OnboardingFlowView: View {
         viewModel.user?.firstName ?? ""
     }
 
-    private func saveShowPreset() async {
+    private func advance() {
+        if stepIndex < activeSteps.count - 1 { stepIndex += 1 }
+    }
+
+    private func back() {
+        if stepIndex > 0 { stepIndex -= 1 }
+    }
+
+    /// Enable the catalog sources matching the picked topics. Runs when leaving the
+    /// topics step so the swipe deck — and the first episode — are seeded from them.
+    private func saveTopicSources() async {
+        let packs = OnboardingStarterPack.packs(from: viewModel.catalogSources)
+        let sourceIDs = Set(
+            packs.filter { selectedTopics.contains($0.id) }.flatMap { $0.sourceIDs }
+        )
+        guard !sourceIDs.isEmpty else { return }
+        await viewModel.saveSources(catalogIDs: Array(sourceIDs), customURLs: [])
+    }
+
+    /// Persist all of the onboarding picks onto the podcast profile in one write,
+    /// mirroring the Flutter wizard's finish step. Patches over the loaded title /
+    /// host names / duration so server-managed fields survive.
+    private func persistProfile() async {
         guard let preset = OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID }) else { return }
         let title = (viewModel.profile?.title.isEmpty == false) ? viewModel.profile!.title : "ClawCast"
-        // Voice is set by the Voices step on the next screen — keep whatever's already on
-        // the profile (default Vinnie) so we don't blow away an in-progress voice choice.
-        let voiceID = viewModel.profile?.voiceID ?? PodcastSetupView.voiceOptions[0].id
+        let secondaryID: String? = preset.formatPreset == "two_hosts" ? selectedCommentatorVoiceID : nil
+        let trimmedWeather = weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
         await viewModel.savePodcastConfig(
             title: title,
             formatPreset: preset.formatPreset,
@@ -3052,25 +3125,27 @@ struct OnboardingFlowView: View {
             secondaryHost: preset.secondaryHost,
             guestNames: [],
             desiredDurationMinutes: preset.durationMinutes,
-            voiceID: voiceID
+            voiceID: selectedAnchorVoiceID ?? viewModel.profile?.voiceID ?? nil,
+            secondaryVoiceID: secondaryID,
+            tone: selectedTone,
+            keyFindingsCount: keyFindingsCount,
+            humorStyle: selectedHumor,
+            personalizedGreeting: personalizedGreeting,
+            includeTopTakeaways: includeTopTakeaways,
+            includeWeather: includeWeather,
+            weatherLocation: (includeWeather && !trimmedWeather.isEmpty) ? trimmedWeather : nil
         )
     }
 
-    private func saveVoicesSelection() async {
-        guard let anchorID = selectedAnchorVoiceID,
-              let preset = OnboardingShowPreset.all.first(where: { $0.id == selectedShowPresetID }) else { return }
-        let title = viewModel.profile?.title.isEmpty == false ? viewModel.profile!.title : "ClawCast"
-        let secondaryID: String? = preset.formatPreset == "two_hosts" ? selectedCommentatorVoiceID : nil
-        await viewModel.savePodcastConfig(
-            title: title,
-            formatPreset: preset.formatPreset,
-            primaryHost: preset.primaryHost,
-            secondaryHost: preset.secondaryHost,
-            guestNames: [],
-            desiredDurationMinutes: preset.durationMinutes,
-            voiceID: anchorID,
-            secondaryVoiceID: secondaryID
-        )
+    /// Persist the greeting name. The Flutter wizard collects it but never saves it;
+    /// we do, so the personalised greeting actually uses it. Only writes when the
+    /// greeting is on and the name differs from what's already stored.
+    private func persistNameIfNeeded() async {
+        guard personalizedGreeting else { return }
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != viewModel.user?.displayName else { return }
+        let timezone = viewModel.user?.timezone ?? TimeZone.current.identifier
+        await viewModel.updateProfile(displayName: trimmed, timezone: timezone)
     }
 
     private func saveSchedule() async {
@@ -3203,171 +3278,350 @@ private struct OnboardingWelcomeStep: View {
     }
 }
 
-// MARK: - New onboarding steps (voice intake, swipe deck, newsletters, alias)
+// MARK: - New onboarding steps (voice, style, co-host, name, topics, share, swipe, newsletters, alias)
 
-private struct OnboardingVoiceIntakeStep: View {
+/// Step 1 — pick the primary host voice. Single-select with audio samples;
+/// format-independent so it leads the wizard, mirroring the Flutter flow.
+private struct OnboardingHostVoiceStep: View {
     @EnvironmentObject private var viewModel: AppViewModel
-    @StateObject private var dictation = FeedbackDictation()
-    @State private var isSubmitting: Bool = false
-    @State private var lastAck: VoiceIntakeAck?
+    @Binding var selectedVoiceID: String?
     let onBack: () -> Void
     let onContinue: () -> Void
 
+    @StateObject private var samplePlayer = VoiceSamplePlayer()
+
+    /// Voice list to render. Falls back to the legacy 2-voice static list when the
+    /// catalog hasn't loaded yet so the picker is never empty.
+    private var voices: [CatalogVoiceDTO] {
+        if !viewModel.catalogVoices.isEmpty { return viewModel.catalogVoices }
+        return PodcastSetupView.voiceOptions.map {
+            CatalogVoiceDTO(id: $0.id, name: $0.name, gender: "neutral", description: "", previewURL: nil)
+        }
+    }
+
     var body: some View {
         OnboardingStepShell(
-            title: "Tell me what's on your mind.",
-            subtitle: "Tap the mic and talk for up to a minute — what you've been reading, who you follow, what you'd like to hear more about. Skip this if you'd rather let swipes do the work.",
-            primaryLabel: primaryLabel,
-            primaryDisabled: primaryDisabled,
-            onPrimary: primaryAction,
+            title: "Pick your voice",
+            subtitle: "First, the fun part — choose the voice that reads your briefing every morning. Tap a card to hear a sample.",
+            primaryLabel: "Continue",
+            primaryDisabled: selectedVoiceID == nil,
+            onPrimary: onContinue,
+            onBack: onBack
+        ) {
+            VStack(spacing: Theme.Spacing.m) {
+                ForEach(voices) { voice in
+                    OnboardingVoicePickCard(
+                        voice: voice,
+                        isSelected: selectedVoiceID == voice.id,
+                        isPlaying: samplePlayer.playingVoiceID == voice.id,
+                        onSelect: { selectedVoiceID = voice.id },
+                        onPreview: { samplePlayer.play(voice) }
+                    )
+                }
+            }
+            .onAppear { applyDefaultIfEmpty() }
+            .onChange(of: viewModel.catalogVoices) { _, _ in applyDefaultIfEmpty() }
+            .onDisappear { samplePlayer.stop() }
+        }
+    }
+
+    /// Pre-select the stored (or first) voice so tapping Continue without touching
+    /// anything yields a valid host.
+    private func applyDefaultIfEmpty() {
+        guard selectedVoiceID == nil else { return }
+        let available = voices.map(\.id)
+        guard !available.isEmpty else { return }
+        selectedVoiceID = viewModel.profile?.voiceID.flatMap { available.contains($0) ? $0 : nil } ?? available.first
+    }
+}
+
+/// A single-select voice card with an audio-sample button. Shared by the host and
+/// co-host steps. The whole card is tappable to select; the preview button
+/// consumes its own taps.
+private struct OnboardingVoicePickCard: View {
+    let voice: CatalogVoiceDTO
+    let isSelected: Bool
+    let isPlaying: Bool
+    let onSelect: () -> Void
+    let onPreview: () -> Void
+
+    private var canPreview: Bool { voice.previewURL?.isEmpty == false }
+
+    var body: some View {
+        EditorialCard {
+            HStack(alignment: .top, spacing: Theme.Spacing.m) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(voice.name)
+                        .font(Theme.Typography.subtitle)
+                        .foregroundStyle(Theme.Palette.ink)
+                    if !voice.description.isEmpty {
+                        Text(voice.description)
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Palette.inkSoft)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if canPreview {
+                        Button(action: onPreview) {
+                            HStack(spacing: 4) {
+                                Image(systemName: isPlaying ? "speaker.wave.2.fill" : "play.circle.fill")
+                                    .font(.system(size: 14, weight: .semibold))
+                                Text(isPlaying ? "Playing…" : "Hear a sample")
+                                    .font(Theme.Typography.calloutStrong)
+                            }
+                            .foregroundStyle(Theme.Palette.amberDeep)
+                            .padding(.top, 2)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(isSelected ? Theme.Palette.amber : Theme.Palette.rule)
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .stroke(isSelected ? Theme.Palette.amber : Color.clear, lineWidth: 2)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect() }
+    }
+}
+
+/// Step 2 — style the show: tone, humor, key-takeaway count, the greeting and
+/// top-takeaways toggles, then the weather opt-in (with "use my location"). Mirrors
+/// the Style + Weather sections of the Flutter wizard / podcast-settings editor.
+private struct OnboardingStyleStep: View {
+    @Binding var tone: String
+    @Binding var humor: String
+    @Binding var keyFindingsCount: Int
+    @Binding var personalizedGreeting: Bool
+    @Binding var includeTopTakeaways: Bool
+    @Binding var includeWeather: Bool
+    @Binding var weatherLocation: String
+    let onBack: () -> Void
+    let onContinue: () -> Void
+
+    @StateObject private var locationResolver = LocationResolver()
+
+    var body: some View {
+        OnboardingStepShell(
+            title: "Style your show",
+            subtitle: "Set the feel of your briefing — tone, humor, how many takeaways, and whether to open with the local weather. You can change any of this later from Podcast settings.",
+            primaryLabel: "Continue",
+            primaryDisabled: false,
+            onPrimary: onContinue,
             onBack: onBack
         ) {
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
-                examplePrompts
-                micCard
-                if let error = dictation.errorMessage {
-                    Text(error)
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(.red)
-                }
-                if let ack = lastAck {
-                    extractedSummary(ack: ack)
-                }
-                Button(action: onContinue) {
-                    Text("Skip — let the system learn from swipes")
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(Theme.Palette.muted)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private var trimmedTranscript: String {
-        dictation.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var primaryLabel: String {
-        if isSubmitting { return "Saving…" }
-        if lastAck != nil { return "Continue" }
-        return "Save"
-    }
-
-    private var primaryDisabled: Bool {
-        if isSubmitting { return true }
-        if lastAck != nil { return false }
-        return trimmedTranscript.isEmpty
-    }
-
-    private func primaryAction() {
-        if lastAck != nil {
-            onContinue()
-        } else {
-            submit()
-        }
-    }
-
-    private var examplePrompts: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            MetaLabel(text: "Try saying")
-            ForEach(
-                [
-                    "I've been chasing the AI compute story.",
-                    "I read Stratechery and Platformer every week.",
-                    "I'm into Premier League, my partner is into longevity.",
-                ],
-                id: \.self
-            ) { example in
-                Text("“\(example)”")
-                    .font(Theme.Typography.callout)
-                    .foregroundStyle(Theme.Palette.inkSoft)
-            }
-        }
-    }
-
-    private var micCard: some View {
-        EditorialCard {
-            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                HStack(spacing: Theme.Spacing.m) {
-                    Button(action: toggle) {
-                        ZStack {
-                            Circle()
-                                .fill(dictation.isRecording ? Color.red : Theme.Palette.amberDeep)
-                                .frame(width: 64, height: 64)
-                            Image(systemName: dictation.isRecording ? "stop.fill" : "mic.fill")
-                                .font(.system(size: 26, weight: .semibold))
-                                .foregroundStyle(.white)
+                EditorialCard {
+                    OnboardingFieldLabel(text: "Tone")
+                    OnboardingPillGroup(options: PodcastSetupView.toneOptions, selectedID: tone) { tone = $0 }
+                    OnboardingFieldLabel(text: "Humor")
+                    OnboardingPillGroup(options: PodcastSetupView.humorOptions, selectedID: humor) { humor = $0 }
+                    OnboardingFieldLabel(text: "Key takeaways")
+                    HStack(spacing: Theme.Spacing.s) {
+                        ForEach(3...7, id: \.self) { n in
+                            OnboardingNumberPill(value: n, isSelected: keyFindingsCount == n) {
+                                keyFindingsCount = n
+                            }
                         }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(dictation.isRecording ? "Stop recording" : "Start recording")
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(dictation.isRecording ? "Listening…" : trimmedTranscript.isEmpty ? "Tap to start" : "Tap to record again")
-                            .font(Theme.Typography.subtitle)
-                            .foregroundStyle(Theme.Palette.ink)
-                        Text("On-device transcription. We never send raw audio.")
-                            .font(Theme.Typography.meta)
-                            .foregroundStyle(Theme.Palette.muted)
-                    }
-                    Spacer(minLength: 0)
+                    EditorialDivider()
+                    OnboardingSwitchRow(label: "Greet me by name", isOn: $personalizedGreeting)
+                    OnboardingSwitchRow(label: "Include top takeaways", isOn: $includeTopTakeaways)
                 }
-                if !trimmedTranscript.isEmpty {
-                    Text(dictation.transcript)
-                        .font(Theme.Typography.body)
-                        .foregroundStyle(Theme.Palette.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                MetaLabel(text: "Weather")
+                weatherCard
+            }
+        }
+        .onChange(of: locationResolver.state) { _, newState in
+            if case .resolved(let name) = newState {
+                weatherLocation = name
             }
         }
     }
 
-    private func extractedSummary(ack: VoiceIntakeAck) -> some View {
+    private var weatherCard: some View {
         EditorialCard {
-            VStack(alignment: .leading, spacing: 6) {
-                MetaLabel(text: "Got it")
-                if !ack.topics.isEmpty {
-                    Text("Topics: " + ack.topics.joined(separator: ", "))
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(Theme.Palette.ink)
+            OnboardingSwitchRow(label: "Include local weather in each pod", isOn: $includeWeather)
+            if includeWeather {
+                EditorialDivider()
+                TextField("City — e.g. Copenhagen", text: $weatherLocation)
+                    .textInputAutocapitalization(.words)
+                    .padding(Theme.Spacing.s)
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Theme.Palette.rule, lineWidth: 1)
+                    )
+                weatherLocationRow
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var weatherLocationRow: some View {
+        if case .requesting = locationResolver.state {
+            HStack(spacing: Theme.Spacing.s) {
+                ProgressView().controlSize(.small)
+                Text("Detecting your location…")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Palette.muted)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Button { locationResolver.resolve() } label: {
+                    Label(
+                        weatherLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Use my current location" : "Update from my location",
+                        systemImage: "location.fill"
+                    )
+                    .font(Theme.Typography.calloutStrong)
+                    .foregroundStyle(Theme.Palette.amberDeep)
                 }
-                if !ack.namedEntities.isEmpty {
-                    Text("Names: " + ack.namedEntities.joined(separator: ", "))
+                .buttonStyle(.plain)
+                if case .denied = locationResolver.state {
+                    Text("Location access denied. Enable it in Settings, or type your city above.")
                         .font(Theme.Typography.callout)
-                        .foregroundStyle(Theme.Palette.ink)
-                }
-                if let vibe = ack.vibeNotes, !vibe.isEmpty {
-                    Text("Style: " + vibe)
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(Theme.Palette.ink)
-                }
-                if ack.topics.isEmpty && ack.namedEntities.isEmpty && (ack.vibeNotes ?? "").isEmpty {
-                    Text("We'll mostly lean on your swipes from here.")
+                        .foregroundStyle(Theme.Palette.muted)
+                } else if case .error(let message) = locationResolver.state {
+                    Text("Couldn't fetch location: \(message)")
                         .font(Theme.Typography.callout)
                         .foregroundStyle(Theme.Palette.muted)
                 }
             }
         }
     }
+}
 
-    private func toggle() {
-        if dictation.isRecording {
-            dictation.stop()
-        } else {
-            lastAck = nil
-            Task { await dictation.start() }
+// MARK: - Shared onboarding form controls
+
+private struct OnboardingFieldLabel: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(Theme.Typography.calloutStrong)
+            .foregroundStyle(Theme.Palette.muted)
+    }
+}
+
+/// A wrapped row of single-select choice pills (tone / humor).
+private struct OnboardingPillGroup: View {
+    let options: [(id: String, label: String)]
+    let selectedID: String
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        OnboardingFlowLayout(spacing: Theme.Spacing.s) {
+            ForEach(options, id: \.id) { option in
+                OnboardingChoicePill(label: option.label, isSelected: selectedID == option.id) {
+                    onSelect(option.id)
+                }
+            }
         }
     }
+}
 
-    private func submit() {
-        let transcript = trimmedTranscript
-        guard !transcript.isEmpty, !isSubmitting else { return }
-        isSubmitting = true
-        Task {
-            let result = await viewModel.submitVoiceIntake(transcript: transcript)
-            await MainActor.run {
-                isSubmitting = false
-                lastAck = result
+private struct OnboardingChoicePill: View {
+    let label: String
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            Text(label)
+                .font(Theme.Typography.calloutStrong)
+                .padding(.horizontal, Theme.Spacing.m)
+                .padding(.vertical, Theme.Spacing.s)
+                .background(isSelected ? Theme.Palette.amber : Color.clear, in: Capsule())
+                .overlay(
+                    Capsule().stroke(isSelected ? Theme.Palette.amber : Theme.Palette.rule, lineWidth: 1.5)
+                )
+                .foregroundStyle(isSelected ? Color.white : Theme.Palette.ink)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct OnboardingNumberPill: View {
+    let value: Int
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            Text("\(value)")
+                .font(Theme.Typography.subtitle)
+                .frame(width: 40, height: 40)
+                .background(isSelected ? Theme.Palette.amber : Color.clear, in: Circle())
+                .foregroundStyle(isSelected ? Color.white : Theme.Palette.ink)
+                .overlay(
+                    Circle().stroke(isSelected ? Theme.Palette.amber : Theme.Palette.rule, lineWidth: 1.5)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct OnboardingSwitchRow: View {
+    let label: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(Theme.Typography.body)
+                .foregroundStyle(Theme.Palette.ink)
+            Spacer()
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .tint(Theme.Palette.amber)
+        }
+    }
+}
+
+/// A simple wrapping layout (like flex-wrap) for chips and pills. iOS 16+ `Layout`.
+private struct OnboardingFlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var maxRowWidth: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                totalHeight += rowHeight + spacing
+                maxRowWidth = max(maxRowWidth, x - spacing)
+                x = 0
+                rowHeight = 0
             }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        totalHeight += rowHeight
+        maxRowWidth = max(maxRowWidth, x - spacing)
+        let width = maxWidth.isFinite ? maxWidth : max(0, maxRowWidth)
+        return CGSize(width: width, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX, x > bounds.minX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
         }
     }
 }
@@ -3375,20 +3629,16 @@ private struct OnboardingVoiceIntakeStep: View {
 private struct OnboardingSwipeStep: View {
     @EnvironmentObject private var viewModel: AppViewModel
     @State private var cards: [SwipeDeckCardDTO] = []
-    @State private var swipeCount: Int = 0
     @State private var isLoading: Bool = true
-    @State private var didApplyDefaults: Bool = false
     let onBack: () -> Void
     let onContinue: () -> Void
 
-    private let targetSwipeCount = 8
-
     var body: some View {
         OnboardingStepShell(
-            title: "What grabs you?",
-            subtitle: "Right for more like this, left to skip. \(targetSwipeCount) cards is enough to start — we're seeding a balanced default mix in the background so you have coverage either way.",
-            primaryLabel: primaryLabel,
-            primaryDisabled: primaryDisabled,
+            title: "Tune your pod",
+            subtitle: "Swipe right on stories you'd want to hear more about, left to skip. Optional — your picker learns from every card.",
+            primaryLabel: "Continue",
+            primaryDisabled: false,
             onPrimary: onContinue,
             onBack: onBack
         ) {
@@ -3402,67 +3652,27 @@ private struct OnboardingSwipeStep: View {
                         Text("No cards available yet.")
                             .font(Theme.Typography.body)
                             .foregroundStyle(Theme.Palette.inkSoft)
-                        Text("That's fine — we'll learn from your first episode and the Tune Your Pod deck.")
+                        Text("That's fine — your picker learns from your first episode either way.")
                             .font(Theme.Typography.callout)
                             .foregroundStyle(Theme.Palette.muted)
                     }
                     .padding(.vertical, Theme.Spacing.xl)
                 } else {
                     SwipeDeckCardStack(cards: $cards) { card, direction in
-                        swipeCount += 1
                         Task { await viewModel.submitSwipe(card: card, direction: direction) }
                     }
                     .frame(maxWidth: .infinity, minHeight: 380)
-                    Text(progressLabel)
-                        .font(Theme.Typography.meta)
-                        .foregroundStyle(Theme.Palette.muted)
                 }
-                Button(action: onContinue) {
-                    Text("Skip — let the first episode pick for me")
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(Theme.Palette.muted)
-                }
-                .buttonStyle(.plain)
             }
         }
         .task { await loadDeck() }
     }
 
-    private var primaryLabel: String {
-        if swipeCount >= targetSwipeCount || cards.isEmpty { return "Continue" }
-        return "Continue (\(targetSwipeCount - swipeCount) more)"
-    }
-
-    private var primaryDisabled: Bool {
-        cards.isEmpty ? false : swipeCount < targetSwipeCount
-    }
-
-    private var progressLabel: String {
-        "\(min(swipeCount, targetSwipeCount)) / \(targetSwipeCount) swiped"
-    }
-
     private func loadDeck() async {
-        if !didApplyDefaults {
-            await applyCuratedDefaults()
-            didApplyDefaults = true
-        }
+        // Sources are already set by the topics step, so the cold-start deck is
+        // seeded from the user's chosen topics.
         cards = await viewModel.fetchColdStartSwipeDeck()
         isLoading = false
-    }
-
-    private func applyCuratedDefaults() async {
-        // No catalog sources attached yet? Apply the curated "Inspire me" mix so
-        // the user has something to ingest from on day one even if they skip
-        // every swipe.
-        guard viewModel.selectedSources.isEmpty else { return }
-        let packs = OnboardingStarterPack.packs(from: viewModel.catalogSources)
-        let availableIDs = Set(packs.map(\.id))
-        let curated = OnboardingStarterPack.inspireMeTopics.filter { availableIDs.contains($0) }
-        let sourceIDs = Set(
-            packs.filter { curated.contains($0.id) }.flatMap { $0.sourceIDs }
-        )
-        guard !sourceIDs.isEmpty else { return }
-        await viewModel.saveSources(catalogIDs: Array(sourceIDs), customURLs: [])
     }
 }
 
@@ -3477,7 +3687,9 @@ private struct OnboardingNewslettersStep: View {
     @State private var lastError: String?
     @State private var hasSearched: Bool = false
     @State private var didAutoSearch: Bool = false
+    @State private var subscribingID: String?
     @FocusState private var isInputFocused: Bool
+    @Environment(\.openURL) private var openURL
     let onBack: () -> Void
     let onContinue: () -> Void
 
@@ -3487,7 +3699,7 @@ private struct OnboardingNewslettersStep: View {
     var body: some View {
         OnboardingStepShell(
             title: "What newsletters do you read?",
-            subtitle: "Describe what you're into in a sentence — we'll find Substacks that match and you can confirm the right ones. Or paste a handle directly if you already know one.",
+            subtitle: "Describe what you read and we'll find matching Substacks — or paste a handle directly. Add the ones you want, then subscribe with your private ClawCast address. Optional; you can do this any time from Sources.",
             primaryLabel: "Continue",
             primaryDisabled: false,
             onPrimary: onContinue,
@@ -3533,6 +3745,8 @@ private struct OnboardingNewslettersStep: View {
                             registeredRow(intent)
                         }
                     }
+                    Divider().padding(.vertical, 4)
+                    inboundAddressCard
                     Button(action: onContinue) {
                         Text("Skip — I don't have any in mind")
                             .font(Theme.Typography.callout)
@@ -3673,21 +3887,95 @@ private struct OnboardingNewslettersStep: View {
     }
 
     private func registeredRow(_ intent: SubstackIntentDTO) -> some View {
-        EditorialCard {
-            HStack(spacing: Theme.Spacing.m) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(Theme.Palette.amberDeep)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(intent.pubTitle ?? intent.pubHost)
-                        .font(Theme.Typography.subtitle)
-                        .foregroundStyle(Theme.Palette.ink)
-                    if let author = intent.pubAuthor, !author.isEmpty {
-                        Text(author)
-                            .font(Theme.Typography.meta)
-                            .foregroundStyle(Theme.Palette.muted)
+        let subscribing = subscribingID == intent.id
+        return EditorialCard {
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                HStack(spacing: Theme.Spacing.m) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(intent.pubTitle ?? intent.pubHost)
+                            .font(Theme.Typography.subtitle)
+                            .foregroundStyle(Theme.Palette.ink)
+                        if let author = intent.pubAuthor, !author.isEmpty {
+                            Text(author)
+                                .font(Theme.Typography.meta)
+                                .foregroundStyle(Theme.Palette.muted)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    if intent.hasPaidTier {
+                        PaidBadge()
                     }
                 }
-                Spacer(minLength: 0)
+                Text("Subscribe with your ClawCast address to start receiving it.")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Palette.inkSoft)
+                Button {
+                    subscribe(intent)
+                } label: {
+                    HStack(spacing: 6) {
+                        if subscribing {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.up.right.square")
+                        }
+                        Text("Subscribe")
+                    }
+                    .font(Theme.Typography.calloutStrong)
+                    .foregroundStyle(Theme.Palette.amberDeep)
+                }
+                .buttonStyle(.plain)
+                .disabled(subscribing)
+            }
+        }
+    }
+
+    /// Per-item subscribe: copy the ClawCast alias and open Substack's subscribe
+    /// form so the user can paste it and finish the double opt-in. Creating the
+    /// intent alone doesn't start mail flowing — this is the step that does.
+    private func subscribe(_ intent: SubstackIntentDTO) {
+        UIPasteboard.general.string = intent.aliasEmail
+        guard let url = intent.subscribeURL else { return }
+        subscribingID = intent.id
+        Task {
+            // Brief pause so the toast/UI settles before Safari takes over.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            await MainActor.run {
+                openURL(url)
+                subscribingID = nil
+            }
+        }
+    }
+
+    private var inboundDisplayAddress: String {
+        if let address = viewModel.user?.inboundAddress, !address.isEmpty { return address }
+        return "you@theclawcast.com"
+    }
+
+    private var inboundAddressCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            MetaLabel(text: "Already subscribe to newsletters?")
+            EditorialCard {
+                VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                    MetaLabel(text: "Your private inbound address")
+                    Text(inboundDisplayAddress)
+                        .font(Theme.Typography.title)
+                        .foregroundStyle(Theme.Palette.amberDeep)
+                        .textSelection(.enabled)
+                        .accessibilityLabel("Inbound email address")
+                    Button {
+                        UIPasteboard.general.string = inboundDisplayAddress
+                    } label: {
+                        Label("Copy email address", systemImage: "doc.on.doc")
+                            .font(Theme.Typography.calloutStrong)
+                            .foregroundStyle(Theme.Palette.amberDeep)
+                    }
+                    .buttonStyle(.plain)
+                    Text("Forward newsletters here, or use this address when you subscribe to new ones. The next episode picks them up automatically.")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.inkSoft)
+                }
             }
         }
     }
@@ -4141,24 +4429,17 @@ final class LocationResolver: NSObject, ObservableObject, CLLocationManagerDeleg
     }
 }
 
-private enum VoiceCardRole {
-    case unassigned
-    case anchor
-    case commentator
-}
-
-private struct OnboardingVoicesStep: View {
+/// Step (conditional, two-host only) — pick the co-host voice. The host was chosen
+/// up front; this single-select picker offers every voice except that host.
+private struct OnboardingCoHostStep: View {
     @EnvironmentObject private var viewModel: AppViewModel
-    @Binding var anchorVoiceID: String?
-    @Binding var commentatorVoiceID: String?
-    let requiresCommentator: Bool
+    let hostVoiceID: String?
+    @Binding var selectedVoiceID: String?
     let onBack: () -> Void
     let onContinue: () -> Void
 
     @StateObject private var samplePlayer = VoiceSamplePlayer()
 
-    /// Voice list to render. Falls back to the legacy 2-voice static list when the
-    /// catalog hasn't loaded yet (e.g. cold app start) so the picker is never empty.
     private var voices: [CatalogVoiceDTO] {
         if !viewModel.catalogVoices.isEmpty { return viewModel.catalogVoices }
         return PodcastSetupView.voiceOptions.map {
@@ -4166,201 +4447,278 @@ private struct OnboardingVoicesStep: View {
         }
     }
 
-    private var continueDisabled: Bool {
-        if viewModel.isLoading { return true }
-        guard let anchor = anchorVoiceID, !anchor.isEmpty else { return true }
-        if requiresCommentator {
-            guard let commentator = commentatorVoiceID, commentator != anchor else { return true }
-        }
-        return false
+    /// Co-host candidates: every voice except the chosen host, so the pair is
+    /// always two distinct voices.
+    private var coHostChoices: [CatalogVoiceDTO] {
+        voices.filter { $0.id != hostVoiceID }
     }
 
-    private var subtitle: String {
-        if requiresCommentator {
-            return "Your Anchor leads, your Commenter reacts. Use each voice's role menu to pick who anchors and who comments. Change either later on the Podcast tab."
-        }
-        return "Pick the voice you want as your Anchor from the role menu on each card. A different guest voice cycles in each episode. Change the anchor anytime on the Podcast tab."
+    private var hostName: String? {
+        guard let hostVoiceID else { return nil }
+        return voices.first(where: { $0.id == hostVoiceID })?.name
+    }
+
+    private var continueDisabled: Bool {
+        guard let selected = selectedVoiceID, !selected.isEmpty else { return true }
+        return selected == hostVoiceID
     }
 
     var body: some View {
         OnboardingStepShell(
-            title: "Choose a voice that fits your style.",
-            subtitle: subtitle,
-            primaryLabel: viewModel.isLoading ? "Saving…" : "Continue",
+            title: "Add a co-host",
+            subtitle: "Your show pairs two voices — pick a co-host to trade off with the host you chose. You can change these later.",
+            primaryLabel: "Continue",
             primaryDisabled: continueDisabled,
             onPrimary: onContinue,
             onBack: onBack
         ) {
-            VStack(spacing: Theme.Spacing.m) {
-                ForEach(voices) { voice in
-                    VoiceChoiceCard(
+            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                if let hostName {
+                    VStack(alignment: .leading, spacing: 4) {
+                        OnboardingFieldLabel(text: "Your host")
+                        Text(hostName)
+                            .font(Theme.Typography.subtitle)
+                            .foregroundStyle(Theme.Palette.ink)
+                    }
+                }
+                OnboardingFieldLabel(text: "Co-host")
+                ForEach(coHostChoices) { voice in
+                    OnboardingVoicePickCard(
                         voice: voice,
-                        role: role(for: voice.id),
+                        isSelected: selectedVoiceID == voice.id,
                         isPlaying: samplePlayer.playingVoiceID == voice.id,
-                        requiresCommentator: requiresCommentator,
-                        onAssignRole: { assignRole($0, to: voice) },
+                        onSelect: { selectedVoiceID = voice.id },
                         onPreview: { samplePlayer.play(voice) }
                     )
                 }
             }
-            .onAppear { applyDefaultsIfEmpty() }
-            .onChange(of: viewModel.catalogVoices) { _, _ in applyDefaultsIfEmpty() }
-            .onChange(of: requiresCommentator) { _, needsCommentator in
-                if !needsCommentator { commentatorVoiceID = nil }
-            }
+            .onAppear { applyDefaultIfEmpty() }
+            .onChange(of: viewModel.catalogVoices) { _, _ in applyDefaultIfEmpty() }
             .onDisappear { samplePlayer.stop() }
         }
     }
 
-    private func role(for id: String) -> VoiceCardRole {
-        if id == anchorVoiceID { return .anchor }
-        if requiresCommentator, id == commentatorVoiceID { return .commentator }
-        return .unassigned
+    private func applyDefaultIfEmpty() {
+        guard selectedVoiceID == nil || selectedVoiceID == hostVoiceID else { return }
+        selectedVoiceID = coHostChoices.first?.id
     }
+}
 
-    /// Assign a role to a voice via the dropdown menu. Keeps the anchor/commentator
-    /// pair coherent by swapping when the picked voice already held the other role.
-    /// - two_hosts:      picking Anchor on the current Commenter swaps the two;
-    ///                   picking Commenter on the current Anchor swaps the two;
-    ///                   picking either on an unassigned voice replaces the previous holder of that role.
-    /// - rotating_guest: only Anchor is offered; picking it reassigns the anchor.
-    private func assignRole(_ newRole: VoiceCardRole, to voice: CatalogVoiceDTO) {
-        let id = voice.id
-        let currentRole = role(for: id)
-        guard newRole != currentRole, newRole != .unassigned else { return }
+/// Step (conditional, greeting on) — the name we greet the user with. Prefilled
+/// from the Sign in with Apple given name.
+private struct OnboardingNameStep: View {
+    @Binding var name: String
+    let suggestedName: String
+    let onBack: () -> Void
+    let onContinue: () -> Void
 
-        switch newRole {
-        case .anchor:
-            let previousAnchor = anchorVoiceID
-            anchorVoiceID = id
-            if requiresCommentator, currentRole == .commentator {
-                commentatorVoiceID = previousAnchor
+    var body: some View {
+        OnboardingStepShell(
+            title: "What should we call you?",
+            subtitle: "We'll greet you by name at the top of each episode.",
+            primaryLabel: "Continue",
+            primaryDisabled: false,
+            onPrimary: onContinue,
+            onBack: onBack
+        ) {
+            EditorialCard {
+                TextField("Your name", text: $name)
+                    .textContentType(.givenName)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
             }
-        case .commentator:
-            guard requiresCommentator else { return }
-            let previousCommentator = commentatorVoiceID
-            commentatorVoiceID = id
-            if currentRole == .anchor {
-                anchorVoiceID = previousCommentator
+            .onAppear {
+                if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    name = suggestedName
+                }
             }
-        case .unassigned:
-            break
-        }
-    }
-
-    /// Pre-fill an anchor (and commentator if needed) on first appearance so a
-    /// user who taps Continue without touching anything gets a valid setup.
-    private func applyDefaultsIfEmpty() {
-        let available = voices.map(\.id)
-        guard !available.isEmpty else { return }
-        if anchorVoiceID == nil {
-            anchorVoiceID = viewModel.profile?.voiceID.flatMap { available.contains($0) ? $0 : nil } ?? available.first
-        }
-        if requiresCommentator, commentatorVoiceID == nil {
-            commentatorVoiceID = available.first(where: { $0 != anchorVoiceID }) ?? available.last
         }
     }
 }
 
-private struct VoiceChoiceCard: View {
-    let voice: CatalogVoiceDTO
-    let role: VoiceCardRole
-    let isPlaying: Bool
-    let requiresCommentator: Bool
-    let onAssignRole: (VoiceCardRole) -> Void
-    let onPreview: () -> Void
+/// Step — pick the topic categories. These enable the matching catalog sources
+/// (on Continue) and seed the swipe deck, mirroring the Flutter topics step.
+private struct OnboardingTopicsStep: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @Binding var selectedTopics: Set<String>
+    let onBack: () -> Void
+    let onContinue: () -> Void
 
-    private var isSelected: Bool { role != .unassigned }
-    private var canPreview: Bool { (voice.previewURL?.isEmpty == false) }
+    /// Distinct topic names in catalog order (first appearance wins).
+    private var topics: [String] {
+        OnboardingStarterPack.packs(from: viewModel.catalogSources).map(\.id)
+    }
 
     var body: some View {
-        EditorialCard {
-            HStack(alignment: .top, spacing: Theme.Spacing.m) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(voice.name)
-                        .font(Theme.Typography.subtitle)
-                        .foregroundStyle(Theme.Palette.ink)
-                    if !voice.description.isEmpty {
-                        Text(voice.description)
-                            .font(Theme.Typography.callout)
-                            .foregroundStyle(Theme.Palette.inkSoft)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if canPreview {
-                        Button(action: onPreview) {
-                            HStack(spacing: 4) {
-                                Image(systemName: isPlaying ? "speaker.wave.2.fill" : "play.circle.fill")
-                                    .font(.system(size: 14, weight: .semibold))
-                                Text(isPlaying ? "Playing…" : "Hear a sample")
-                                    .font(Theme.Typography.calloutStrong)
+        OnboardingStepShell(
+            title: "Pick your topics",
+            subtitle: "Choose what you want in your briefing. We pull sources from these categories and build your first stories to swipe — you can fine-tune any time from the Sources tab.",
+            primaryLabel: "Continue",
+            primaryDisabled: false,
+            onPrimary: onContinue,
+            onBack: onBack
+        ) {
+            EditorialCard {
+                MetaLabel(text: "Topics")
+                Text("Tap to add or remove. Your first swipe deck is built from these.")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Palette.muted)
+                if topics.isEmpty {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Theme.Spacing.m)
+                } else {
+                    OnboardingFlowLayout(spacing: Theme.Spacing.s) {
+                        ForEach(topics, id: \.self) { topic in
+                            OnboardingTopicChip(
+                                label: topic,
+                                systemImage: OnboardingStarterPack.icon(forTopic: topic),
+                                isSelected: selectedTopics.contains(topic)
+                            ) {
+                                if selectedTopics.contains(topic) {
+                                    selectedTopics.remove(topic)
+                                } else {
+                                    selectedTopics.insert(topic)
+                                }
                             }
-                            .foregroundStyle(Theme.Palette.amberDeep)
-                            .padding(.top, 2)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
-                Spacer(minLength: 0)
-                roleMenu
             }
         }
+    }
+}
+
+private struct OnboardingTopicChip: View {
+    let label: String
+    let systemImage: String
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 6) {
+                Image(systemName: isSelected ? "checkmark" : systemImage)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isSelected ? Color.white : Theme.Palette.amberDeep)
+                Text(label)
+                    .font(Theme.Typography.calloutStrong)
+                    .foregroundStyle(isSelected ? Color.white : Theme.Palette.ink)
+            }
+            .padding(.horizontal, Theme.Spacing.m)
+            .padding(.vertical, Theme.Spacing.s)
+            .background(isSelected ? Theme.Palette.amber : Theme.Palette.cream, in: Capsule())
+            .overlay(
+                Capsule().stroke(isSelected ? Theme.Palette.amber : Theme.Palette.rule, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Step — teach the OS share sheet. ClawCast ingests anything the user shares to
+/// it, but that flow lives entirely in the system share sheet, so onboarding
+/// surfaces it once with a mock + a three-step how-to.
+private struct OnboardingShareFromAnywhereStep: View {
+    let onBack: () -> Void
+    let onContinue: () -> Void
+
+    private let howToSteps = [
+        "Reading something good? Tap the Share button in your browser, Mail, or Substack.",
+        "Pick ClawCast from the share sheet.",
+        "We work it into your next pod — automatically.",
+    ]
+
+    var body: some View {
+        OnboardingStepShell(
+            title: "Add from anywhere",
+            subtitle: "One more thing worth knowing: outside the app — reading in your browser, Mail, or Substack — you can send anything straight to ClawCast and we'll work it into your next pod. No copy-paste.",
+            primaryLabel: "Continue",
+            primaryDisabled: false,
+            onPrimary: onContinue,
+            onBack: onBack
+        ) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                shareSheetMock
+                EditorialCard {
+                    ForEach(Array(howToSteps.enumerated()), id: \.offset) { index, text in
+                        HStack(alignment: .top, spacing: Theme.Spacing.m) {
+                            ZStack {
+                                Circle()
+                                    .fill(Theme.Palette.amber)
+                                    .frame(width: 26, height: 26)
+                                Text("\(index + 1)")
+                                    .font(Theme.Typography.calloutStrong)
+                                    .foregroundStyle(.white)
+                            }
+                            Text(text)
+                                .font(Theme.Typography.body)
+                                .foregroundStyle(Theme.Palette.ink)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A stylised, decorative mock of the OS share sheet with the ClawCast row
+    /// highlighted so users recognise the target when they open the real sheet.
+    private var shareSheetMock: some View {
+        VStack(spacing: Theme.Spacing.s) {
+            Capsule()
+                .fill(Theme.Palette.rule)
+                .frame(width: 36, height: 4)
+            HStack(spacing: 6) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.Palette.muted)
+                Text("Share")
+                    .font(Theme.Typography.calloutStrong)
+                    .foregroundStyle(Theme.Palette.muted)
+                Spacer()
+            }
+            HStack(spacing: Theme.Spacing.m) {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Theme.Palette.amber.opacity(0.18))
+                    .frame(width: 36, height: 36)
+                    .overlay(
+                        Image(systemName: "headphones")
+                            .foregroundStyle(Theme.Palette.amberDeep)
+                    )
+                Text("ClawCast")
+                    .font(Theme.Typography.subtitle)
+                    .foregroundStyle(Theme.Palette.ink)
+                Spacer()
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Theme.Palette.amberDeep)
+            }
+            .padding(Theme.Spacing.s)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                    .stroke(Theme.Palette.amber, lineWidth: 1.5)
+            )
+            ForEach(["Messages", "Mail", "Notes"], id: \.self) { sibling in
+                HStack(spacing: Theme.Spacing.m) {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Theme.Palette.rule)
+                        .frame(width: 36, height: 36)
+                    Text(sibling)
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(Theme.Palette.muted)
+                    Spacer()
+                }
+                .padding(.horizontal, Theme.Spacing.s)
+            }
+        }
+        .padding(Theme.Spacing.m)
+        .background(Theme.Palette.cream, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                .stroke(isSelected ? Theme.Palette.amber : Color.clear, lineWidth: 2)
+                .stroke(Theme.Palette.rule, lineWidth: 0.5)
         )
-    }
-
-    private var roleMenu: some View {
-        Menu {
-            Button {
-                onAssignRole(.anchor)
-            } label: {
-                if role == .anchor {
-                    Label("Anchor", systemImage: "checkmark")
-                } else {
-                    Text("Anchor")
-                }
-            }
-            if requiresCommentator {
-                Button {
-                    onAssignRole(.commentator)
-                } label: {
-                    if role == .commentator {
-                        Label("Commentator", systemImage: "checkmark")
-                    } else {
-                        Text("Commentator")
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(menuLabel)
-                    .font(Theme.Typography.calloutStrong)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .foregroundStyle(isSelected ? Color.white : Theme.Palette.amberDeep)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                Capsule()
-                    .fill(isSelected ? Theme.Palette.amber : Color.clear)
-            )
-            .overlay(
-                Capsule()
-                    .stroke(isSelected ? Color.clear : Theme.Palette.amberDeep.opacity(0.4), lineWidth: 1)
-            )
-        }
-        .accessibilityLabel("\(voice.name) role")
-        .accessibilityValue(menuLabel)
-    }
-
-    private var menuLabel: String {
-        switch role {
-        case .anchor: return "Anchor"
-        case .commentator: return "Commentator"
-        case .unassigned: return "Set role"
-        }
     }
 }
 
@@ -4592,17 +4950,23 @@ private struct OnboardingAliasStep: View {
     let onFinish: () -> Void
     @State private var didTriggerGeneration = false
 
+    private static let recapItems = [
+        "Pick your voice and show format",
+        "Choose the topics and sources you trust",
+        "Get a fresh briefing on your schedule",
+    ]
+
     var body: some View {
         OnboardingStepShell(
-            title: "One more thing.",
-            subtitle: "We made you your own private inbound address. Forward any newsletter to it and the next episode picks it up automatically.",
+            title: "You're all set",
+            subtitle: "We're putting your first episode together now. You can change everything later from the app.",
             primaryLabel: "Go to dashboard",
             primaryDisabled: false,
             onPrimary: onFinish,
             onBack: nil
         ) {
             VStack(spacing: Theme.Spacing.m) {
-                aliasCard
+                recapCard
                 generationCard
                 Button(action: openInApplePodcasts) {
                     Label("Open Apple Podcasts", systemImage: "headphones")
@@ -4618,42 +4982,12 @@ private struct OnboardingAliasStep: View {
         }
     }
 
-    @ViewBuilder
-    private var aliasCard: some View {
-        if let alias = viewModel.user?.inboundAddress, !alias.isEmpty {
-            EditorialCard {
-                VStack(alignment: .leading, spacing: 6) {
-                    MetaLabel(text: "Your private inbound address")
-                    Text(alias)
-                        .font(Theme.Typography.title)
-                        .foregroundStyle(Theme.Palette.amberDeep)
-                        .textSelection(.enabled)
-                        .accessibilityLabel("Inbound email address")
-                    Text("Tap and hold to copy. Forward newsletters here, or use this address when you sign up for new ones.")
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(Theme.Palette.inkSoft)
-                    HStack(spacing: Theme.Spacing.m) {
-                        ShareLink(item: alias) {
-                            Label("Share", systemImage: "square.and.arrow.up")
-                                .font(Theme.Typography.calloutStrong)
-                                .foregroundStyle(Theme.Palette.amberDeep)
-                        }
-                        Button {
-                            UIPasteboard.general.string = alias
-                        } label: {
-                            Label("Copy", systemImage: "doc.on.doc")
-                                .font(Theme.Typography.calloutStrong)
-                                .foregroundStyle(Theme.Palette.amberDeep)
-                        }
-                    }
-                    .padding(.top, 4)
+    private var recapCard: some View {
+        EditorialCard {
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                ForEach(Self.recapItems, id: \.self) { item in
+                    ChecklistRow(label: item, isComplete: true)
                 }
-            }
-        } else {
-            EditorialCard {
-                Text("Your private inbound address will appear under Sources once setup finishes.")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Palette.inkSoft)
             }
         }
     }
