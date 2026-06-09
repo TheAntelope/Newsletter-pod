@@ -1476,16 +1476,36 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
     ) -> list[SourceItemRecord]:
         if not source_ids or limit <= 0:
             return []
+        # Bounded, recency-ordered scan of the global source_items collection,
+        # filtered to the user's sources + window in app code. The previous
+        # implementation streamed the *entire* history of every source via a
+        # `where("source_id", "in", chunk)` query with no server-side limit; for
+        # a user with many high-volume sources that streamed thousands of docs
+        # and blew the gRPC stream deadline (~77s observed), which the firestore
+        # client's retry path then masked as an opaque AttributeError — 500ing
+        # the whole candidate-queue endpoint. Ordering by published_at and
+        # capping the scan keeps the read bounded (single-field index, no
+        # composite needed); the trade-off is we don't surface items older than
+        # the scan window, which is fine since the caller only wants the `limit`
+        # newest items within `since`. Mirrors the recency-scan approach in
+        # `list_recent_embedded_items_excluding_sources`.
+        wanted = set(source_ids)
+        scan_size = max(limit * 10, 500)
+        docs = list(
+            self._source_items
+                .order_by("published_at", direction=firestore.Query.DESCENDING)
+                .limit(scan_size)
+                .stream()
+        )
         results: list[SourceItemRecord] = []
-        for chunk_start in range(0, len(source_ids), 30):
-            chunk = source_ids[chunk_start : chunk_start + 30]
-            docs = list(self._source_items.where("source_id", "in", chunk).stream())
-            for doc in docs:
-                data = doc.to_dict() or {}
-                record = SourceItemRecord.model_validate(data)
-                if record.published_at < since:
-                    continue
-                results.append(record)
+        for doc in docs:
+            data = doc.to_dict() or {}
+            record = SourceItemRecord.model_validate(data)
+            if record.source_id not in wanted:
+                continue
+            if record.published_at < since:
+                continue
+            results.append(record)
         results.sort(key=lambda record: record.published_at, reverse=True)
         return results[:limit]
 

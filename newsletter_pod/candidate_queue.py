@@ -225,11 +225,26 @@ class CandidateQueueService:
         source_ids = [s.source_id for s in sources]
         records: list[SourceItemRecord] = []
         if source_ids:
-            records = self.repository.list_source_items_by_source_published_since(
-                source_ids,
-                since=since,
-                limit=self.settings.next_episode_candidates_limit,
-            )
+            try:
+                records = self.repository.list_source_items_by_source_published_since(
+                    source_ids,
+                    since=since,
+                    limit=self.settings.next_episode_candidates_limit,
+                )
+            except Exception:
+                # A failure fetching the broad source-candidate list must not
+                # sink the whole queue: pins and shared items (which the user
+                # explicitly pinned / pushed via the share extension) are
+                # resolved separately below and should still render. Degrade to
+                # an empty source-candidate list rather than 500 the endpoint.
+                logger.warning(
+                    "Candidate-queue source fetch failed; returning pins + "
+                    "shared items only: user=%s sources=%d",
+                    user_id,
+                    len(source_ids),
+                    exc_info=True,
+                )
+                records = []
 
         # Drop excluded items from the visible list — exclude is "remove
         # from queue," not "show as struck-through."
