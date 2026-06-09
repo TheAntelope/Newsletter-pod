@@ -55,7 +55,7 @@ final class OnboardingFlowTests: XCTestCase {
         tapPrimary(label: "Continue")
 
         // Step 4 of 12 — Choose a format (two_hosts is the default selection)
-        assertStep("Pick a show shape.", screenshot: "04-show-shape")
+        assertStep("Choose a format", screenshot: "04-show-shape")
         tapPrimary(label: "Continue")
 
         // Step 5 of 12 — Add a co-host (shown because two_hosts is selected)

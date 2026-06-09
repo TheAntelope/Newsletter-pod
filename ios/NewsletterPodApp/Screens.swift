@@ -4076,7 +4076,7 @@ private struct OnboardingShowStep: View {
 
     var body: some View {
         OnboardingStepShell(
-            title: "Pick a show shape.",
+            title: "Choose a format",
             subtitle: "We'll use these defaults for your host setup. We recommend a 5-minute podcast to start — you can change the duration later on the Podcast tab.",
             primaryLabel: "Continue",
             primaryDisabled: false,
