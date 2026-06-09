@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -162,6 +163,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       );
     }
     if (!mounted) return;
+    // Auto-kick the user's first episode as they leave onboarding — parity with
+    // iOS, which fires generateNow() on the final onboarding step. Not awaited:
+    // generateNow() flips isGenerating synchronously and drives its own polling,
+    // so the dashboard greets the user with the generation banner the moment we
+    // hand off. Runs after the profile/source/schedule writes above so the
+    // backend generates against the picks just saved.
+    unawaited(app.generateNow());
     app.completeOnboarding();
   }
 
