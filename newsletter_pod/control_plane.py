@@ -323,6 +323,13 @@ class ControlPlaneService:
              link on an absent/unverified email, and never when >1 account shares
              the email (that's a pre-existing duplicate for the merge backfill).
           3. Else create a fresh account.
+
+        Known limitation (accepted): this is a non-transactional read-modify-write,
+        so two concurrent FIRST sign-ins for the same verified email (e.g. Apple on
+        iOS and Google on Android during onboarding within the same instant) can
+        both miss and both create an account. The window is narrow and the result
+        is recoverable with scripts/merge_accounts.py; serializing it would need a
+        Firestore transaction / uniqueness sentinel, deferred as a follow-up.
         """
         existing = self.repository.get_user_by_identity(provider, subject)
         if existing is not None:
@@ -356,17 +363,27 @@ class ControlPlaneService:
         """Attach (provider, subject) to an existing account whose email matches.
         Returns the linked user, or None when linking must not happen.
 
-        Account-takeover guard: linking only ever occurs on a provider-asserted
-        *verified* email. An absent or unverified email always yields None, so an
-        attacker who creates an unverified-email account at another provider can
-        never absorb a victim's account."""
+        Account-takeover guards (both sides must be verified):
+          - the INCOMING token must carry a verified email (absent/unverified
+            -> None), and
+          - the TARGET account's own email must be verified (user.email_verified),
+            so an account seeded with an unverified email at another provider is
+            never a link target.
+        Together these mean neither half of a link can be attacker-controlled
+        without the attacker actually owning the email."""
         normalized = normalize_email(email)
         if not normalized or not email_verified:
             return None
         candidates = [
             user
             for user in self.repository.list_users_by_email(normalized)
-            if not any(
+            # Only link ONTO an account whose own email was verified. Without this,
+            # an account seeded with an unverified email at another provider (e.g.
+            # a Firebase email/password sign-up for the victim's address) would be
+            # a valid link target, letting a later verified sign-in attach the
+            # victim's real identity to the attacker's account.
+            if user.email_verified
+            and not any(
                 ident.provider == provider and ident.subject == subject
                 for ident in user.identities
             )
@@ -410,6 +427,17 @@ class ControlPlaneService:
             updates["provider_subject"] = user.provider_subject or subject
         if provider == "apple" and not user.apple_subject:
             updates["apple_subject"] = subject
+        # Self-heal a legacy/mixed-case stored email to normalized form so the
+        # case-sensitive Firestore email lookup can find this account on future
+        # links (and converge the data over time). Never blanks an existing email.
+        normalized_email = normalize_email(email) or normalize_email(user.email)
+        if normalized_email and normalized_email != user.email:
+            updates["email"] = normalized_email
+        # Upgrade (never downgrade) the verified flag when a verified sign-in
+        # arrives, so an account first seen unverified becomes a link target once
+        # a provider verifies its email.
+        if email_verified and not user.email_verified:
+            updates["email_verified"] = True
         has_identity = any(
             ident.provider == provider and ident.subject == subject
             for ident in user.identities
@@ -2799,6 +2827,7 @@ class ControlPlaneService:
                 )
             ],
             email=normalized_email,
+            email_verified=email_verified,
             display_name=display_name,
             timezone="UTC",
             trial_premium_pods_remaining=self.settings.trial_premium_pods_total,

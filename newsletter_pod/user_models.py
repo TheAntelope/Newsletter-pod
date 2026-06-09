@@ -41,6 +41,14 @@ class UserRecord(BaseModel):
     # falls back to the legacy fields for those.
     identities: list[UserIdentity] = Field(default_factory=list)
     email: Optional[str] = None
+    # Whether `email` was provider-verified. Gates whether this account may be a
+    # cross-provider LINK TARGET: a later verified sign-in only attaches to an
+    # account whose own email was verified, so an account seeded with an
+    # unverified email (e.g. a Firebase email/password sign-up) can never absorb
+    # a victim. Defaults True because every pre-migration account was created via
+    # Apple or Google sign-in, both of which only assert verified emails; only an
+    # explicit unverified sign-in (post-migration) sets it False.
+    email_verified: bool = True
     display_name: str = "Listener"
     timezone: str = "UTC"
     inbound_alias: Optional[str] = None

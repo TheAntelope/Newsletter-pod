@@ -38,9 +38,14 @@ from google.cloud import firestore
 PREFIX = "newsletter_pod"
 
 # Collections that carry a `user_id` field and hold per-user *content* that
-# should follow the user into the canonical account. Singletons keyed by user_id
-# as the doc id (profiles, subscriptions, delivery_schedules, churn_risks) are
-# deliberately excluded — the canonical account keeps its own.
+# should follow the user into the canonical account, re-pointed by a field
+# update. Excluded on purpose:
+#   - Singletons keyed by user_id as the doc id (profiles, subscriptions,
+#     delivery_schedules, churn_risks): the canonical account keeps its own.
+#   - Composite-doc-id collections (next_episode_overrides = "{user_id}:{hash}",
+#     user_cursors = "{user_id}:{source_id}"): a field-only re-point leaves the
+#     absorbed user_id in the doc id, so consume/delete-by-id would silently
+#     no-op. These transient pins/cursors simply do not migrate.
 CONTENT_COLLECTIONS = [
     "user_sources",
     "user_episodes",
@@ -51,7 +56,6 @@ CONTENT_COLLECTIONS = [
     "swipe_decks",
     "user_substack_intents",
     "device_tokens",
-    "next_episode_overrides",
     "cost_records",
     "billing_events",
 ]
@@ -106,7 +110,8 @@ def _identities_of(data: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def _merge(db: firestore.Client, canonical_id: str, absorb_id: str, apply: bool) -> None:
+def _merge(db: firestore.Client, canonical_id: str, absorb_id: str,
+           apply: bool, force_mismatch: bool) -> None:
     users = db.collection(f"{PREFIX}_users")
     canon_doc = users.document(canonical_id).get()
     absorb_doc = users.document(absorb_id).get()
@@ -115,6 +120,17 @@ def _merge(db: firestore.Client, canonical_id: str, absorb_id: str, apply: bool)
     assert canonical_id != absorb_id, "canonical and absorb must differ"
     canon = canon_doc.to_dict() or {}
     absorb = absorb_doc.to_dict() or {}
+
+    # Safety: refuse to merge two accounts that do not share an email — the whole
+    # premise of a merge. Guards against a fat-fingered --absorb id destroying an
+    # unrelated real user. --force-mismatch overrides for rare legitimate cases.
+    canon_email = _normalize_email(canon.get("email"))
+    absorb_email = _normalize_email(absorb.get("email"))
+    if canon_email != absorb_email and not force_mismatch:
+        raise SystemExit(
+            f"ABORT: emails differ (canonical={canon_email!r} absorbed={absorb_email!r}). "
+            f"Pass --force-mismatch only if you are certain this is the same person."
+        )
 
     # Merge identity sets (canonical's + absorbed's), dedup by (provider, subject).
     merged: list[dict[str, Any]] = []
@@ -129,6 +145,17 @@ def _merge(db: firestore.Client, canonical_id: str, absorb_id: str, apply: bool)
     print(f"=== MERGE {absorb_id}  ->  {canonical_id} {'(APPLY)' if apply else '(dry-run)'} ===")
     print(f"  canonical email={canon.get('email')}  absorbed email={absorb.get('email')}")
     print(f"  merged identities: {identity_keys}")
+
+    # Alias orphan warning: inbound newsletter mail is routed by the user doc's
+    # inbound_alias. Deleting the absorbed user drops its alias, so any publication
+    # still emailing it goes to /dev/null (200 + "ignored"). Canonical keeps its
+    # own alias; the user must re-point any subscriptions on the absorbed alias.
+    absorbed_alias = absorb.get("inbound_alias")
+    if absorbed_alias:
+        print(f"  WARNING: absorbed account's inbound alias '{absorbed_alias}' will stop "
+              f"receiving mail after deletion.\n"
+              f"           Re-subscribe its newsletters to canonical's alias "
+              f"'{canon.get('inbound_alias')}' before/after merging.")
 
     # Count content to re-point.
     plan: dict[str, list[str]] = {}
@@ -169,19 +196,46 @@ def _merge(db: firestore.Client, canonical_id: str, absorb_id: str, apply: bool)
     print("  done.")
 
 
+def _normalize_emails(db: firestore.Client, apply: bool) -> None:
+    """One-time backfill: lower-case every stored user email so the case-sensitive
+    Firestore `where(email==...)` link lookup matches legacy mixed-case rows.
+    Run this once before relying on cross-provider linking for pre-migration users.
+    """
+    users = db.collection(f"{PREFIX}_users")
+    changed = 0
+    for doc in users.stream():
+        data = doc.to_dict() or {}
+        raw = data.get("email")
+        norm = _normalize_email(raw)
+        if norm and norm != raw:
+            changed += 1
+            print(f"  {doc.id}: {raw!r} -> {norm!r}")
+            if apply:
+                users.document(doc.id).update({"email": norm})
+    print(f"\n{'updated' if apply else 'would update'} {changed} user email(s)."
+          + ("" if apply else " Re-run with --apply to execute."))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--audit", action="store_true", help="list duplicate-email groups")
+    ap.add_argument("--normalize-emails", action="store_true",
+                    help="one-time backfill: lower-case all stored user emails")
     ap.add_argument("--canonical", help="account id to keep")
     ap.add_argument("--absorb", help="account id to fold in and delete")
     ap.add_argument("--apply", action="store_true", help="execute (default: dry-run)")
+    ap.add_argument("--force-mismatch", action="store_true",
+                    help="allow merging accounts whose emails differ (use with care)")
     args = ap.parse_args()
 
     db = firestore.Client()
+    if args.normalize_emails:
+        _normalize_emails(db, args.apply)
+        return
     if args.audit or not (args.canonical and args.absorb):
         _audit(db)
         return
-    _merge(db, args.canonical, args.absorb, args.apply)
+    _merge(db, args.canonical, args.absorb, args.apply, args.force_mismatch)
 
 
 if __name__ == "__main__":

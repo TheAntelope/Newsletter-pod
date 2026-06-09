@@ -303,7 +303,93 @@ def test_new_user_records_identity_and_normalized_email():
     body = _firebase_sign_in(client, container, "fb-sub", "MixedCase@Example.com", verified=True)
     user = container.control_plane.repository.get_user(body["user"]["id"])
     assert user.email == "mixedcase@example.com"
+    assert user.email_verified is True
     assert len(user.identities) == 1
     ident = user.identities[0]
     assert ident.provider == "firebase" and ident.subject == "fb-sub"
     assert ident.email_verified is True
+
+
+def test_unverified_new_user_records_email_verified_false():
+    container, client = _build_app()
+    body = _firebase_sign_in(client, container, "fb-sub", "x@example.com", verified=False)
+    user = container.control_plane.repository.get_user(body["user"]["id"])
+    assert user.email == "x@example.com"  # still stored + normalized
+    assert user.email_verified is False  # but not a future link target
+
+
+def test_no_link_onto_unverified_seeded_account():
+    """Account-takeover guard (candidate side): an account created with an
+    UNVERIFIED email must NOT be a link target for a later verified sign-in.
+    Otherwise an attacker seeding victim@x with an unverified provider could
+    absorb the victim's real identity."""
+    container, client = _build_app()
+    # Attacker seeds an unverified-email account.
+    seeded = _firebase_sign_in(client, container, "attacker-fb", "victim@example.com", verified=False)
+    # Victim later signs in with Apple, verified, same email.
+    victim = _apple_sign_in(client, container, "victim-apple", "victim@example.com", verified=True)
+
+    assert victim["is_new_user"] is True
+    assert victim["user"]["id"] != seeded["user"]["id"]  # did NOT absorb the seeded account
+
+
+def test_verified_signin_upgrades_then_links():
+    """An account first seen unverified becomes a valid link target once a
+    provider verifies the SAME identity's email."""
+    container, client = _build_app()
+    seeded = _firebase_sign_in(client, container, "fb-sub", "u@example.com", verified=False)
+    # Same firebase identity signs in again, now verified -> upgrades the account.
+    _firebase_sign_in(client, container, "fb-sub", "u@example.com", verified=True)
+    user = container.control_plane.repository.get_user(seeded["user"]["id"])
+    assert user.email_verified is True
+    # Now an Apple sign-in with the same verified email links in.
+    apple = _apple_sign_in(client, container, "apple-sub", "u@example.com", verified=True)
+    assert apple["is_new_user"] is False
+    assert apple["user"]["id"] == seeded["user"]["id"]
+
+
+# --- Pure helpers ------------------------------------------------------------
+
+
+def test_identity_keys_construction():
+    from newsletter_pod.user_models import UserIdentity
+    from newsletter_pod.user_repository import _identity_keys
+
+    # Multi-identity + legacy fields, with an overlapping duplicate -> sorted/deduped.
+    user = UserRecord(
+        id="u1",
+        apple_subject="apple-sub",
+        identity_provider="firebase",
+        provider_subject="fb-sub",
+        identities=[
+            UserIdentity(provider="firebase", subject="fb-sub"),  # dup of legacy pair
+            UserIdentity(provider="apple", subject="apple-sub"),  # dup of apple_subject
+            UserIdentity(provider="google", subject="g-sub"),
+        ],
+        created_at=_now(), updated_at=_now(),
+    )
+    assert _identity_keys(user) == ["apple:apple-sub", "firebase:fb-sub", "google:g-sub"]
+
+    # Legacy-only row (no identities list) still yields its keys.
+    legacy = UserRecord(id="u2", apple_subject="a2", created_at=_now(), updated_at=_now())
+    assert _identity_keys(legacy) == ["apple:a2"]
+
+
+def test_user_record_ignores_extra_identity_keys_field():
+    # Firestore stores a denormalized identity_keys field that is NOT on the model;
+    # model_validate must drop it rather than error.
+    user = UserRecord.model_validate({
+        "id": "u1", "identity_keys": ["apple:x", "firebase:y"],
+        "created_at": _now(), "updated_at": _now(),
+    })
+    assert user.id == "u1"
+    assert not hasattr(user, "identity_keys")
+
+
+def test_claim_is_true_coercion():
+    from newsletter_pod.auth import _claim_is_true
+
+    for truthy in (True, "true", "True", "  TRUE  "):
+        assert _claim_is_true(truthy) is True
+    for falsy in (False, "false", "False", "", "yes", "1", None, 1, {}, ["true"]):
+        assert _claim_is_true(falsy) is False

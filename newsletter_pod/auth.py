@@ -99,6 +99,13 @@ class FirebaseIdentityVerifier:
         if not subject:
             raise AuthError("Firebase identity token missing subject")
 
+        # SECURITY NOTE: email_verified is trusted as-is because the only enabled
+        # Firebase sign-in methods are Google (asserts verified emails) and Apple,
+        # and email/password keeps email_verified=False until the mailbox owner
+        # clicks the link. If a provider that lets the caller assert an arbitrary
+        # verified email is ever enabled (SAML/OIDC/custom-token), gate linking on
+        # an allowlist of claims["firebase"]["sign_in_provider"] before trusting
+        # email_verified here. See NEXT_STEPS.
         return FirebaseIdentity(
             subject=subject,
             email=claims.get("email"),
