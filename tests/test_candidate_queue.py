@@ -59,6 +59,15 @@ def _now() -> datetime:
     return datetime(2026, 5, 24, 10, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _freeze_candidate_queue_clock(monkeypatch):
+    """Pin the candidate-queue clock to `_now()` so the 14-day lookback window
+    is computed relative to the fixtures' fixed seed time, not the wall clock.
+    Without this the candidates tests go red whenever the real date drifts more
+    than the lookback past the hardcoded `_now()` (they did, from 2026-06-08)."""
+    monkeypatch.setattr("newsletter_pod.candidate_queue.utc_now", _now)
+
+
 def _user_source(
     user_id: str, source_id: str, *, rss_url: str = "https://example.com/rss"
 ) -> UserSourceRecord:
@@ -236,6 +245,39 @@ def test_list_candidates_surfaces_recent_items_from_user_sources():
     assert set(keys) == {"a-1", "a-2"}
     # Newest first.
     assert keys == ["a-1", "a-2"]
+
+
+def test_list_candidates_survives_source_fetch_failure(monkeypatch):
+    """A failure fetching the broad source-candidate list must not 500 the
+    endpoint: pins and shared items are resolved separately and must still
+    render. Regression for the source query streaming the full history of every
+    source and blowing the Firestore stream deadline for users with many
+    high-volume sources (which surfaced as an opaque 500 and an empty queue)."""
+    from newsletter_pod.shared_items import build_shared_item
+
+    service, repo = _make_service()
+    repo.replace_user_sources("u-1", [_user_source("u-1", "src-a")])
+
+    # An item the user explicitly pushed via the share extension.
+    shared = build_shared_item(
+        user_id="u-1",
+        title="Shared note",
+        body_text="something the user shared",
+        article_url="https://example.com/shared",
+        received_at=_now(),
+    )
+    repo.save_inbound_item(shared)
+
+    # Simulate the broad source query failing (e.g. stream deadline exceeded).
+    def boom(*args, **kwargs):
+        raise RuntimeError("firestore stream deadline exceeded")
+
+    monkeypatch.setattr(repo, "list_source_items_by_source_published_since", boom)
+
+    result = service.list_candidates("u-1", per_episode_cap=10)
+    keys = [c["dedupe_key"] for c in result["candidates"]]
+    assert keys == [f"inbound:{shared.id}"]
+    assert result["candidates"][0]["shared"] is True
 
 
 def test_list_candidates_drops_excluded_items_from_view():
