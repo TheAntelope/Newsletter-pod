@@ -15,6 +15,16 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def normalize_email(email: str | None) -> str | None:
+    """Lower-case + trim an email for equality comparison and storage. Used as
+    the join key for cross-provider account linking, so it must be applied
+    consistently on both write and lookup. Returns None for empty/whitespace."""
+    if not email:
+        return None
+    cleaned = email.strip().lower()
+    return cleaned or None
+
+
 def parse_datetime(value: str | None) -> datetime | None:
     if not value:
         return None

@@ -14,6 +14,18 @@ class AuthError(RuntimeError):
     pass
 
 
+def _claim_is_true(value: object) -> bool:
+    """Coerce a JWT boolean-ish claim to bool. Apple serializes email_verified /
+    is_private_email as the *strings* "true"/"false" in some token versions and
+    as real booleans in others; Firebase uses a real bool. Anything we don't
+    positively recognize as true is treated as false (fail-closed)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return False
+
+
 class AppleIdentityVerifier:
     _APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
     _APPLE_ISSUER = "https://appleid.apple.com"
@@ -45,6 +57,8 @@ class AppleIdentityVerifier:
         return AppleIdentity(
             subject=subject,
             email=claims.get("email"),
+            email_verified=_claim_is_true(claims.get("email_verified")),
+            is_private_email=_claim_is_true(claims.get("is_private_email")),
         )
 
 
@@ -88,6 +102,7 @@ class FirebaseIdentityVerifier:
         return FirebaseIdentity(
             subject=subject,
             email=claims.get("email"),
+            email_verified=_claim_is_true(claims.get("email_verified")),
         )
 
 
