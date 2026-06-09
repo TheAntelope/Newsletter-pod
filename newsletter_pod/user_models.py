@@ -8,6 +8,20 @@ from pydantic import BaseModel, Field
 from .models import SourceItemRef
 
 
+class UserIdentity(BaseModel):
+    """One external sign-in identity attached to a user. A user may hold several
+    (e.g. Apple on iOS + Firebase/Google on Android) once cross-provider linking
+    resolves them to the same account. `email_verified` records whether the
+    provider asserted a verified email when the identity was attached — linking
+    is only ever performed on a verified email."""
+
+    provider: str
+    subject: str
+    email: Optional[str] = None
+    email_verified: bool = False
+    linked_at: Optional[datetime] = None
+
+
 class UserRecord(BaseModel):
     id: str
     # apple_subject is no longer required: Firebase/Google users (Flutter migration,
@@ -19,7 +33,22 @@ class UserRecord(BaseModel):
     # Firebase uid (apple_subject is None). The internal `id` stays canonical.
     identity_provider: Optional[str] = None
     provider_subject: Optional[str] = None
+    # All external identities resolving to this account — the multi-provider
+    # superset of the legacy apple_subject / (identity_provider, provider_subject)
+    # fields, which stay dual-written for rollback safety. Cross-provider linking
+    # appends here when a verified email matches an existing account (see
+    # authenticate_* in control_plane). Empty on pre-migration rows; resolution
+    # falls back to the legacy fields for those.
+    identities: list[UserIdentity] = Field(default_factory=list)
     email: Optional[str] = None
+    # Whether `email` was provider-verified. Gates whether this account may be a
+    # cross-provider LINK TARGET: a later verified sign-in only attaches to an
+    # account whose own email was verified, so an account seeded with an
+    # unverified email (e.g. a Firebase email/password sign-up) can never absorb
+    # a victim. Defaults True because every pre-migration account was created via
+    # Apple or Google sign-in, both of which only assert verified emails; only an
+    # explicit unverified sign-in (post-migration) sets it False.
+    email_verified: bool = True
     display_name: str = "Listener"
     timezone: str = "UTC"
     inbound_alias: Optional[str] = None
@@ -353,8 +382,17 @@ class AuthenticatedSession(BaseModel):
 class AppleIdentity(BaseModel):
     subject: str
     email: Optional[str] = None
+    # Apple sets email_verified on the identity token (string "true"/"false" or
+    # bool). Private-relay addresses are Apple-issued and still verified.
+    # email_verified gates cross-provider account linking — never link on an
+    # unverified or absent email (account-takeover guard).
+    email_verified: bool = False
+    is_private_email: bool = False
 
 
 class FirebaseIdentity(BaseModel):
     subject: str
     email: Optional[str] = None
+    # Firebase's email_verified reflects the federated provider (Google = true,
+    # unverified email/password = false). Same linking gate as Apple.
+    email_verified: bool = False

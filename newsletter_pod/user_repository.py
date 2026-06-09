@@ -14,7 +14,20 @@ from .models import (
     SourcePollingStateRecord,
     SwipeDeckRecord,
 )
-from .utils import utc_now
+from .utils import normalize_email, utc_now
+
+
+def _identity_keys(user: UserRecord) -> list[str]:
+    """Flatten a user's identities (plus the legacy apple_subject / neutral pair)
+    into "provider:subject" strings for Firestore array-contains resolution.
+    Folding the legacy fields in keeps a user resolvable even if its
+    `identities` list hasn't been backfilled yet."""
+    keys = {f"{ident.provider}:{ident.subject}" for ident in user.identities}
+    if user.identity_provider and user.provider_subject:
+        keys.add(f"{user.identity_provider}:{user.provider_subject}")
+    if user.apple_subject:
+        keys.add(f"apple:{user.apple_subject}")
+    return sorted(keys)
 
 
 def _source_item_doc_id(dedupe_key: str) -> str:
@@ -70,6 +83,14 @@ class ControlPlaneRepository(ABC):
 
     @abstractmethod
     def get_user_by_identity(self, provider: str, subject: str) -> Optional[UserRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_users_by_email(self, email: str) -> list[UserRecord]:
+        """Return every user whose (normalized) email equals `email`. Used by
+        cross-provider account linking to find an existing account to attach a
+        new identity to. Returns [] for an empty email. More than one result
+        means a pre-existing duplicate that the merge backfill should heal."""
         raise NotImplementedError
 
     @abstractmethod
@@ -573,12 +594,27 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
             return self.get_user_by_apple_subject(subject)
         return None
 
+    def list_users_by_email(self, email: str) -> list[UserRecord]:
+        normalized = normalize_email(email)
+        if not normalized:
+            return []
+        # Scan rather than index so a changed email can't leave a stale match
+        # (the corpus is tiny in-memory / in tests).
+        return [
+            user
+            for user in self._users.values()
+            if normalize_email(user.email) == normalized
+        ]
+
     def save_user(self, user: UserRecord) -> None:
         self._users[user.id] = user
         if user.apple_subject:
             self._users_by_subject[user.apple_subject] = user.id
         if user.identity_provider and user.provider_subject:
             self._users_by_identity[(user.identity_provider, user.provider_subject)] = user.id
+        # Index every attached identity so linked providers all resolve here.
+        for ident in user.identities:
+            self._users_by_identity[(ident.provider, ident.subject)] = user.id
 
     def get_profile(self, user_id: str) -> Optional[PodcastProfileRecord]:
         return self._profiles.get(user_id)
@@ -1169,8 +1205,18 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         return UserRecord.model_validate(docs[0].to_dict())
 
     def get_user_by_identity(self, provider: str, subject: str) -> Optional[UserRecord]:
-        # Two equality filters resolve via Firestore's automatic single-field
-        # indexes (no composite index required).
+        # Primary path: the denormalized identity_keys array (auto-indexed
+        # array-contains) resolves a user by ANY of its linked identities.
+        docs = list(
+            self._users
+            .where("identity_keys", "array_contains", f"{provider}:{subject}")
+            .limit(1)
+            .stream()
+        )
+        if docs:
+            return UserRecord.model_validate(docs[0].to_dict())
+        # Fallbacks for pre-migration rows that have no identity_keys yet: the
+        # legacy neutral pair, then the Apple subject.
         docs = list(
             self._users
             .where("identity_provider", "==", provider)
@@ -1180,13 +1226,23 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         )
         if docs:
             return UserRecord.model_validate(docs[0].to_dict())
-        # Fall back to the Apple lookup for pre-migration rows.
         if provider == "apple":
             return self.get_user_by_apple_subject(subject)
         return None
 
+    def list_users_by_email(self, email: str) -> list[UserRecord]:
+        normalized = normalize_email(email)
+        if not normalized:
+            return []
+        docs = list(self._users.where("email", "==", normalized).stream())
+        return [UserRecord.model_validate(doc.to_dict()) for doc in docs]
+
     def save_user(self, user: UserRecord) -> None:
-        self._users.document(user.id).set(user.model_dump(mode="python"))
+        data = user.model_dump(mode="python")
+        # Denormalized index for cross-provider resolution. Not a model field;
+        # model_validate ignores it on read.
+        data["identity_keys"] = _identity_keys(user)
+        self._users.document(user.id).set(data)
 
     def get_profile(self, user_id: str) -> Optional[PodcastProfileRecord]:
         doc = self._profiles.document(user_id).get()

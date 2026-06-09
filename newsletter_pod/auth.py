@@ -14,6 +14,18 @@ class AuthError(RuntimeError):
     pass
 
 
+def _claim_is_true(value: object) -> bool:
+    """Coerce a JWT boolean-ish claim to bool. Apple serializes email_verified /
+    is_private_email as the *strings* "true"/"false" in some token versions and
+    as real booleans in others; Firebase uses a real bool. Anything we don't
+    positively recognize as true is treated as false (fail-closed)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return False
+
+
 class AppleIdentityVerifier:
     _APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
     _APPLE_ISSUER = "https://appleid.apple.com"
@@ -45,6 +57,8 @@ class AppleIdentityVerifier:
         return AppleIdentity(
             subject=subject,
             email=claims.get("email"),
+            email_verified=_claim_is_true(claims.get("email_verified")),
+            is_private_email=_claim_is_true(claims.get("is_private_email")),
         )
 
 
@@ -85,9 +99,17 @@ class FirebaseIdentityVerifier:
         if not subject:
             raise AuthError("Firebase identity token missing subject")
 
+        # SECURITY NOTE: email_verified is trusted as-is because the only enabled
+        # Firebase sign-in methods are Google (asserts verified emails) and Apple,
+        # and email/password keeps email_verified=False until the mailbox owner
+        # clicks the link. If a provider that lets the caller assert an arbitrary
+        # verified email is ever enabled (SAML/OIDC/custom-token), gate linking on
+        # an allowlist of claims["firebase"]["sign_in_provider"] before trusting
+        # email_verified here. See NEXT_STEPS.
         return FirebaseIdentity(
             subject=subject,
             email=claims.get("email"),
+            email_verified=_claim_is_true(claims.get("email_verified")),
         )
 
 

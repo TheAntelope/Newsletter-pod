@@ -13,12 +13,26 @@ class _FakeVerifier:
     """Stand-in for Apple/Firebase verifiers: verify() ignores the token and
     returns a fixed identity (mirrors FakeAppleVerifier in test_control_plane_api)."""
 
-    def __init__(self, subject: str, email: str | None = None) -> None:
+    def __init__(
+        self,
+        subject: str,
+        email: str | None = None,
+        email_verified: bool = False,
+    ) -> None:
         self.subject = subject
         self.email = email
+        self.email_verified = email_verified
 
     def verify(self, _token: str):
-        return type("Identity", (), {"subject": self.subject, "email": self.email})()
+        return type(
+            "Identity",
+            (),
+            {
+                "subject": self.subject,
+                "email": self.email,
+                "email_verified": self.email_verified,
+            },
+        )()
 
 
 def _build_app():
@@ -154,3 +168,228 @@ def test_get_user_by_identity_lookup_and_isolation():
     # there is no cross-provider leakage to the Apple fallback.
     assert repo.get_user_by_identity("firebase", "nope") is None
     assert repo.get_user_by_identity("apple", "fb-x") is None
+
+
+def test_list_users_by_email_normalizes_and_isolates():
+    container, _client = _build_app()
+    repo = container.control_plane.repository
+    repo.save_user(UserRecord(id="u-a", email="Person@Example.com", created_at=_now(), updated_at=_now()))
+    repo.save_user(UserRecord(id="u-b", email="other@example.com", created_at=_now(), updated_at=_now()))
+
+    # Case-insensitive / trimmed match.
+    assert {u.id for u in repo.list_users_by_email("  person@example.com ")} == {"u-a"}
+    assert repo.list_users_by_email("missing@example.com") == []
+    # Empty / None email never matches.
+    assert repo.list_users_by_email("") == []
+
+
+# --- Cross-provider account linking ------------------------------------------
+
+
+def _apple_sign_in(client, container, subject, email=None, verified=False):
+    container.control_plane.apple_identity_verifier = _FakeVerifier(subject, email, verified)
+    return client.post("/v1/auth/apple", json={"identity_token": "t"}).json()
+
+
+def _firebase_sign_in(client, container, subject, email=None, verified=False):
+    container.control_plane.firebase_identity_verifier = _FakeVerifier(subject, email, verified)
+    return client.post("/v1/auth/firebase", json={"id_token": "t"}).json()
+
+
+def test_firebase_links_to_apple_account_via_verified_email():
+    """The core fix: an Apple (iOS) user signing in with Google (Firebase) under
+    the same verified email resolves to the SAME account, not a duplicate."""
+    container, client = _build_app()
+    apple = _apple_sign_in(client, container, "apple-sub", "vince@example.com", verified=True)
+
+    fb = _firebase_sign_in(client, container, "fb-sub", "vince@example.com", verified=True)
+
+    assert fb["is_new_user"] is False
+    assert fb["user"]["id"] == apple["user"]["id"]  # same account
+    # Both identities now resolve to the one account.
+    repo = container.control_plane.repository
+    assert repo.get_user_by_identity("apple", "apple-sub").id == apple["user"]["id"]
+    assert repo.get_user_by_identity("firebase", "fb-sub").id == apple["user"]["id"]
+    # The Apple account kept its legacy slots; Firebase identity was appended.
+    user = repo.get_user(apple["user"]["id"])
+    assert user.identity_provider == "apple" and user.apple_subject == "apple-sub"
+    providers = {ident.provider for ident in user.identities}
+    assert providers == {"apple", "firebase"}
+
+
+def test_apple_links_to_firebase_account_via_verified_email():
+    """Reverse direction: a Firebase (Android) user adding Apple sign-in links,
+    and the previously-empty apple_subject slot is backfilled."""
+    container, client = _build_app()
+    fb = _firebase_sign_in(client, container, "fb-sub", "vince@example.com", verified=True)
+
+    apple = _apple_sign_in(client, container, "apple-sub", "vince@example.com", verified=True)
+
+    assert apple["is_new_user"] is False
+    assert apple["user"]["id"] == fb["user"]["id"]
+    user = container.control_plane.repository.get_user(fb["user"]["id"])
+    # Firebase stayed the primary; apple_subject backfilled into the free slot.
+    assert user.identity_provider == "firebase"
+    assert user.apple_subject == "apple-sub"
+    assert {i.provider for i in user.identities} == {"firebase", "apple"}
+
+
+def test_no_link_when_email_unverified():
+    """Account-takeover guard: an unverified email never links."""
+    container, client = _build_app()
+    apple = _apple_sign_in(client, container, "apple-sub", "vince@example.com", verified=True)
+
+    fb = _firebase_sign_in(client, container, "fb-sub", "vince@example.com", verified=False)
+
+    assert fb["is_new_user"] is True
+    assert fb["user"]["id"] != apple["user"]["id"]  # separate account
+
+
+def test_no_link_when_email_absent():
+    container, client = _build_app()
+    apple = _apple_sign_in(client, container, "apple-sub", "vince@example.com", verified=True)
+
+    fb = _firebase_sign_in(client, container, "fb-sub", email=None, verified=True)
+
+    assert fb["is_new_user"] is True
+    assert fb["user"]["id"] != apple["user"]["id"]
+
+
+def test_no_link_when_multiple_accounts_share_email():
+    """Ambiguous (pre-existing duplicate) emails are not auto-merged at sign-in —
+    that is the merge backfill's job. A third sign-in must not silently pick one."""
+    container, client = _build_app()
+    repo = container.control_plane.repository
+    for i in (1, 2):
+        repo.save_user(UserRecord(
+            id=f"dup-{i}", email="dup@example.com",
+            identity_provider="firebase", provider_subject=f"old-fb-{i}",
+            created_at=_now(), updated_at=_now(),
+        ))
+
+    apple = _apple_sign_in(client, container, "apple-sub", "dup@example.com", verified=True)
+
+    assert apple["is_new_user"] is True
+    assert apple["user"]["id"] not in {"dup-1", "dup-2"}
+
+
+def test_link_is_idempotent():
+    """After linking, the linked identity resolves directly (step 1) and does not
+    append a duplicate identity entry."""
+    container, client = _build_app()
+    _apple_sign_in(client, container, "apple-sub", "vince@example.com", verified=True)
+    first = _firebase_sign_in(client, container, "fb-sub", "vince@example.com", verified=True)
+    second = _firebase_sign_in(client, container, "fb-sub", "vince@example.com", verified=True)
+
+    assert first["user"]["id"] == second["user"]["id"]
+    assert second["is_new_user"] is False
+    user = container.control_plane.repository.get_user(first["user"]["id"])
+    fb_identities = [i for i in user.identities if i.provider == "firebase"]
+    assert len(fb_identities) == 1
+
+
+def test_link_matches_email_case_insensitively():
+    container, client = _build_app()
+    apple = _apple_sign_in(client, container, "apple-sub", "Vince@Example.com", verified=True)
+
+    fb = _firebase_sign_in(client, container, "fb-sub", "vince@example.com", verified=True)
+
+    assert fb["is_new_user"] is False
+    assert fb["user"]["id"] == apple["user"]["id"]
+
+
+def test_new_user_records_identity_and_normalized_email():
+    container, client = _build_app()
+    body = _firebase_sign_in(client, container, "fb-sub", "MixedCase@Example.com", verified=True)
+    user = container.control_plane.repository.get_user(body["user"]["id"])
+    assert user.email == "mixedcase@example.com"
+    assert user.email_verified is True
+    assert len(user.identities) == 1
+    ident = user.identities[0]
+    assert ident.provider == "firebase" and ident.subject == "fb-sub"
+    assert ident.email_verified is True
+
+
+def test_unverified_new_user_records_email_verified_false():
+    container, client = _build_app()
+    body = _firebase_sign_in(client, container, "fb-sub", "x@example.com", verified=False)
+    user = container.control_plane.repository.get_user(body["user"]["id"])
+    assert user.email == "x@example.com"  # still stored + normalized
+    assert user.email_verified is False  # but not a future link target
+
+
+def test_no_link_onto_unverified_seeded_account():
+    """Account-takeover guard (candidate side): an account created with an
+    UNVERIFIED email must NOT be a link target for a later verified sign-in.
+    Otherwise an attacker seeding victim@x with an unverified provider could
+    absorb the victim's real identity."""
+    container, client = _build_app()
+    # Attacker seeds an unverified-email account.
+    seeded = _firebase_sign_in(client, container, "attacker-fb", "victim@example.com", verified=False)
+    # Victim later signs in with Apple, verified, same email.
+    victim = _apple_sign_in(client, container, "victim-apple", "victim@example.com", verified=True)
+
+    assert victim["is_new_user"] is True
+    assert victim["user"]["id"] != seeded["user"]["id"]  # did NOT absorb the seeded account
+
+
+def test_verified_signin_upgrades_then_links():
+    """An account first seen unverified becomes a valid link target once a
+    provider verifies the SAME identity's email."""
+    container, client = _build_app()
+    seeded = _firebase_sign_in(client, container, "fb-sub", "u@example.com", verified=False)
+    # Same firebase identity signs in again, now verified -> upgrades the account.
+    _firebase_sign_in(client, container, "fb-sub", "u@example.com", verified=True)
+    user = container.control_plane.repository.get_user(seeded["user"]["id"])
+    assert user.email_verified is True
+    # Now an Apple sign-in with the same verified email links in.
+    apple = _apple_sign_in(client, container, "apple-sub", "u@example.com", verified=True)
+    assert apple["is_new_user"] is False
+    assert apple["user"]["id"] == seeded["user"]["id"]
+
+
+# --- Pure helpers ------------------------------------------------------------
+
+
+def test_identity_keys_construction():
+    from newsletter_pod.user_models import UserIdentity
+    from newsletter_pod.user_repository import _identity_keys
+
+    # Multi-identity + legacy fields, with an overlapping duplicate -> sorted/deduped.
+    user = UserRecord(
+        id="u1",
+        apple_subject="apple-sub",
+        identity_provider="firebase",
+        provider_subject="fb-sub",
+        identities=[
+            UserIdentity(provider="firebase", subject="fb-sub"),  # dup of legacy pair
+            UserIdentity(provider="apple", subject="apple-sub"),  # dup of apple_subject
+            UserIdentity(provider="google", subject="g-sub"),
+        ],
+        created_at=_now(), updated_at=_now(),
+    )
+    assert _identity_keys(user) == ["apple:apple-sub", "firebase:fb-sub", "google:g-sub"]
+
+    # Legacy-only row (no identities list) still yields its keys.
+    legacy = UserRecord(id="u2", apple_subject="a2", created_at=_now(), updated_at=_now())
+    assert _identity_keys(legacy) == ["apple:a2"]
+
+
+def test_user_record_ignores_extra_identity_keys_field():
+    # Firestore stores a denormalized identity_keys field that is NOT on the model;
+    # model_validate must drop it rather than error.
+    user = UserRecord.model_validate({
+        "id": "u1", "identity_keys": ["apple:x", "firebase:y"],
+        "created_at": _now(), "updated_at": _now(),
+    })
+    assert user.id == "u1"
+    assert not hasattr(user, "identity_keys")
+
+
+def test_claim_is_true_coercion():
+    from newsletter_pod.auth import _claim_is_true
+
+    for truthy in (True, "true", "True", "  TRUE  "):
+        assert _claim_is_true(truthy) is True
+    for falsy in (False, "false", "False", "", "yes", "1", None, 1, {}, ["true"]):
+        assert _claim_is_true(falsy) is False
