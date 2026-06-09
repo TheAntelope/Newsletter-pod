@@ -256,10 +256,24 @@ void main() {
     expect(find.text('Next'), findsNothing);
 
     await tester.tap(find.text('Finish'));
-    await tester.pumpAndSettle();
+    // Finishing persists the picks and then auto-kicks the first episode (iOS
+    // parity). Generation runs a never-settling progress bar, so we can't
+    // pumpAndSettle — instead elapse fixed windows: the first flushes the
+    // persist chain + generateNow and mounts the dashboard; the second drains
+    // the dashboard tabs' own load futures so none dangle past teardown.
+    await tester.pump(); // _finish runs
+    await tester.pump(const Duration(seconds: 2)); // persists + generateNow, dashboard mounts
+    await tester.pump(const Duration(seconds: 1)); // dashboard tab loads drain
 
-    // Lands on the dashboard.
-    expect(find.text('Generate now'), findsOneWidget);
+    // Lands on the dashboard with the first episode already generating: the
+    // wizard is gone, the store is generating, and the generation banner (only
+    // shown on the dashboard while isGenerating) carries the run message.
+    expect(find.text('Finish'), findsNothing);
+    expect(appState.isGenerating, isTrue);
+    expect(find.textContaining('being generated'), findsOneWidget);
+
+    // Tear the tree down so the progress bar's periodic timer is cancelled.
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets('onboarding teaches the share sheet with the ClawCast target',
