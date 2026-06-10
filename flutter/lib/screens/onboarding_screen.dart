@@ -13,6 +13,7 @@ import '../services/location_service.dart';
 import '../state/app_state.dart';
 import '../widgets/day_toggle.dart';
 import '../widgets/editorial.dart';
+import '../widgets/inbound_address_card.dart';
 import '../widgets/onboarding_progress_dots.dart';
 import '../widgets/topic_icon.dart';
 import '../widgets/voice_choice_card.dart';
@@ -1570,7 +1571,10 @@ class _OnboardingSubstackStepState extends State<_OnboardingSubstackStep> {
         const SizedBox(height: DesignTokens.spacingL),
         const MetaLabel('Already subscribe to newsletters?'),
         const SizedBox(height: DesignTokens.spacingM),
-        const _InboundAddressCard(),
+        InboundAddressCard(
+          address: AppScope.of(context).me?.user.inboundAddress ??
+              'you@theclawcast.com',
+        ),
       ],
     );
   }
@@ -1763,57 +1767,3 @@ class _PaidTag extends StatelessWidget {
   }
 }
 
-class _InboundAddressCard extends StatefulWidget {
-  const _InboundAddressCard();
-
-  @override
-  State<_InboundAddressCard> createState() => _InboundAddressCardState();
-}
-
-class _InboundAddressCardState extends State<_InboundAddressCard> {
-  bool _copied = false;
-
-  Future<void> _copy(String address) async {
-    final messenger = ScaffoldMessenger.of(context);
-    await Clipboard.setData(ClipboardData(text: address));
-    if (!mounted) return;
-    setState(() => _copied = true);
-    messenger.showSnackBar(
-      const SnackBar(content: Text('Email address copied')),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final address =
-        AppScope.of(context).me?.user.inboundAddress ?? 'you@theclawcast.com';
-    return EditorialCard(
-      spacing: DesignTokens.spacingS,
-      children: [
-        const MetaLabel('Your private inbound address'),
-        // Selectable so the address can be long-pressed/copied manually too,
-        // alongside the explicit Copy button below.
-        SelectableText(
-          address,
-          style: DesignTokens.typographyTitle
-              .copyWith(color: DesignTokens.colorAmberDeep),
-        ),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: AmberButton.filled(
-            label: _copied ? 'Copied' : 'Copy email address',
-            icon: _copied ? Icons.check : Icons.copy,
-            expand: false,
-            onPressed: () => _copy(address),
-          ),
-        ),
-        Text(
-          'Forward newsletters here, or use this address when you subscribe to '
-          'new ones. The next episode picks them up automatically.',
-          style: DesignTokens.typographyCallout
-              .copyWith(color: DesignTokens.colorInkSoft),
-        ),
-      ],
-    );
-  }
-}
