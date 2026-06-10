@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../api/api_client.dart' show SourcePayload;
 import '../api/models.dart';
 import '../design_tokens.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
+import '../widgets/inbound_address_card.dart';
 import '../widgets/topic_icon.dart';
 import 'dashboard_scaffold.dart';
 import 'substack_add_screen.dart';
@@ -157,7 +157,14 @@ class _SourcesScreenState extends State<SourcesScreen> {
                     padding: const EdgeInsets.all(DesignTokens.spacingL),
                     children: [
                       if (inbound != null && inbound.isNotEmpty) ...[
-                        _NewsletterEmailCard(address: inbound),
+                        InboundAddressCard(
+                          address: inbound,
+                          title: 'Newsletter email',
+                          description:
+                              'Forward newsletters here, or use this address '
+                              'when you subscribe. Each new arrival folds into '
+                              'your next episode.',
+                        ),
                         const SizedBox(height: DesignTokens.spacingL),
                       ],
                       const MetaLabel('Catalog'),
@@ -371,77 +378,3 @@ class _InboundItemCard extends StatelessWidget {
   }
 }
 
-class _NewsletterEmailCard extends StatefulWidget {
-  const _NewsletterEmailCard({required this.address});
-
-  final String address;
-
-  @override
-  State<_NewsletterEmailCard> createState() => _NewsletterEmailCardState();
-}
-
-class _NewsletterEmailCardState extends State<_NewsletterEmailCard> {
-  bool _copied = false;
-
-  Future<void> _copy() async {
-    await Clipboard.setData(ClipboardData(text: widget.address));
-    if (!mounted) return;
-    setState(() => _copied = true);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return EditorialCard(
-      spacing: DesignTokens.spacingS,
-      children: [
-        Row(
-          children: [
-            const Expanded(child: MetaLabel('Newsletter email')),
-            if (_copied)
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.check_circle,
-                      size: 14, color: DesignTokens.colorAmberDeep),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Copied',
-                    style: DesignTokens.typographyMeta
-                        .copyWith(color: DesignTokens.colorAmberDeep),
-                  ),
-                ],
-              )
-            else
-              InkWell(
-                onTap: _copy,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.copy,
-                        size: 14, color: DesignTokens.colorAmberDeep),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Copy',
-                      style: DesignTokens.typographyMeta
-                          .copyWith(color: DesignTokens.colorAmberDeep),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-        SelectableText(
-          widget.address,
-          style: DesignTokens.typographyTitle
-              .copyWith(color: DesignTokens.colorAmberDeep),
-        ),
-        Text(
-          'Forward newsletters here, or use this address when you subscribe. '
-          'Each new arrival folds into your next episode.',
-          style: DesignTokens.typographyCallout
-              .copyWith(color: DesignTokens.colorInkSoft),
-        ),
-      ],
-    );
-  }
-}
