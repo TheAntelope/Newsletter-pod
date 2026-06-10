@@ -14,6 +14,16 @@ logger = logging.getLogger(__name__)
 COLD_START_DECK_ID = "cold_start"
 COLD_START_DECK_VERSION = "v1"
 
+# Per-topic onboarding decks share the SwipeDeckRecord storage, keyed
+# `topic::<casefolded-topic-name>`. Pre-baked daily by the refresh job so the
+# request path serves cached keys instead of an unbounded live scan.
+TOPIC_DECK_ID_PREFIX = "topic::"
+TOPIC_DECK_VERSION = "v1"
+
+
+def topic_deck_id(topic: str) -> str:
+    return f"{TOPIC_DECK_ID_PREFIX}{topic.strip().casefold()}"
+
 
 class _DeckRepository(Protocol):
     def list_embedded_source_items(self, limit: int = 5000) -> list[SourceItemRecord]: ...
@@ -43,6 +53,7 @@ class SwipeDeckConfig(Protocol):
     cold_start_deck_size: int
     cold_start_deck_ttl_hours: int
     cold_start_corpus_limit: int
+    topic_deck_ttl_hours: int
     recent_deck_size: int
     recent_deck_lookback_days: int
     recent_deck_exploration_ratio: float
@@ -112,12 +123,127 @@ class SwipeDeckService:
         deck_size = self._config.cold_start_deck_size
         if deck_size <= 0:
             return []
-        already_swiped = self._user_swiped_keys(user_id)
         seeded = self._repository.list_recent_source_items_for_sources(
             source_ids=source_ids,
             lookback_days=self._config.recent_deck_lookback_days,
             limit=deck_size * 4,
         )
+        return self._assemble_topic_deck(
+            user_id, seeded, preferred_source_ids, source_id_groups
+        )
+
+    def get_topic_seeded_deck_cached(
+        self,
+        user_id: str,
+        topic_source_groups: list[tuple[str, list[str]]],
+        preferred_source_ids: Optional[list[str]] = None,
+    ) -> list[SourceItemRecord]:
+        """Cached counterpart of :meth:`get_topic_seeded_deck`. Sources each
+        topic's candidates from its pre-baked `topic::<name>` deck (cheap key
+        reads) instead of a live recency scan, then runs the identical
+        region-float / round-robin / swipe-filter / cold-start-backfill
+        assembly. A missing or stale topic deck (daily job skipped/late) falls
+        back to a bounded live query for that one topic, so the deck is never
+        empty and never unbounded.
+
+        [topic_source_groups] is the ordered (topic-name, source-ids) list for
+        the topics the user picked. Order is preserved so the round-robin gives
+        each picked topic a fair share of the size-capped deck.
+        """
+        deck_size = self._config.cold_start_deck_size
+        if not topic_source_groups or deck_size <= 0:
+            return self.get_cold_start_deck(user_id)
+        seeded: list[SourceItemRecord] = []
+        seen_keys: set[str] = set()
+        for topic, source_ids in topic_source_groups:
+            for record in self._cached_topic_records(topic, source_ids):
+                if record.dedupe_key in seen_keys:
+                    continue
+                seeded.append(record)
+                seen_keys.add(record.dedupe_key)
+        source_id_groups = [source_ids for _, source_ids in topic_source_groups]
+        return self._assemble_topic_deck(
+            user_id, seeded, preferred_source_ids, source_id_groups
+        )
+
+    def refresh_topic_decks(
+        self, topic_source_ids: dict[str, list[str]]
+    ) -> list[SourceItemRecord]:
+        """Pre-bake one cached deck per catalog topic. For each topic, runs the
+        (now-bounded) recent-items query and persists a SwipeDeckRecord keyed
+        `topic::<name>`. Returns the deduped union of baked records so the
+        caller can pre-warm their card summaries in the same job. Topics with
+        no recent embedded items are skipped (no deck written — the request
+        path falls back to the global cold-start deck for them).
+        """
+        deck_size = self._config.cold_start_deck_size
+        if deck_size <= 0:
+            return []
+        baked: dict[str, SourceItemRecord] = {}
+        for topic, source_ids in topic_source_ids.items():
+            if not source_ids:
+                continue
+            records = self._repository.list_recent_source_items_for_sources(
+                source_ids=source_ids,
+                lookback_days=self._config.recent_deck_lookback_days,
+                limit=deck_size * 4,
+            )
+            if not records:
+                continue
+            self._repository.save_swipe_deck(
+                SwipeDeckRecord(
+                    id=topic_deck_id(topic),
+                    dedupe_keys=[record.dedupe_key for record in records],
+                    corpus_size=len(records),
+                    computed_at=utc_now(),
+                    version=TOPIC_DECK_VERSION,
+                )
+            )
+            for record in records:
+                baked.setdefault(record.dedupe_key, record)
+        return list(baked.values())
+
+    def _cached_topic_records(
+        self, topic: str, source_ids: list[str]
+    ) -> list[SourceItemRecord]:
+        deck = self._repository.get_swipe_deck(topic_deck_id(topic))
+        if deck is not None and not self._is_topic_deck_stale(deck):
+            records_by_key = {
+                record.dedupe_key: record
+                for record in self._repository.get_source_items(deck.dedupe_keys)
+            }
+            # Preserve the deck's stored (recency) order.
+            return [
+                records_by_key[key]
+                for key in deck.dedupe_keys
+                if key in records_by_key
+            ]
+        # Missing or stale → bounded live fallback for this one topic only.
+        return self._repository.list_recent_source_items_for_sources(
+            source_ids=source_ids,
+            lookback_days=self._config.recent_deck_lookback_days,
+            limit=self._config.cold_start_deck_size * 4,
+        )
+
+    def _is_topic_deck_stale(self, deck: SwipeDeckRecord) -> bool:
+        age = utc_now() - _ensure_aware(deck.computed_at)
+        return age > timedelta(hours=self._config.topic_deck_ttl_hours)
+
+    def _assemble_topic_deck(
+        self,
+        user_id: str,
+        seeded: list[SourceItemRecord],
+        preferred_source_ids: Optional[list[str]],
+        source_id_groups: Optional[list[list[str]]],
+    ) -> list[SourceItemRecord]:
+        """Shared assembly for the live and cached topic-seeded decks: float
+        region-preferred sources, round-robin across topic streams, drop
+        already-swiped items, then backfill from the global cold-start deck so
+        the deck always fills."""
+        deck_size = self._config.cold_start_deck_size
+        if deck_size <= 0:
+            return []
+        already_swiped = self._user_swiped_keys(user_id)
         if preferred_source_ids:
             preferred = set(preferred_source_ids)
             # Stable sort keeps recency order within the preferred / other groups.
