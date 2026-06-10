@@ -902,15 +902,14 @@ class ControlPlaneService:
     def _build_cold_start_records(
         self, user: UserRecord, topics: list[str] | None
     ) -> list[SourceItemRecord]:
-        source_id_groups = self._catalog_source_id_groups_for_topics(topics)
-        source_ids = [sid for group in source_id_groups for sid in group]
-        if source_ids:
+        topic_groups = self._catalog_topic_source_groups(topics)
+        if topic_groups:
+            source_ids = [sid for _, ids in topic_groups for sid in ids]
             preferred = self._region_preferred_source_ids(user, source_ids)
-            return self._swipe_deck_service.get_topic_seeded_deck(
+            return self._swipe_deck_service.get_topic_seeded_deck_cached(
                 user.id,
-                source_ids,
+                topic_groups,
                 preferred_source_ids=preferred,
-                source_id_groups=source_id_groups,
             )
         return self._swipe_deck_service.get_cold_start_deck(user.id)
 
@@ -945,18 +944,19 @@ class ControlPlaneService:
             and source_region_matches(region, source.region)
         ]
 
-    def _catalog_source_id_groups_for_topics(
+    def _catalog_topic_source_groups(
         self, topics: list[str] | None
-    ) -> list[list[str]]:
-        """Resolve catalog topic names (as picked in onboarding) to one list of
-        catalog source ids per topic, in the order the topics were given. The
-        deck round-robins across these groups so every picked topic is
-        represented. Case-insensitive; topics with no catalog sources are
-        dropped. Empty result falls back to the global cold-start deck.
+    ) -> list[tuple[str, list[str]]]:
+        """Resolve catalog topic names (as picked in onboarding) to ordered
+        (topic-name, [catalog source ids]) pairs, in the order the topics were
+        given. The deck round-robins across these groups so every picked topic
+        is represented, and the topic name keys its pre-baked cached deck.
+        Case-insensitive; topics with no catalog sources are dropped. Empty
+        result falls back to the global cold-start deck.
         """
         if not topics:
             return []
-        groups: list[list[str]] = []
+        groups: list[tuple[str, list[str]]] = []
         for topic in topics:
             if not topic or not topic.strip():
                 continue
@@ -967,26 +967,49 @@ class ControlPlaneService:
                 if source.topic and source.topic.casefold() == wanted
             ]
             if ids:
-                groups.append(ids)
+                groups.append((topic.strip(), ids))
+        return groups
+
+    def _all_catalog_topic_source_groups(self) -> dict[str, list[str]]:
+        """Every distinct catalog topic → its catalog source ids. Drives the
+        daily pre-bake so each topic has a ready cached deck regardless of which
+        topics a given user picks."""
+        groups: dict[str, list[str]] = {}
+        for source in self._catalog.values():
+            if not source.topic:
+                continue
+            groups.setdefault(source.topic, []).append(source.id)
         return groups
 
     def refresh_cold_start_deck(self) -> dict[str, Any]:
-        """Force-refresh the global cold-start swipe deck.
+        """Force-refresh the global cold-start deck AND pre-bake the per-topic
+        onboarding decks, then pre-warm card summaries for the baked items.
 
-        Invoked by the weekly scheduler so the deck stays fresh even on weeks
-        when no user opens it (lazy refresh on access only kicks in when a
-        client requests the deck).
+        Invoked by the daily scheduler so the onboarding "Tune your pod" deck
+        serves cached keys (instant, no unbounded live scan) with polished
+        summaries instead of raw-text fallback. The summary pass is idempotent
+        — only newly-ingested items without a cached summary cost an LLM call.
         """
         deck = self._swipe_deck_service.refresh_cold_start_deck()
+        baked = self._swipe_deck_service.refresh_topic_decks(
+            self._all_catalog_topic_source_groups()
+        )
+        if baked:
+            self._card_summary_service.ensure_summaries(baked)
+        result: dict[str, Any] = {"topic_deck_items": len(baked)}
         if deck is None:
-            return {"status": "skipped", "reason": "empty_corpus"}
-        return {
-            "status": "refreshed",
-            "deck_size": len(deck.dedupe_keys),
-            "corpus_size": deck.corpus_size,
-            "computed_at": deck.computed_at.isoformat(),
-            "version": deck.version,
-        }
+            result.update({"status": "skipped", "reason": "empty_corpus"})
+            return result
+        result.update(
+            {
+                "status": "refreshed",
+                "deck_size": len(deck.dedupe_keys),
+                "corpus_size": deck.corpus_size,
+                "computed_at": deck.computed_at.isoformat(),
+                "version": deck.version,
+            }
+        )
+        return result
 
     def poll_sources(self) -> dict[str, Any]:
         """Hourly global source-poll target (Cloud Scheduler). No-op when

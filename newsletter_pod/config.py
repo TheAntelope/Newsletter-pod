@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     cold_start_deck_size: int = Field(default=20, alias="COLD_START_DECK_SIZE")
     cold_start_deck_ttl_hours: int = Field(default=168, alias="COLD_START_DECK_TTL_HOURS")
     cold_start_corpus_limit: int = Field(default=5000, alias="COLD_START_CORPUS_LIMIT")
+    # Per-topic onboarding decks are pre-baked daily by the refresh job, so the
+    # request path serves cached keys instead of an unbounded live scan. TTL is
+    # a staleness guard: if the daily job is missed, an older-than-TTL topic
+    # deck falls back to a bounded live query for that one topic.
+    topic_deck_ttl_hours: int = Field(default=24, alias="TOPIC_DECK_TTL_HOURS")
     recent_deck_size: int = Field(default=5, alias="RECENT_DECK_SIZE")
     recent_deck_lookback_days: int = Field(default=14, alias="RECENT_DECK_LOOKBACK_DAYS")
     # Fraction of the recent deck drawn from sources the user has NOT attached,
