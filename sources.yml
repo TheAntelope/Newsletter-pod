@@ -390,13 +390,12 @@ sources:
     ingest_mode: excerpt
     jurisdiction_sensitive: true  # UK-founded but EU-focused; editorial entity in EU member states
 
-  # =====================================================================
-  # Strategy
-  # =====================================================================
+  # --- Startup strategy / VC (folded into Tech; ids kept to preserve
+  #     existing users' saved source references) ---
   - id: strategy-yc-blog
     name: Y Combinator Blog
     rss_url: https://www.ycombinator.com/blog/rss
-    topic: Strategy
+    topic: Tech
     enabled: true
     ingest_mode: full
     jurisdiction_sensitive: false
@@ -404,7 +403,7 @@ sources:
   - id: strategy-future-a16z
     name: Future (a16z)
     rss_url: https://future.com/feed/
-    topic: Strategy
+    topic: Tech
     enabled: true
     ingest_mode: full
     jurisdiction_sensitive: false
@@ -412,7 +411,7 @@ sources:
   - id: strategy-andrew-chen
     name: Andrew Chen
     rss_url: https://andrewchen.com/feed/
-    topic: Strategy
+    topic: Tech
     enabled: true
     ingest_mode: full
     jurisdiction_sensitive: false

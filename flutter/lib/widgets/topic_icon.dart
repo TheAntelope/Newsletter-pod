@@ -9,7 +9,6 @@ const _topicIcons = <String, IconData>{
   'Politics': Icons.account_balance_outlined,
   'Business': Icons.trending_up,
   'Tech': Icons.memory,
-  'Strategy': Icons.lightbulb_outline,
   'Personal Finance': Icons.savings_outlined,
   'Science': Icons.science_outlined,
   'Sports': Icons.sports_basketball_outlined,
