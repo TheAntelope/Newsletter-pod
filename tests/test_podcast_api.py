@@ -7,10 +7,11 @@ from newsletter_pod.podcast_api import PodcastApiClient
 
 
 class FakeResponse:
-    def __init__(self, *, status_code: int = 200, json_data=None, content: bytes = b"") -> None:
+    def __init__(self, *, status_code: int = 200, json_data=None, content: bytes = b"", headers=None) -> None:
         self.status_code = status_code
         self._json_data = json_data
         self.content = content
+        self.headers = headers or {}
 
     def json(self):
         return self._json_data
@@ -23,7 +24,7 @@ class FakeResponse:
 def test_openai_provider_generates_structured_script_and_chunked_speech(monkeypatch):
     calls: list[tuple[str, dict]] = []
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, headers, timeout, params=None):
         calls.append((url, json))
         if url.endswith("/v1/responses"):
             return FakeResponse(
@@ -90,7 +91,7 @@ def test_openai_provider_generates_structured_script_and_chunked_speech(monkeypa
 def test_lead_in_and_tail_framing_wraps_body_for_tts(monkeypatch):
     speech_inputs: list[str] = []
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, headers, timeout, params=None):
         if url.endswith("/v1/responses"):
             return FakeResponse(
                 json_data={
@@ -159,7 +160,7 @@ def test_lead_in_and_tail_framing_wraps_body_for_tts(monkeypatch):
 def test_elevenlabs_tts_uses_user_voice_id(monkeypatch):
     calls: list[tuple[str, dict, dict]] = []
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, headers, timeout, params=None):
         calls.append((url, json, headers))
         if url.endswith("/v1/responses"):
             return FakeResponse(
@@ -219,7 +220,7 @@ def test_elevenlabs_tts_uses_user_voice_id(monkeypatch):
 def test_elevenlabs_routes_segments_to_two_voices_by_role(monkeypatch):
     calls: list[tuple[str, dict]] = []
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, headers, timeout, params=None):
         calls.append((url, json))
         if url.endswith("/v1/responses"):
             return FakeResponse(
@@ -276,11 +277,17 @@ def test_elevenlabs_routes_segments_to_two_voices_by_role(monkeypatch):
         secondary_speaker_name="Demi Dreams",
     )
 
-    tts_urls = [call[0] for call in calls if "/v1/text-to-speech/" in call[0]]
-    assert len(tts_urls) == 3
-    assert tts_urls[0].endswith(f"/v1/text-to-speech/{primary_id}")
-    assert tts_urls[1].endswith(f"/v1/text-to-speech/{secondary_id}")
-    assert tts_urls[2].endswith(f"/v1/text-to-speech/{primary_id}")
+    # Segments synthesize concurrently, so assert routing by mapping each call's
+    # text to the voice id in its URL rather than the order calls complete in.
+    tts_calls = [call for call in calls if "/v1/text-to-speech/" in call[0]]
+    assert len(tts_calls) == 3
+    voice_by_text = {
+        payload["text"]: url.rsplit("/v1/text-to-speech/", 1)[1].split("?", 1)[0]
+        for url, payload in tts_calls
+    }
+    assert voice_by_text["Top story today."] == primary_id
+    assert voice_by_text["Quick reaction."] == secondary_id
+    assert voice_by_text["And here is the wrap-up."] == primary_id
     assert generated.audio_segments[0].role == "primary"
     assert generated.audio_segments[0].speaker == "Vinnie Chase"
     assert generated.audio_segments[1].role == "secondary"
@@ -291,7 +298,7 @@ def _fake_elevenlabs_post_factory(calls: list[tuple[str, dict]]):
     """Shared ElevenLabs fake: returns a one-segment script then bytes for
     each TTS call, capturing every payload into `calls`."""
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, headers, timeout, params=None):
         calls.append((url, json))
         if url.endswith("/v1/responses"):
             return FakeResponse(
@@ -412,7 +419,7 @@ def test_elevenlabs_clamps_speed_to_api_range(monkeypatch):
 def test_elevenlabs_failure_falls_back_to_openai_tts(monkeypatch):
     calls: list[tuple[str, dict]] = []
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, headers, timeout, params=None):
         calls.append((url, json))
         if url.endswith("/v1/responses"):
             return FakeResponse(
@@ -482,7 +489,7 @@ def test_elevenlabs_failure_falls_back_when_api_key_missing(monkeypatch):
     the fallback should still kick in as long as OpenAI is configured."""
     calls: list[tuple[str, dict]] = []
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, headers, timeout, params=None):
         calls.append((url, json))
         if url.endswith("/v1/responses"):
             return FakeResponse(
@@ -538,7 +545,7 @@ def test_elevenlabs_failure_falls_back_when_api_key_missing(monkeypatch):
 def test_stage_two_closing_segment_is_appended_when_ux_provided(monkeypatch):
     responses_calls: list[dict] = []
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, headers, timeout, params=None):
         if url.endswith("/v1/responses"):
             responses_calls.append(json)
             # First call = body script (no closing). Second call = stage-2 closing.
@@ -620,7 +627,7 @@ def test_stage_two_closing_segment_is_appended_when_ux_provided(monkeypatch):
 def test_stage_two_closing_falls_back_when_api_fails(monkeypatch):
     state = {"calls": 0}
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, headers, timeout, params=None):
         if url.endswith("/v1/responses"):
             state["calls"] += 1
             if state["calls"] == 1:
@@ -690,6 +697,100 @@ def test_openai_endpoint_builder_accepts_base_url_with_v1():
     )
 
     assert client._build_openai_endpoint("/responses") == "https://api.openai.com/v1/responses"
+
+
+def _one_segment_script_response() -> "FakeResponse":
+    return FakeResponse(
+        json_data={
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                '{"episode_title":"T","show_notes":"- A",'
+                                '"audio_segments":[{"role":"primary","text":"Hi."}]}'
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+    )
+
+
+def test_elevenlabs_requests_low_bitrate_output_format(monkeypatch):
+    captured_params: list[dict] = []
+
+    def fake_post(url, json, headers, timeout, params=None):
+        if url.endswith("/v1/responses"):
+            return _one_segment_script_response()
+        if "/v1/text-to-speech/" in url:
+            captured_params.append(params or {})
+            return FakeResponse(content=b"mp3-bytes")
+        raise AssertionError(url)
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="ignored",
+        tts_voice="ignored",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key="el-key",
+        elevenlabs_model="eleven_multilingual_v2",
+    )
+
+    client.generate(prompt="Source", title="Daily Briefing", voice_id="voice-1")
+
+    assert captured_params == [{"output_format": "mp3_44100_64"}]
+
+
+def test_elevenlabs_retries_on_429_then_succeeds(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("newsletter_pod.podcast_api.time.sleep", lambda s: sleeps.append(s))
+
+    attempts = {"count": 0}
+
+    def fake_post(url, json, headers, timeout, params=None):
+        if url.endswith("/v1/responses"):
+            return _one_segment_script_response()
+        if "/v1/text-to-speech/" in url:
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                return FakeResponse(status_code=429, headers={"Retry-After": "0"})
+            return FakeResponse(content=b"mp3-after-retry")
+        # A fallback to OpenAI would hit /v1/audio/speech — fail loudly if so.
+        raise AssertionError(url)
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="gpt-4o-mini-tts",
+        tts_voice="alloy",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key="el-key",
+        elevenlabs_model="eleven_multilingual_v2",
+    )
+
+    generated = client.generate(prompt="Source", title="Daily Briefing", voice_id="voice-1")
+
+    assert attempts["count"] == 2  # one retry after the 429
+    assert generated.audio_bytes == b"mp3-after-retry"  # ElevenLabs, not OpenAI fallback
+    assert sleeps == [0.0]  # honored Retry-After: 0
 
 
 # --- MP3 concatenation / duration measurement ---------------------------------

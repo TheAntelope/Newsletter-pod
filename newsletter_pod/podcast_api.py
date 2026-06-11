@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional
@@ -48,6 +49,17 @@ class PodcastApiClient:
     # from voices.yml at container construction; voices without an entry are
     # synthesized at ElevenLabs' default speed.
     voice_speed_by_id: dict[str, float] = field(default_factory=dict)
+    # Output format requested from ElevenLabs as a query param. 64 kbps MP3
+    # ~halves the encoded byte size vs the 128 kbps default with no meaningful
+    # quality loss for spoken word.
+    elevenlabs_output_format: str = "mp3_44100_64"
+    # Segments are synthesized concurrently with a bounded thread pool. Keep at
+    # or below the ElevenLabs plan's concurrency limit so bursts don't 429 (a
+    # 429 falls back to the OpenAI default voice, which is user-visibly wrong).
+    tts_max_concurrency: int = 4
+    # Retry budget for transient ElevenLabs responses (HTTP 429 / 5xx).
+    tts_max_retries: int = 3
+    tts_retry_base_seconds: float = 0.5
 
     def generate(
         self,
@@ -116,6 +128,7 @@ class PodcastApiClient:
         if not self.api_key:
             raise PodcastApiUnavailable("OpenAI API key is not configured")
 
+        phase_start = time.perf_counter()
         structured = self._generate_openai_script(prompt=prompt, title=title)
         episode_title = (structured.get("episode_title") or title).strip()
         show_notes = structured.get("show_notes", "").strip()
@@ -171,7 +184,28 @@ class PodcastApiClient:
                 return voice_id
             return voice_id if segment.role == "primary" else secondary_voice_id
 
-        audio_chunks = [self._synthesize_speech(segment.text, _voice_for(segment)) for segment in audio_segments]
+        # Everything up to here (script generation, the stage-2 closing call,
+        # segment parsing and framing) is the "script" phase.
+        script_seconds = time.perf_counter() - phase_start
+
+        # Segments are independent TTS calls, so synthesize them concurrently
+        # with a bounded pool. ``executor.map`` preserves input order, so the
+        # concatenated audio stays in narration order regardless of which call
+        # finishes first.
+        synth_start = time.perf_counter()
+
+        def _synthesize(segment: AudioSegment) -> bytes:
+            return self._synthesize_speech(segment.text, _voice_for(segment))
+
+        if len(audio_segments) <= 1 or self.tts_max_concurrency <= 1:
+            audio_chunks = [_synthesize(segment) for segment in audio_segments]
+        else:
+            max_workers = min(self.tts_max_concurrency, len(audio_segments))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                audio_chunks = list(executor.map(_synthesize, audio_segments))
+        synth_seconds = time.perf_counter() - synth_start
+
+        stitch_start = time.perf_counter()
         transcript = "\n\n".join(f"{segment.speaker}: {segment.text}" for segment in audio_segments)
         audio_bytes = _concat_mp3_chunks(audio_chunks)
 
@@ -182,6 +216,20 @@ class PodcastApiClient:
         duration_seconds = _measure_mp3_duration_seconds(audio_bytes)
         if duration_seconds is None:
             duration_seconds = _estimate_duration_seconds(transcript)
+        stitch_seconds = time.perf_counter() - stitch_start
+
+        # One greppable line per episode so we can confirm where time actually
+        # goes (script vs. synth vs. stitch) before optimizing further.
+        logger.info(
+            "podcast generation timing: tts_provider=%s segments=%d "
+            "script=%.2fs synth=%.2fs stitch=%.2fs total=%.2fs",
+            (self.tts_provider or "openai").strip().lower(),
+            len(audio_segments),
+            script_seconds,
+            synth_seconds,
+            stitch_seconds,
+            time.perf_counter() - phase_start,
+        )
 
         return GeneratedEpisode(
             episode_title=episode_title,
@@ -430,15 +478,50 @@ class PodcastApiClient:
             # bad voices.yml entry doesn't 4xx the synth call.
             payload["voice_settings"] = {"speed": max(0.7, min(1.2, float(speed)))}
 
-        response = requests.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=120,
-        )
-        self._raise_for_availability(response)
-        response.raise_for_status()
-        return response.content
+        # Requested as a query param (not a body field) per the ElevenLabs API.
+        params = {"output_format": self.elevenlabs_output_format}
+
+        # Retry transient responses (429 rate limits, 5xx) with exponential
+        # backoff so bursts of concurrent segment calls don't silently fall back
+        # to the OpenAI default voice. Connection-level errors are not retried
+        # here — they propagate to the caller's fallback path, as before.
+        for attempt in range(self.tts_max_retries + 1):
+            response = requests.post(
+                url,
+                params=params,
+                json=payload,
+                headers=headers,
+                timeout=120,
+            )
+            retryable = response.status_code == 429 or response.status_code >= 500
+            if retryable and attempt < self.tts_max_retries:
+                delay = self._retry_delay_seconds(response, attempt)
+                logger.warning(
+                    "ElevenLabs TTS %s (attempt %d/%d); retrying in %.2fs",
+                    response.status_code,
+                    attempt + 1,
+                    self.tts_max_retries + 1,
+                    delay,
+                )
+                time.sleep(delay)
+                continue
+            self._raise_for_availability(response)
+            response.raise_for_status()
+            return response.content
+
+        # Unreachable: the final attempt always returns or raises above.
+        raise PodcastApiError("ElevenLabs TTS retries exhausted")
+
+    def _retry_delay_seconds(self, response: requests.Response, attempt: int) -> float:
+        """Backoff for a retryable ElevenLabs response: honor ``Retry-After``
+        when the server sends it, else exponential backoff capped at 8s."""
+        retry_after = response.headers.get("Retry-After") if response.headers else None
+        if retry_after:
+            try:
+                return min(8.0, float(retry_after))
+            except (TypeError, ValueError):
+                pass
+        return min(8.0, self.tts_retry_base_seconds * (2 ** attempt))
 
     def _build_openai_headers(self) -> dict[str, str]:
         headers = {
