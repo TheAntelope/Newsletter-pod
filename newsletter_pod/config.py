@@ -232,7 +232,7 @@ class Settings(BaseSettings):
     # billing_model_2026_05.md.
     free_min_duration_minutes: int = Field(default=3, alias="FREE_MIN_DURATION_MINUTES")
     free_max_duration_minutes: int = Field(default=5, alias="FREE_MAX_DURATION_MINUTES")
-    free_default_duration_minutes: int = Field(default=3, alias="FREE_DEFAULT_DURATION_MINUTES")
+    free_default_duration_minutes: int = Field(default=5, alias="FREE_DEFAULT_DURATION_MINUTES")
     pro_min_duration_minutes: int = Field(default=3, alias="PRO_MIN_DURATION_MINUTES")
     pro_max_duration_minutes: int = Field(default=5, alias="PRO_MAX_DURATION_MINUTES")
     max_min_duration_minutes: int = Field(default=3, alias="MAX_MIN_DURATION_MINUTES")

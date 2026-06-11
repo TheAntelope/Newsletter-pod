@@ -764,7 +764,7 @@ private struct AboutPodcastCard: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.s) {
                     infoRow(label: "Format", value: formatLabel)
                     infoRow(label: "Hosts", value: hostsLabel)
-                    infoRow(label: "Length", value: "\(viewModel.profile?.desiredDurationMinutes ?? 8) min")
+                    infoRow(label: "Length", value: "\(viewModel.profile?.desiredDurationMinutes ?? 5) min")
                     infoRow(label: "Delivery", value: deliveryLabel)
                 }
             }
@@ -1825,7 +1825,7 @@ struct PodcastSetupView: View {
     @EnvironmentObject private var viewModel: AppViewModel
     @State private var displayName = ""
     @State private var formatPreset = "two_hosts"
-    @State private var durationMinutes: Int = 3
+    @State private var durationMinutes: Int = 5
     private static let durationOptions: [Int] = [3, 4, 5]
 
     /// Snap a stored duration onto the discrete {3, 4, 5} picker. Handles
@@ -1986,7 +1986,7 @@ struct PodcastSetupView: View {
             .onAppear {
                 displayName = viewModel.user?.displayName ?? ""
                 formatPreset = viewModel.profile?.formatPreset ?? "two_hosts"
-                durationMinutes = Self.clampDuration(viewModel.profile?.desiredDurationMinutes ?? 3)
+                durationMinutes = Self.clampDuration(viewModel.profile?.desiredDurationMinutes ?? 5)
                 tone = viewModel.profile?.tone ?? "calm_analyst"
                 humorStyle = viewModel.profile?.humorStyle ?? "none"
                 keyFindingsCount = viewModel.profile?.keyFindingsCount ?? 3
