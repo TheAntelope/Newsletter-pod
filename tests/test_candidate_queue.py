@@ -11,7 +11,7 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -26,6 +26,7 @@ from newsletter_pod.models import (
 from newsletter_pod.source_persistence import SourceItemPersistenceService
 from newsletter_pod.user_models import UserSourceRecord
 from newsletter_pod.user_repository import InMemoryControlPlaneRepository
+from newsletter_pod.utils import utc_now
 
 
 # --- shared fixtures --------------------------------------------------------
@@ -55,8 +56,17 @@ def _make_service(settings=None) -> tuple[CandidateQueueService, InMemoryControl
     return service, repo
 
 
+# Anchored to real "now" (a day back, truncated for stability) instead of a
+# hardcoded date, so seeded items always sit inside the service's real-clock
+# lookback window. Captured once at import so every call returns the same value
+# within a run. (A previous hardcoded 2026-05-24 silently aged out of the 14-day
+# candidate window once the calendar passed 2026-06-07, reddening every recency
+# test — seed relative to utc_now(), never an absolute date.)
+_NOW = (utc_now() - timedelta(days=1)).replace(microsecond=0)
+
+
 def _now() -> datetime:
-    return datetime(2026, 5, 24, 10, 0, tzinfo=timezone.utc)
+    return _NOW
 
 
 def _user_source(

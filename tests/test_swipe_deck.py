@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from newsletter_pod.models import SourceItemRecord
 from newsletter_pod.swipe_deck import (
@@ -11,6 +11,13 @@ from newsletter_pod.swipe_deck import (
 )
 from newsletter_pod.user_models import SwipeRecord
 from newsletter_pod.user_repository import InMemoryControlPlaneRepository
+from newsletter_pod.utils import utc_now
+
+# Anchored to real "now" (a day back, truncated for stability) instead of a
+# hardcoded date, so seeded items always sit inside the recent-deck lookback
+# window. (A previous hardcoded 2026-05-11 silently aged out of the 30-day
+# window once the calendar passed 2026-06-10 — seed relative to utc_now().)
+_NOW = (utc_now() - timedelta(days=1)).replace(microsecond=0)
 
 
 @dataclass
@@ -31,7 +38,7 @@ def _record(
     source_id: str = "src-1",
     last_seen_offset_minutes: int = 0,
 ) -> SourceItemRecord:
-    base = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    base = _NOW
     return SourceItemRecord(
         dedupe_key=key,
         source_id=source_id,
@@ -61,7 +68,7 @@ def _swipe(user_id: str, dedupe_key: str) -> SwipeRecord:
         source_name="Name src-1",
         embedding=[1.0, 0.0],
         embedding_model="fake",
-        swiped_at=datetime(2026, 5, 11, tzinfo=timezone.utc),
+        swiped_at=_NOW,
     )
 
 
@@ -338,6 +345,14 @@ def test_cached_topic_deck_falls_back_when_stale():
         ),
     )
     service.refresh_topic_decks({"Tech": ["techcrunch"]})
+    # Back-date the just-baked deck so the ttl=0 staleness check (age > 0) is
+    # exercised deterministically: a sub-millisecond clock tick (Windows clock
+    # resolution) can otherwise leave a freshly-baked deck at age 0, reading as
+    # fresh and never falling back. In production ttl is hours, so this race
+    # can't occur there.
+    baked = repo.get_swipe_deck(topic_deck_id("Tech"))
+    baked.computed_at = baked.computed_at - timedelta(hours=1)
+    repo.save_swipe_deck(baked)
     repo.upsert_source_items(
         [_record("tech-new", embedding=[1.0], source_id="techcrunch",
                  last_seen_offset_minutes=100)]
