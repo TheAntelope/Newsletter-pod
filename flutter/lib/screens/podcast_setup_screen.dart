@@ -134,6 +134,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
   String _formatPreset = 'two_hosts';
   int _durationMinutes = 5;
   String? _voiceId;
+  String? _secondaryVoiceId;
   String _tone = 'playful';
   String _humor = 'dad_jokes';
   int _keyFindings = 3;
@@ -166,8 +167,18 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
     if (!_initialized) {
       _initialized = true;
       _app = AppScope.of(context);
+      // Renaming a host in the Show section re-titles its voice-cast card live.
+      _hostPrimaryController.addListener(_onHostNameChanged);
+      _hostSecondaryController.addListener(_onHostNameChanged);
       _load();
     }
+  }
+
+  void _onHostNameChanged() {
+    // Ignore the programmatic text assignment during _load(); only react to the
+    // user typing once the form is up.
+    if (!mounted || _loading) return;
+    setState(() {});
   }
 
   Future<void> _load() async {
@@ -194,6 +205,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
         _formatPreset = p.formatPreset;
         _durationMinutes = p.desiredDurationMinutes;
         _voiceId = p.voiceId;
+        _secondaryVoiceId = p.secondaryVoiceId;
         _tone = p.tone ?? 'playful';
         _humor = p.humorStyle ?? 'dad_jokes';
         _keyFindings = p.keyFindingsCount ?? 3;
@@ -265,6 +277,22 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
     });
   }
 
+  /// The name shown on a voice-cast card: the host name typed into the Show
+  /// section, or — when that's blank — the chosen voice's own name, falling back
+  /// to the role label when no voice is picked yet.
+  String _hostDisplayName(
+    TextEditingController controller,
+    String? voiceId,
+    String roleFallback,
+  ) {
+    final entered = controller.text.trim();
+    if (entered.isNotEmpty) return entered;
+    for (final v in _voices) {
+      if (v.id == voiceId) return v.name;
+    }
+    return roleFallback;
+  }
+
   Future<void> _save() async {
     final loaded = _loadedProfile;
     if (loaded == null) return;
@@ -278,11 +306,13 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
       title: title.isEmpty ? loaded.title : title,
       formatPreset: _formatPreset,
       hostPrimaryName: hostPrimary.isEmpty ? loaded.hostPrimaryName : hostPrimary,
-      hostSecondaryName: hostSecondary.isEmpty ? null : hostSecondary,
+      hostSecondaryName: _formatPreset != 'two_hosts' || hostSecondary.isEmpty
+          ? null
+          : hostSecondary,
       guestNames: loaded.guestNames,
       desiredDurationMinutes: _durationMinutes,
       voiceId: _voiceId,
-      secondaryVoiceId: loaded.secondaryVoiceId,
+      secondaryVoiceId: _formatPreset == 'two_hosts' ? _secondaryVoiceId : null,
       tone: _tone,
       keyFindingsCount: _keyFindings,
       humorStyle: _humor,
@@ -356,13 +386,15 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
             ),
             TextField(
               controller: _hostPrimaryController,
-              decoration: const InputDecoration(labelText: 'Primary host'),
+              decoration: InputDecoration(
+                labelText: _formatPreset == 'solo_host' ? 'Narrator' : 'Host',
+              ),
             ),
-            TextField(
-              controller: _hostSecondaryController,
-              decoration:
-                  const InputDecoration(labelText: 'Secondary host (optional)'),
-            ),
+            if (_formatPreset == 'two_hosts')
+              TextField(
+                controller: _hostSecondaryController,
+                decoration: const InputDecoration(labelText: 'Co-host'),
+              ),
           ],
         ),
         _section('Format'),
@@ -415,15 +447,28 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
             ),
           ],
         ),
-        _section('Voice'),
-        for (final v in _voices) ...[
-          VoiceChoiceCard(
-            voice: v,
-            selected: _voiceId == v.id,
-            onSelect: () => setState(() => _voiceId = v.id),
-            previewSource: v.previewUrl,
-          ),
+        _section('Voice cast'),
+        HostVoiceCard(
+          roleLabel: _formatPreset == 'solo_host' ? 'Narrator' : 'Host',
+          displayName:
+              _hostDisplayName(_hostPrimaryController, _voiceId, 'Host'),
+          voices: _voices,
+          selectedVoiceId: _voiceId,
+          excludeVoiceId:
+              _formatPreset == 'two_hosts' ? _secondaryVoiceId : null,
+          onSelect: (id) => setState(() => _voiceId = id),
+        ),
+        if (_formatPreset == 'two_hosts') ...[
           const SizedBox(height: DesignTokens.spacingM),
+          HostVoiceCard(
+            roleLabel: 'Co-host',
+            displayName: _hostDisplayName(
+                _hostSecondaryController, _secondaryVoiceId, 'Co-host'),
+            voices: _voices,
+            selectedVoiceId: _secondaryVoiceId,
+            excludeVoiceId: _voiceId,
+            onSelect: (id) => setState(() => _secondaryVoiceId = id),
+          ),
         ],
         _section('Style'),
         EditorialCard(

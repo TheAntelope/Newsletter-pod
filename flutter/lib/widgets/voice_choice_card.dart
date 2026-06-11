@@ -74,6 +74,106 @@ class VoiceChoiceCard extends StatelessWidget {
   }
 }
 
+/// One podcaster slot in the podcast-setup "Voice cast" section: a role eyebrow
+/// ("Host" / "Co-host" / "Narrator"), the podcaster's display name, a drop-down
+/// of the voice catalog, and a play/pause sample of the currently-selected
+/// voice. Mirrors the iOS `voiceRow`, which renders one of these per host so a
+/// `two_hosts` show shows exactly two cards.
+///
+/// [displayName] is owned by the caller: it's the name typed into the Show
+/// section's host field, falling back to the chosen voice's own name. That's how
+/// renaming a host there flows through to the podcaster shown here.
+class HostVoiceCard extends StatelessWidget {
+  const HostVoiceCard({
+    super.key,
+    required this.roleLabel,
+    required this.displayName,
+    required this.voices,
+    required this.selectedVoiceId,
+    required this.onSelect,
+    this.excludeVoiceId,
+  });
+
+  final String roleLabel;
+  final String displayName;
+  final List<CatalogVoiceDto> voices;
+  final String? selectedVoiceId;
+  final ValueChanged<String> onSelect;
+
+  /// The other host's voice, hidden from this drop-down so two hosts can't share
+  /// a single voice (matches the iOS "already chosen" exclusion).
+  final String? excludeVoiceId;
+
+  @override
+  Widget build(BuildContext context) {
+    CatalogVoiceDto? selectedVoice;
+    for (final v in voices) {
+      if (v.id == selectedVoiceId) {
+        selectedVoice = v;
+        break;
+      }
+    }
+    final items = [
+      for (final v in voices)
+        if (v.id != excludeVoiceId || v.id == selectedVoiceId) v,
+    ];
+    // Guard against a stale/unknown voice id so DropdownButton's value always
+    // matches one of its items (or null → shows the hint).
+    final value = selectedVoice == null ? null : selectedVoiceId;
+    final preview = selectedVoice?.previewUrl;
+
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        MetaLabel(roleLabel),
+        Text(
+          displayName,
+          style: DesignTokens.typographySubtitle
+              .copyWith(color: DesignTokens.colorInk),
+        ),
+        Container(
+          padding:
+              const EdgeInsets.symmetric(horizontal: DesignTokens.spacingM),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(DesignTokens.radiusCard),
+            border: Border.all(color: DesignTokens.colorRule, width: 1),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              isExpanded: true,
+              value: value,
+              hint: Text(
+                'Choose a voice',
+                style: DesignTokens.typographyBody
+                    .copyWith(color: DesignTokens.colorMuted),
+              ),
+              icon: const Icon(Icons.expand_more,
+                  color: DesignTokens.colorAmberDeep),
+              style: DesignTokens.typographyBody
+                  .copyWith(color: DesignTokens.colorInk),
+              items: [
+                for (final v in items)
+                  DropdownMenuItem<String>(value: v.id, child: Text(v.name)),
+              ],
+              onChanged: (id) {
+                if (id != null) onSelect(id);
+              },
+            ),
+          ),
+        ),
+        if (selectedVoice != null && selectedVoice.description.isNotEmpty)
+          Text(
+            selectedVoice.description,
+            style: DesignTokens.typographyCallout
+                .copyWith(color: DesignTokens.colorInkSoft),
+          ),
+        if (selectedVoice != null && preview != null && preview.isNotEmpty)
+          _SampleButton(id: selectedVoice.id, source: preview),
+      ],
+    );
+  }
+}
+
 class _SampleButton extends StatelessWidget {
   const _SampleButton({required this.id, required this.source});
 
