@@ -1,5 +1,6 @@
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
@@ -512,6 +513,7 @@ class _HeroEpisodeCardState extends State<_HeroEpisodeCard> {
 /// target: Apple Podcasts on iOS, Podcast Addict on Android (our chosen Android
 /// player — see [PodcastAddict]). Other platforms get a neutral fallback.
 String _openInPodcastAppLabel() {
+  if (kIsWeb) return 'Open in your podcast app';
   if (Platform.isIOS) return 'Open in Apple Podcasts';
   if (Platform.isAndroid) return 'Open in Podcast Addict';
   return 'Open in your podcast app';
@@ -968,7 +970,8 @@ class _ShareTipCard extends StatelessWidget {
 
 /// The platform's name for the share affordance: "Share" on Android, "the Share
 /// button" on iOS. Keeps the tip's instruction matching what the user sees.
-String get _shareVerb => Platform.isIOS ? 'the Share button' : 'Share';
+String get _shareVerb =>
+    (!kIsWeb && Platform.isIOS) ? 'the Share button' : 'Share';
 
 class _SetupChecklistCard extends StatelessWidget {
   const _SetupChecklistCard({
