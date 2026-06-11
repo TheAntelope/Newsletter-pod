@@ -10,7 +10,6 @@ const _topicIcons = <String, IconData>{
   'Business': Icons.trending_up,
   'Tech': Icons.memory,
   'Cybersecurity': Icons.shield_outlined,
-  'Strategy': Icons.lightbulb_outline,
   'Personal Finance': Icons.savings_outlined,
   'Science': Icons.science_outlined,
   'Sports': Icons.sports_basketball_outlined,

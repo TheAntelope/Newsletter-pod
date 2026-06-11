@@ -2870,7 +2870,6 @@ struct OnboardingStarterPack: Identifiable {
         "Politics": "building.columns.fill",
         "Business": "chart.line.uptrend.xyaxis",
         "Tech": "cpu.fill",
-        "Strategy": "target",
         "Personal Finance": "dollarsign.circle.fill",
         "Science": "atom",
         "Sports": "sportscourt.fill",
