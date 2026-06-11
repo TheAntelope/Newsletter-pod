@@ -2786,6 +2786,7 @@ struct OnboardingStarterPack: Identifiable {
         "Family Life": "figure.2.and.child.holdinghands",
         "Food & Travel": "airplane",
         "Romantasy": "heart.text.square.fill",
+        "Cybersecurity": "lock.shield.fill",
     ]
 
     /// Curated balanced mix used by the "Inspire me" shortcut. Listed in priority

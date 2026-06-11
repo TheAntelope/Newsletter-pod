@@ -19,6 +19,7 @@ const _topicIcons = <String, IconData>{
   'Family Life': Icons.family_restroom_outlined,
   'Food & Travel': Icons.restaurant_outlined,
   'Romantasy': Icons.auto_stories_outlined,
+  'Cybersecurity': Icons.shield_outlined,
 };
 
 /// Resolve the curated glyph for [topic], falling back to a neutral label icon.

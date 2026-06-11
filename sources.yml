@@ -837,3 +837,93 @@ sources:
     enabled: true
     ingest_mode: full
     jurisdiction_sensitive: false
+
+  # =====================================================================
+  # Cybersecurity
+  # Validated end-to-end 2026-06-11 via
+  # scripts/validate_candidate_sources_cybersecurity.py (global, no region
+  # bias — cyber threats are not jurisdiction-specific). CISA's own feed and
+  # Google Project Zero were dropped: CISA 403s datacenter IPs (Cloud Run
+  # included) and Project Zero's fetch exceeds the backend's 20s timeout.
+  # =====================================================================
+  # --- CVE / advisory feeds (authoritative vulnerability announcements) ---
+  - id: cyber-cvefeed-latest
+    name: Latest CVEs (cvefeed.io / NVD)
+    rss_url: https://cvefeed.io/rssfeed/latest.xml
+    topic: Cybersecurity
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: cyber-zdi-published
+    name: Zero Day Initiative (Published Advisories)
+    rss_url: https://www.zerodayinitiative.com/rss/published/
+    topic: Cybersecurity
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: cyber-sans-isc
+    name: SANS Internet Storm Center
+    rss_url: https://isc.sans.edu/rssfeed_full.xml
+    topic: Cybersecurity
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  # --- News / analysis (active exploitation, breaches, patch context) ---
+  - id: cyber-thehackernews
+    name: The Hacker News
+    rss_url: https://feeds.feedburner.com/TheHackersNews
+    topic: Cybersecurity
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: cyber-bleepingcomputer
+    name: BleepingComputer
+    rss_url: https://www.bleepingcomputer.com/feed/
+    topic: Cybersecurity
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: cyber-krebs
+    name: Krebs on Security
+    rss_url: https://krebsonsecurity.com/feed/
+    topic: Cybersecurity
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: cyber-darkreading
+    name: Dark Reading
+    rss_url: https://www.darkreading.com/rss.xml
+    topic: Cybersecurity
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: cyber-securityweek
+    name: SecurityWeek
+    rss_url: https://www.securityweek.com/feed/
+    topic: Cybersecurity
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: cyber-the-record
+    name: The Record (Recorded Future)
+    rss_url: https://therecord.media/feed
+    topic: Cybersecurity
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: cyber-talos
+    name: Cisco Talos Intelligence
+    rss_url: https://blog.talosintelligence.com/rss/
+    topic: Cybersecurity
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
