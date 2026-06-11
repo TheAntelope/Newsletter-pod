@@ -160,6 +160,21 @@ class FakeAppRepository implements AppRepository {
     );
   }
 
+  @override
+  Future<RunStatusEnvelope> fetchRun(String runId) async {
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    // The demo run always "succeeds" so the progress UI flips to ready.
+    return RunStatusEnvelope(
+      run: UserRunDto(
+        id: runId,
+        status: 'published',
+        message: 'Your pod is ready.',
+        candidateCount: 12,
+        capHit: false,
+      ),
+    );
+  }
+
   /// Mutable so [replaceSources] toggles survive within a session (the demo has
   /// no backend to round-trip through).
   final List<UserSourceDto> _sources = [
