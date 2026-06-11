@@ -14,7 +14,7 @@ from .models import (
     SourcePollingStateRecord,
     SwipeDeckRecord,
 )
-from .utils import utc_now
+from .utils import ensure_utc, utc_now
 
 
 def _source_item_doc_id(dedupe_key: str) -> str:
@@ -218,6 +218,25 @@ class ControlPlaneRepository(ABC):
 
     @abstractmethod
     def find_in_progress_user_run(self, user_id: str) -> Optional[UserRunRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_in_progress_user_runs_older_than(
+        self, threshold: datetime, *, limit: int = 500
+    ) -> list[UserRunRecord]:
+        """Up to `limit` runs still `in_progress` whose started_at is before
+        `threshold` (i.e. abandoned mid-generation). Used by the stale-run
+        reaper; bounded so one sweep does a bounded read/write even if a
+        finalization bug lets the in_progress set grow large (the reaper drains a
+        backlog across successive ticks)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def fail_run_if_in_progress(self, run_id: str, *, message: str, now: datetime) -> bool:
+        """Conditionally finalize a run as `failed` ONLY if it is still
+        `in_progress`. Returns True if it flipped, False if the run is missing or
+        already left in_progress. Must be atomic so it can never clobber a run
+        that published between detection and write."""
         raise NotImplementedError
 
     @abstractmethod
@@ -744,6 +763,28 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
             if run.user_id == user_id and run.status == "in_progress":
                 return run
         return None
+
+    def list_in_progress_user_runs_older_than(
+        self, threshold: datetime, *, limit: int = 500
+    ) -> list[UserRunRecord]:
+        runs = [
+            run
+            for run in self._runs.values()
+            if run.status == "in_progress" and ensure_utc(run.started_at) < threshold
+        ]
+        runs.sort(key=lambda run: run.started_at)  # oldest first
+        return runs[:limit]
+
+    def fail_run_if_in_progress(self, run_id: str, *, message: str, now: datetime) -> bool:
+        run = self._runs.get(run_id)
+        if run is None or run.status != "in_progress":
+            return False
+        # Stored object is the live reference (see save_user_run), so mutating it
+        # in place updates the store. "failed" mirrors PublishStatus.FAILED.value.
+        run.status = "failed"
+        run.message = message
+        run.completed_at = now
+        return True
 
     def save_cost_record(self, cost_record: CostRecord) -> None:
         self._costs[cost_record.run_id] = cost_record
@@ -1624,6 +1665,49 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         if not docs:
             return None
         return UserRunRecord.model_validate(docs[0].to_dict())
+
+    def list_in_progress_user_runs_older_than(
+        self, threshold: datetime, *, limit: int = 500
+    ) -> list[UserRunRecord]:
+        # Equality filter on status is served by the automatic single-field index
+        # (no composite required) and keeps the read to the small set of
+        # currently-running + orphaned runs; the age filter is applied app-side.
+        # Mirrors the "where(==) then filter in Python" pattern of
+        # list_recent_user_runs. started_at is stored as a native Timestamp
+        # (save_user_run only stringifies local_run_date), so it round-trips to a
+        # tz-aware datetime that ensure_utc compares safely. `.limit(limit)` caps
+        # the read so a runaway in_progress backlog can't blow the Firestore
+        # deadline in a single sweep (it drains across reaper ticks instead). We
+        # deliberately don't order_by(started_at) — pairing it with the status
+        # equality filter would require a composite index this repo avoids — so
+        # the capped slice is arbitrary-order under a backlog, which is fine
+        # given the flip is idempotent and successive ticks drain the rest.
+        docs = list(self._runs.where("status", "==", "in_progress").limit(limit).stream())
+        runs = [UserRunRecord.model_validate(doc.to_dict()) for doc in docs]
+        return [run for run in runs if ensure_utc(run.started_at) < threshold]
+
+    def fail_run_if_in_progress(self, run_id: str, *, message: str, now: datetime) -> bool:
+        # Transactional compare-and-set: a concurrent reaper invocation, or the
+        # background generation task publishing between our read and write, must
+        # never overwrite a run that has already left in_progress.
+        doc_ref = self._runs.document(run_id)
+        transaction = self._db.transaction()
+
+        @firestore.transactional
+        def _flip(txn) -> bool:
+            snapshot = doc_ref.get(transaction=txn)
+            if not snapshot.exists:
+                return False
+            data = snapshot.to_dict()
+            if data.get("status") != "in_progress":
+                return False
+            data["status"] = "failed"
+            data["message"] = message
+            data["completed_at"] = now
+            txn.set(doc_ref, data)
+            return True
+
+        return _flip(transaction)
 
     def save_cost_record(self, cost_record: CostRecord) -> None:
         self._costs.document(cost_record.run_id).set(cost_record.model_dump(mode="python"))

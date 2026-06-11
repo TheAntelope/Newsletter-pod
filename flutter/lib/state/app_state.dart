@@ -264,6 +264,37 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Called when the app returns to the foreground. If a generation run is still
+  /// in flight, force an immediate status re-check (and restart the poll loop if
+  /// its timer was lost while the isolate was suspended) so a run that finished —
+  /// or was reaped server-side after stalling — while we were backgrounded
+  /// surfaces right away instead of waiting for the next periodic tick. No-op
+  /// when no run is in flight, so it's safe to call on every resume.
+  ///
+  /// The server-side stale-run reaper guarantees an orphaned run eventually
+  /// reaches a terminal `failed` status, so this never leaves the UI stuck even
+  /// if a long-backgrounded run keeps restarting the local poll loop.
+  void resumePollingIfNeeded() {
+    if (!_generating || _pollRunId == null) return;
+    if (_pollTimer == null) {
+      // The timer was cancelled/lost while suspended — restart it. This also
+      // resets the attempt ceiling, intentionally extending the polling window
+      // for a run that was backgrounded for a long time.
+      _startPolling(_pollRunId!);
+    }
+    // Fire one tick now rather than waiting up to _pollInterval for the result.
+    unawaited(_pollTick());
+  }
+
+  /// Test-only: simulate the OS killing the periodic poll timer while the
+  /// isolate was suspended in the background — cancels the timer but leaves the
+  /// in-flight run state intact, so [resumePollingIfNeeded] must restart it.
+  @visibleForTesting
+  void debugDropPollTimer() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
+
   void _startPolling(String runId) {
     _pollTimer?.cancel();
     _pollRunId = runId;
@@ -392,5 +423,14 @@ class AppScope extends InheritedNotifier<AppState> {
     final scope = context.dependOnInheritedWidgetOfExactType<AppScope>();
     assert(scope != null, 'No AppScope found in the widget tree');
     return scope!.notifier!;
+  }
+
+  /// Non-subscribing lookup for use OUTSIDE build — e.g. lifecycle callbacks and
+  /// event handlers. Unlike [of] it uses [BuildContext.getInheritedWidgetOfExactType],
+  /// which does NOT register the caller as a dependent of [AppScope], so reading
+  /// it from a widget that doesn't depend on AppScope in build() won't silently
+  /// subscribe it to rebuild on every notify. Returns null if no AppScope exists.
+  static AppState? maybeOf(BuildContext context) {
+    return context.getInheritedWidgetOfExactType<AppScope>()?.notifier;
   }
 }

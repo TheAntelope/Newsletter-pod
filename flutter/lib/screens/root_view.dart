@@ -36,8 +36,14 @@ class _RootViewState extends State<RootView> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      PodcastAddict.retryPendingOnResume();
+    if (state != AppLifecycleState.resumed) return;
+    PodcastAddict.retryPendingOnResume();
+    // A generation run may have finished — or been reaped server-side after
+    // stalling — while we were backgrounded; re-sync immediately so the
+    // dashboard reflects it instead of sitting on a frozen progress bar.
+    // maybeOf (non-subscribing) since this is a lifecycle callback, not build().
+    if (mounted) {
+      AppScope.maybeOf(context)?.resumePollingIfNeeded();
     }
   }
 
