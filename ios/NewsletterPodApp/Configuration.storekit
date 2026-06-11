@@ -72,7 +72,7 @@
         {
           "adHocOffers" : [],
           "codeOffers" : [],
-          "displayPrice" : "19.99",
+          "displayPrice" : "4.99",
           "familyShareable" : false,
           "groupNumber" : 1,
           "internalID" : "60000010",
@@ -94,7 +94,7 @@
         {
           "adHocOffers" : [],
           "codeOffers" : [],
-          "displayPrice" : "179.99",
+          "displayPrice" : "44.99",
           "familyShareable" : false,
           "groupNumber" : 2,
           "internalID" : "60000011",
@@ -116,7 +116,7 @@
         {
           "adHocOffers" : [],
           "codeOffers" : [],
-          "displayPrice" : "29.99",
+          "displayPrice" : "7.49",
           "familyShareable" : false,
           "groupNumber" : 3,
           "internalID" : "60000020",
@@ -138,7 +138,7 @@
         {
           "adHocOffers" : [],
           "codeOffers" : [],
-          "displayPrice" : "269.99",
+          "displayPrice" : "67.49",
           "familyShareable" : false,
           "groupNumber" : 4,
           "internalID" : "60000021",

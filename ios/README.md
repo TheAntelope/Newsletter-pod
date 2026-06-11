@@ -42,10 +42,10 @@ Use Codemagic as the hosted macOS builder.
 3. Use bundle ID `com.newsletterpod.app`, or change `PRODUCT_BUNDLE_IDENTIFIER` in `ios/project.yml` before creating the app record.
 4. Enable **Sign in with Apple** for the bundle ID.
 5. Create the four StoreKit subscription product IDs in App Store Connect:
-   - `com.newsletterpod.pro.monthly` ($19.99/mo)
-   - `com.newsletterpod.pro.annual` ($179.99/yr)
-   - `com.newsletterpod.max.monthly` ($29.99/mo)
-   - `com.newsletterpod.max.annual` ($269.99/yr)
+   - `com.newsletterpod.pro.monthly` ($4.99/mo)
+   - `com.newsletterpod.pro.annual` ($44.99/yr)
+   - `com.newsletterpod.max.monthly` ($7.49/mo)
+   - `com.newsletterpod.max.annual` ($67.49/yr)
 6. In Codemagic, connect the GitHub repository.
 7. In Codemagic, create an App Store Connect API key integration named `codemagic`.
 8. In Codemagic, enable iOS code signing for App Store distribution for bundle ID `com.newsletterpod.app`.

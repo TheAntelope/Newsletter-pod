@@ -17,10 +17,10 @@
 3. Use bundle ID `com.newsletterpod.app`, or update `PRODUCT_BUNDLE_IDENTIFIER` in `ios/project.yml` before creating the app record.
 4. Enable **Sign in with Apple** for the bundle ID.
 5. Create the StoreKit subscription products (see launch tier model in `.claude/.../memory/billing_model_2026_05.md`):
-   - `com.newsletterpod.pro.monthly` — $19.99/mo
-   - `com.newsletterpod.pro.annual` — $179.99/yr
-   - `com.newsletterpod.max.monthly` — $29.99/mo
-   - `com.newsletterpod.max.annual` — $269.99/yr
+   - `com.newsletterpod.pro.monthly` — $4.99/mo
+   - `com.newsletterpod.pro.annual` — $44.99/yr
+   - `com.newsletterpod.max.monthly` — $7.49/mo
+   - `com.newsletterpod.max.annual` — $67.49/yr
 6. Apply for the [Apple Small Business Program](https://developer.apple.com/app-store/small-business-program/) — load-bearing. At the standard 30% commission these prices don't work (Max monthly goes negative).
 7. In Codemagic, connect the GitHub repository:
    - `TheAntelope/Newsletter-pod`

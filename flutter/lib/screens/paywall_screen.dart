@@ -31,8 +31,8 @@ class PaywallScreen extends StatefulWidget {
     _Plan(
       tier: 'pro',
       name: 'Pro',
-      monthlyPrice: r'$19.99/mo',
-      annualPrice: r'$179.99/yr',
+      monthlyPrice: r'$4.99/mo',
+      annualPrice: r'$44.99/yr',
       recommended: true,
       features: [
         '3 premium-voice pods per week',
@@ -43,8 +43,8 @@ class PaywallScreen extends StatefulWidget {
     _Plan(
       tier: 'max',
       name: 'Max',
-      monthlyPrice: r'$29.99/mo',
-      annualPrice: r'$269.99/yr',
+      monthlyPrice: r'$7.49/mo',
+      annualPrice: r'$67.49/yr',
       recommended: false,
       features: [
         '7 premium-voice pods per week',
@@ -62,6 +62,32 @@ class _PaywallScreenState extends State<PaywallScreen> {
   /// Selected billing period for the paid plans. Drives both the price shown on
   /// each card and the `annual:` flag passed to the purchase.
   bool _annual = false;
+
+  /// Live store prices, keyed by tier (see [PurchasesController.fetchPrices]).
+  /// Empty until the store query returns (and stays empty in the demo build /
+  /// tests), in which case cards show the static fallback label on [_Plan].
+  Map<String, ({String? monthly, String? annual})> _livePrices = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPrices();
+  }
+
+  Future<void> _loadPrices() async {
+    final prices = await PurchasesController.fetchPrices();
+    if (mounted && prices.isNotEmpty) setState(() => _livePrices = prices);
+  }
+
+  /// Price label for [plan] in the selected period — the live store price when
+  /// available (with the period suffix appended), else the static fallback.
+  String _priceLabel(_Plan plan, {required bool annual}) {
+    if (!plan.isPaid) return 'Free';
+    final live = _livePrices[plan.tier];
+    final livePrice = annual ? live?.annual : live?.monthly;
+    if (livePrice != null) return '$livePrice${annual ? '/yr' : '/mo'}';
+    return plan.priceLabel(annual: annual);
+  }
 
   Future<void> _choose(AppState app, String tier) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -140,7 +166,7 @@ class _PaywallScreenState extends State<PaywallScreen> {
             for (final plan in PaywallScreen._plans) ...[
               _PlanCard(
                 plan: plan,
-                annual: _annual,
+                priceLabel: _priceLabel(plan, annual: _annual),
                 current: plan.tier == currentTier,
                 busy: _busyTier == plan.tier,
                 onChoose: () => _choose(app, plan.tier),
@@ -177,7 +203,11 @@ class _Plan {
   final bool recommended;
   final List<String> features;
 
-  /// Null for the Free plan (no purchasable period).
+  /// Static fallback prices, shown only when the live store price is
+  /// unavailable (demo build / tests, or a store query miss). Production reads
+  /// live prices via [PurchasesController.fetchPrices], so these can drift; keep
+  /// them roughly current for the stubbed paywall but they are not the source
+  /// of truth. Null for the Free plan (no purchasable period).
   final String? monthlyPrice;
   final String? annualPrice;
 
@@ -244,14 +274,16 @@ class _TrialStatusCard extends StatelessWidget {
 class _PlanCard extends StatelessWidget {
   const _PlanCard({
     required this.plan,
-    required this.annual,
+    required this.priceLabel,
     required this.current,
     required this.busy,
     required this.onChoose,
   });
 
   final _Plan plan;
-  final bool annual;
+
+  /// Resolved by the parent (live store price or static fallback).
+  final String priceLabel;
   final bool current;
   final bool busy;
   final VoidCallback onChoose;
@@ -287,7 +319,7 @@ class _PlanCard extends StatelessWidget {
             ],
             const Spacer(),
             Text(
-              plan.priceLabel(annual: annual),
+              priceLabel,
               style: DesignTokens.typographyCallout
                   .copyWith(color: DesignTokens.colorMuted),
             ),

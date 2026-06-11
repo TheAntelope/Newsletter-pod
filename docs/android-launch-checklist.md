@@ -63,7 +63,7 @@ Legend: **[you]** = console/account/portal work only you can do · **[code]** = 
 
 **[you] — Play Console + RevenueCat (the remaining work)**
 - [ ] Google Play Console: create the app + **subscriptions** for the launch pricing:
-  Pro **$19.99/mo + $179.99/yr**, Max **$29.99/mo + $269.99/yr** (trial: 5 pods → 1 premium/wk month 1 → 1 default/wk).
+  Pro **$4.99/mo + $44.99/yr**, Max **$7.49/mo + $67.49/yr** (trial: 5 pods → 1 premium/wk month 1 → 1 default/wk).
 - [ ] RevenueCat project: add the Play app + the **Play service-account JSON**; create entitlements named **`pro`** and **`max`**; build an **offering** whose packages are identified `pro_monthly`/`pro_annual`/`max_monthly`/`max_annual` (or set the matching `REVENUECAT_*_PRODUCT_ID` env vars to your Play product ids).
 - [ ] Grab the **Android public SDK key** (`goog_…`) and set a **webhook Authorization header value** in RevenueCat → Integrations → Webhooks.
 - [ ] Hand me the SDK key + the webhook secret value. I'll then: create Secret Manager secret `revenuecat-webhook-auth-secret`, add it to `cloudbuild.yaml` `--update-secrets`, set it on Cloud Run, and build the app with `--dart-define=ENABLE_PURCHASES_REVENUECAT=true --dart-define=REVENUECAT_ANDROID_KEY=goog_…`.

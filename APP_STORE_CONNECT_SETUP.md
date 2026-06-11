@@ -23,7 +23,7 @@ Reference: launch tier model decisions in
 ## 1. Apple Small Business Program (do this first)
 
 **This is load-bearing for the pricing math.** At Apple's default 30%
-commission, Max at $29.99/mo runs at a loss. Small Business Program
+commission, Max at $7.49/mo runs at a loss. Small Business Program
 (SBP) drops the commission to 15% from day one.
 
 1. Open <https://developer.apple.com/app-store/small-business-program/>.
@@ -104,10 +104,10 @@ names + product IDs + prices to use:
 
 | Reference Name | Product ID                          | Price (USD)  | Duration |
 |---|---|---|---|
-| Pro Monthly    | `com.newsletterpod.pro.monthly`     | $19.99 / mo  | 1 month  |
-| Pro Annual     | `com.newsletterpod.pro.annual`      | $179.99 / yr | 1 year   |
-| Max Monthly    | `com.newsletterpod.max.monthly`     | $29.99 / mo  | 1 month  |
-| Max Annual     | `com.newsletterpod.max.annual`      | $269.99 / yr | 1 year   |
+| Pro Monthly    | `com.newsletterpod.pro.monthly`     | $4.99 / mo   | 1 month  |
+| Pro Annual     | `com.newsletterpod.pro.annual`      | $44.99 / yr  | 1 year   |
+| Max Monthly    | `com.newsletterpod.max.monthly`     | $7.49 / mo   | 1 month  |
+| Max Annual     | `com.newsletterpod.max.annual`      | $67.49 / yr  | 1 year   |
 
 For each one, fill in:
 
@@ -187,7 +187,7 @@ This means:
   Pro/Max only after the trial deck is used up).
 
 If you later want to add an additional Apple-native free trial — for
-example, "7 days free, then $19.99/mo" — configure it as an
+example, "7 days free, then $4.99/mo" — configure it as an
 **Introductory Offer** on the subscription. That's separate from the
 server-side trial counter; the two would compose (free Apple trial
 window + then the server trial pods continue to count down).
@@ -303,7 +303,7 @@ Before clicking **Submit for Review**:
 
 | Product ID                          | Price (USD) | Duration |
 |---|---|---|
-| `com.newsletterpod.pro.monthly`     | $19.99      | 1 month  |
-| `com.newsletterpod.pro.annual`      | $179.99     | 1 year   |
-| `com.newsletterpod.max.monthly`     | $29.99      | 1 month  |
-| `com.newsletterpod.max.annual`      | $269.99     | 1 year   |
+| `com.newsletterpod.pro.monthly`     | $4.99       | 1 month  |
+| `com.newsletterpod.pro.annual`      | $44.99      | 1 year   |
+| `com.newsletterpod.max.monthly`     | $7.49       | 1 month  |
+| `com.newsletterpod.max.annual`      | $67.49      | 1 year   |

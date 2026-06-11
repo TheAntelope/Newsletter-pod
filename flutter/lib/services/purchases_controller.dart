@@ -74,6 +74,50 @@ class PurchasesController {
   /// literally named `pro:monthly`, which doesn't exist → empty list, no error,
   /// silent purchase failure. (This — not the `clawcast_` prefix — was the real
   /// cause of the empty-getProducts bug.)
+  /// Live, store-localized price strings for the paid tiers, keyed by tier and
+  /// period — e.g. `{'pro': (monthly: r'$4.99', annual: r'$44.99'), ...}`.
+  ///
+  /// This is the source of truth for paywall prices: RevenueCat reads them
+  /// straight from Play Console, so a price change there propagates to the app
+  /// with no code change or redeploy. The returned strings are the store's own
+  /// `priceString` (already localized + currency-formatted, no period suffix —
+  /// the caller appends `/mo` or `/yr`).
+  ///
+  /// Returns an empty map when purchases are disabled (demo build / widget
+  /// tests, where [_enabled] is false) or every store query fails; callers fall
+  /// back to their static labels. A per-tier query failure just omits that tier.
+  static Future<Map<String, ({String? monthly, String? annual})>>
+      fetchPrices() async {
+    if (!_enabled) return {};
+    final prices = <String, ({String? monthly, String? annual})>{};
+    for (final entry in _playSubscription.entries) {
+      final cfg = entry.value;
+      try {
+        final products = await Purchases.getProducts(
+          [cfg.sub],
+          productCategory: ProductCategory.subscription,
+        );
+        // Each StoreProduct's identifier is `"<sub>:<basePlan>"` (see the
+        // getProducts gotcha on [purchase]); match the base plan we want.
+        String? priceFor(String basePlan) {
+          final id = '${cfg.sub}:$basePlan';
+          for (final p in products) {
+            if (p.identifier == id) return p.priceString;
+          }
+          return null;
+        }
+
+        prices[entry.key] = (
+          monthly: priceFor(cfg.monthly),
+          annual: priceFor(cfg.annual),
+        );
+      } on PlatformException {
+        // Skip this tier; the caller falls back to its static label.
+      }
+    }
+    return prices;
+  }
+
   static Future<bool> purchase(String tier, {bool annual = false}) async {
     if (!_enabled) return false;
     final cfg = _playSubscription[tier];
