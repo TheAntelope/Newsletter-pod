@@ -17,6 +17,8 @@ tmp-live-episode.mp3
 sample_episode.mp3
 welcome_v*.mp3
 weekly_changes.json
+# Locally downloaded/generated episode audio (date-prefixed briefing files).
+20??-??-??_*.mp3
 build/
 DerivedData/
 *.xcworkspace
@@ -35,6 +37,22 @@ ios/build/
 # design-tokens/ is a submodule (TheAntelope/clawcast-tokens) — its own
 # .gitignore handles node_modules. Keep ios/NewsletterPodApp/DesignTokens.swift
 # committed so Xcode builds don't need npm; CI refreshes it from the submodule.
+
+# One-off / local-only helper scripts and their logs — not part of the
+# shipped toolset under scripts/. Keep on disk, out of version control.
+scripts/*_oneoff.py
+scripts/code_review_token_report.py
+scripts/run_code_review_report.ps1
+scripts/list_prod_users.py
+scripts/.code_review_report.log
+test_replay_check.py
+
+# Personal Obsidian vault layered on top of the repo (config + notes). Kept
+# local-only: durable shared knowledge belongs in NEXT_STEPS.md / the auto-
+# memory, not here. notes/ is the contained home for new + daily notes.
+.obsidian/
+notes/
+*.base
 
 # Local Claude Code workspace: ignore screenshots / lock files / etc.,
 # but keep settings.json under version control so project hooks travel
