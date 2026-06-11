@@ -133,6 +133,9 @@ class UpdatePodcastConfigRequest(BaseModel):
     include_top_takeaways: Optional[bool] = None
     include_weather: Optional[bool] = None
     weather_location: Optional[str] = None
+    weather_lat: Optional[float] = None
+    weather_lon: Optional[float] = None
+    weather_country_code: Optional[str] = None
     custom_guidance: Optional[str] = None
     custom_guidance_preset_id: Optional[str] = None
 
@@ -1059,6 +1062,9 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 include_top_takeaways=request_payload.include_top_takeaways,
                 include_weather=request_payload.include_weather,
                 weather_location=request_payload.weather_location,
+                weather_lat=request_payload.weather_lat,
+                weather_lon=request_payload.weather_lon,
+                weather_country_code=request_payload.weather_country_code,
                 custom_guidance=request_payload.custom_guidance,
                 custom_guidance_preset_id=request_payload.custom_guidance_preset_id,
             )

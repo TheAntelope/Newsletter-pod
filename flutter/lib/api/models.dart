@@ -318,6 +318,12 @@ class PodcastProfileDto {
   final bool? includeTopTakeaways;
   final bool? includeWeather;
   final String? weatherLocation;
+  // Coordinates of the picked city (from the Open-Meteo geocoder) so the backend
+  // forecasts the exact place instead of re-geocoding the ambiguous string;
+  // weatherCountryCode drives °F/°C. All null for free-typed/legacy values.
+  final double? weatherLat;
+  final double? weatherLon;
+  final String? weatherCountryCode;
   final String? customGuidance;
   final String? customGuidancePresetId;
 
@@ -337,6 +343,9 @@ class PodcastProfileDto {
     this.includeTopTakeaways,
     this.includeWeather,
     this.weatherLocation,
+    this.weatherLat,
+    this.weatherLon,
+    this.weatherCountryCode,
     this.customGuidance,
     this.customGuidancePresetId,
   });

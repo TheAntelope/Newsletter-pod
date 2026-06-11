@@ -43,26 +43,47 @@ _cache: dict[tuple[str, date], Optional[str]] = {}
 def fetch_weather_summary(
     location: str,
     *,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    country_code: Optional[str] = None,
     today: Optional[date] = None,
     timeout_seconds: float = 2.0,
 ) -> Optional[str]:
     """Return a one-line weather summary for ``location``, or ``None`` on failure.
 
+    When ``lat``/``lon`` are supplied (the app resolved them from the same
+    Open-Meteo geocoder at pick-time) the geocoding step is skipped entirely —
+    this avoids the ambiguity of geocoding a free-text string server-side, where
+    e.g. "Springfield" resolves to the most-populous match (Missouri) rather than
+    the city the user actually picked. ``country_code`` drives the °F/°C choice;
+    without it (legacy string-only values) we geocode by ``location`` as before.
+
     Uses Open-Meteo (no API key). All errors are swallowed — callers should
     treat ``None`` as "skip the weather mention this episode."
     """
     cleaned = (location or "").strip()
-    if not cleaned:
+    have_coords = lat is not None and lon is not None
+    if not cleaned and not have_coords:
         return None
 
     today = today or date.today()
-    cache_key = (cleaned.casefold(), today)
+    # Key the cache on coordinates when we have them so two distinct cities that
+    # happen to share a display string don't collide; ~100m precision is plenty.
+    cache_key = (
+        f"{round(lat, 3)},{round(lon, 3)}" if have_coords else cleaned.casefold(),
+        today,
+    )
     if cache_key in _cache:
         return _cache[cache_key]
 
     summary: Optional[str]
     try:
-        summary = _fetch(cleaned, timeout_seconds)
+        if have_coords:
+            summary = _forecast(
+                lat, lon, cleaned or None, country_code, timeout_seconds
+            )
+        else:
+            summary = _fetch(cleaned, timeout_seconds)
     except Exception:
         summary = None
 
@@ -71,6 +92,7 @@ def fetch_weather_summary(
 
 
 def _fetch(location: str, timeout_seconds: float) -> Optional[str]:
+    """Geocode a free-text ``location`` to coordinates, then forecast."""
     geo = requests.get(
         GEOCODE_URL,
         params={"name": location, "count": 1, "language": "en", "format": "json"},
@@ -88,9 +110,23 @@ def _fetch(location: str, timeout_seconds: float) -> Optional[str]:
     if lat is None or lon is None:
         return None
     pretty_name = place.get("name") or location
+    return _forecast(
+        lat, lon, pretty_name, place.get("country_code"), timeout_seconds
+    )
 
-    country_code = str(place.get("country_code") or "").strip().upper()
-    use_fahrenheit = country_code == "US"
+
+def _forecast(
+    lat: float,
+    lon: float,
+    pretty_name: Optional[str],
+    country_code: Optional[str],
+    timeout_seconds: float,
+) -> Optional[str]:
+    """Fetch the current-day forecast at ``lat``/``lon`` and format one line."""
+    pretty_name = pretty_name or "your area"
+
+    country = str(country_code or "").strip().upper()
+    use_fahrenheit = country == "US"
     unit_param = "fahrenheit" if use_fahrenheit else "celsius"
     unit_symbol = "°F" if use_fahrenheit else "°C"
 

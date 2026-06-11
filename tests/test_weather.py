@@ -79,3 +79,38 @@ def test_missing_country_code_defaults_to_celsius(monkeypatch):
     assert "°C" in summary
     forecast_call = next(c for c in captured if c["url"] == weather.FORECAST_URL)
     assert forecast_call["params"]["temperature_unit"] == "celsius"
+
+
+def test_coords_skip_geocoding_and_use_country_code(monkeypatch):
+    # When the client supplies coordinates, the ambiguous geocode-by-name step is
+    # skipped entirely and the forecast is taken straight from the lat/lon. This
+    # is what fixes "Springfield" resolving to Missouri instead of the picked NJ.
+    captured = _patch_requests(monkeypatch, country_code="US")
+
+    summary = weather.fetch_weather_summary(
+        "Springfield, New Jersey",
+        lat=40.705,
+        lon=-74.319,
+        country_code="US",
+        today=date(2026, 5, 11),
+    )
+
+    assert summary is not None
+    assert summary.startswith("Springfield, New Jersey —")
+    assert "°F" in summary  # US country_code → Fahrenheit, no geocode needed
+    assert not any(c["url"] == weather.GEOCODE_URL for c in captured)
+    forecast_call = next(c for c in captured if c["url"] == weather.FORECAST_URL)
+    assert forecast_call["params"]["latitude"] == 40.705
+    assert forecast_call["params"]["longitude"] == -74.319
+
+
+def test_coords_without_country_code_default_to_celsius(monkeypatch):
+    captured = _patch_requests(monkeypatch, country_code="US")
+
+    summary = weather.fetch_weather_summary(
+        "Berlin", lat=52.52, lon=13.405, today=date(2026, 5, 11)
+    )
+
+    assert summary is not None
+    assert "°C" in summary
+    assert not any(c["url"] == weather.GEOCODE_URL for c in captured)

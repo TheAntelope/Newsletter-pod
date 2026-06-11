@@ -30,6 +30,10 @@ class ApiAppRepository implements AppRepository {
   Future<RunStartEnvelope> generateNow() => _client.generateNow(_token);
 
   @override
+  Future<RunStatusEnvelope> fetchRun(String runId) =>
+      _client.fetchRun(_token, runId);
+
+  @override
   Future<FeedEnvelope> fetchFeed() => _client.fetchFeed(_token);
 
   @override
@@ -92,6 +96,9 @@ class ApiAppRepository implements AppRepository {
         includeTopTakeaways: p.includeTopTakeaways,
         includeWeather: p.includeWeather,
         weatherLocation: p.weatherLocation,
+        weatherLat: p.weatherLat,
+        weatherLon: p.weatherLon,
+        weatherCountryCode: p.weatherCountryCode,
         customGuidance: p.customGuidance,
         customGuidancePresetId: p.customGuidancePresetId,
       );

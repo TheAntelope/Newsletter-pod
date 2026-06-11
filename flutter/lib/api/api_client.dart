@@ -187,6 +187,9 @@ class ApiClient {
     bool? includeTopTakeaways,
     bool? includeWeather,
     String? weatherLocation,
+    double? weatherLat,
+    double? weatherLon,
+    String? weatherCountryCode,
     String? customGuidance,
     String? customGuidancePresetId,
   }) async =>
@@ -209,6 +212,10 @@ class ApiClient {
           'include_top_takeaways': includeTopTakeaways,
         if (includeWeather != null) 'include_weather': includeWeather,
         if (weatherLocation != null) 'weather_location': weatherLocation,
+        if (weatherLat != null) 'weather_lat': weatherLat,
+        if (weatherLon != null) 'weather_lon': weatherLon,
+        if (weatherCountryCode != null)
+          'weather_country_code': weatherCountryCode,
         if (customGuidance != null) 'custom_guidance': customGuidance,
         if (customGuidancePresetId != null)
           'custom_guidance_preset_id': customGuidancePresetId,
