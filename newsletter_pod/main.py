@@ -1770,6 +1770,55 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             container, episode_id, suffix="mp4", media_type="video/mp4", request=request
         )
 
+    @app.api_route(
+        "/broadcast/{loop_id}/feed.xml",
+        methods=["GET", "HEAD"],
+        response_class=Response,
+    )
+    def get_broadcast_feed(loop_id: str, request: Request) -> Response:
+        """Public podcast RSS for one broadcast loop — the same daily
+        episodes posted to X, as a subscribable feed. Intentionally
+        unauthenticated, like the /broadcast/<id>.mp3 assets it points at:
+        this is what the marketing site embeds and what podcast players
+        ingest. Enclosures reuse the existing public audio route, so no
+        asset has to be made public at the bucket level."""
+        assert container.broadcast_repository is not None
+        try:
+            clean_loop_id = validate_loop_id(loop_id)
+        except ValueError:
+            # Don't leak the validation rule on a public route; a bad id is
+            # simply "no such feed".
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+        episodes = container.broadcast_repository.list_episodes_for_loop(
+            clean_loop_id, limit=container.settings.max_feed_episodes
+        )
+        base = container.settings.app_base_url.rstrip("/")
+        items: list[_BroadcastFeedItem] = []
+        for episode in episodes:
+            try:
+                size = container.storage.object_size(episode.audio_object_name)
+            except FileNotFoundError:
+                # Episode row exists but its audio never landed (failed run).
+                # Skip it rather than emit an item that 404s on play.
+                continue
+            items.append(_broadcast_feed_item(episode, size))
+
+        loop = container.broadcast_repository.get_loop(clean_loop_id)
+        xml_content = build_feed_xml(
+            title=_broadcast_feed_title(loop),
+            description=_BROADCAST_FEED_DESCRIPTION,
+            author=container.settings.podcast_author,
+            language=container.settings.podcast_language,
+            feed_url=f"{base}/broadcast/{clean_loop_id}/feed.xml",
+            image_url=container.settings.podcast_image_url,
+            episodes=items,
+            media_url_builder=lambda item: f"{base}/broadcast/{item.id}.mp3",
+            owner_email=container.settings.podcast_owner_email,
+            category=container.settings.podcast_category,
+        )
+        return _build_xml_response(xml_content, request)
+
     @app.api_route("/media/{secret_token}/{episode_id}.mp3", methods=["GET", "HEAD"])
     def get_private_media(
         secret_token: str,
@@ -2311,6 +2360,53 @@ def _require_session_user(container: ServiceContainer, authorization: str | None
         return container.control_plane.get_authenticated_user(token)
     except (AuthError, ControlPlaneError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+
+
+# ElevenLabs renders broadcast MP3s at a constant 128 kbps, so we can derive a
+# good-enough itunes:duration from the byte size without decoding the audio.
+_BROADCAST_FEED_BITRATE_BPS = 128_000
+_BROADCAST_FEED_DESCRIPTION = (
+    "ClawCast's short daily show — the same episodes posted to X, generated "
+    "and hosted by ClawCast from the feeds it follows."
+)
+
+
+@dataclass(frozen=True)
+class _BroadcastFeedItem:
+    """Adapter exposing just the attributes build_feed_xml reads, so the
+    broadcast feed can reuse the user-feed XML builder without sharing the
+    UserEpisodeRecord schema."""
+
+    id: str
+    title: str
+    description: str
+    published_at: datetime
+    duration_seconds: int
+    audio_size_bytes: int
+    audio_mime_type: str
+
+
+def _broadcast_feed_title(loop: BroadcastLoopRecord | None) -> str:
+    # Loops carry a region but no human-facing show name; keep a stable title
+    # and disambiguate by region when one is set.
+    if loop and loop.region.strip():
+        return f"ClawCast Daily — {loop.region.strip()}"
+    return "ClawCast Daily"
+
+
+def _broadcast_feed_item(
+    episode: BroadcastEpisodeRecord, audio_size_bytes: int
+) -> _BroadcastFeedItem:
+    duration = max(1, round(audio_size_bytes * 8 / _BROADCAST_FEED_BITRATE_BPS))
+    return _BroadcastFeedItem(
+        id=episode.episode_id,
+        title=episode.title,
+        description=episode.show_notes or episode.title,
+        published_at=episode.created_at,
+        duration_seconds=duration,
+        audio_size_bytes=audio_size_bytes,
+        audio_mime_type="audio/mpeg",
+    )
 
 
 def _build_xml_response(xml_content: str, request: Request) -> Response:
