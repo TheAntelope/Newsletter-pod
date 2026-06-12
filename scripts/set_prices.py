@@ -69,6 +69,7 @@ Notes / known edges (see the team summary for context):
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import os
 import sys
@@ -100,7 +101,9 @@ PRICE_TABLE: list[Product] = [
     Product("pro_annual", "44.99", "com.newsletterpod.pro.annual", "pro", "annual", "annual"),
     Product("max_monthly", "7.49", "com.newsletterpod.max.monthly", "max", "monthly", "monthly"),
     # Max's active yearly base plan id is `annualmax` (see purchases_controller.dart).
-    Product("max_annual", "67.49", "com.newsletterpod.max.annual", "max", "annualmax", "annual"),
+    # Apple has no $67.49 price point; $66.99 is the nearest valid point. Set on both
+    # stores for cross-platform parity (Google accepts the exact value too).
+    Product("max_annual", "66.99", "com.newsletterpod.max.annual", "max", "annualmax", "annual"),
 ]
 
 ASC_BASE = "https://api.appstoreconnect.apple.com"
@@ -228,13 +231,20 @@ class AppStoreConnect:
         nearest = sorted(set(available), key=lambda s: abs(float(s) - float(usd)))[:8]
         return match, nearest
 
-    def set_price(self, subscription_id: str, price_point_id: str, preserve_existing: bool) -> None:
+    def set_price(
+        self, subscription_id: str, price_point_id: str, preserve_existing: bool, start_date: str
+    ) -> None:
+        # `startDate` is required on an approved subscription: without it ASC treats
+        # the POST as defining the (immutable) initial price and returns 409 STATE_ERROR.
         self._post(
             "/v1/subscriptionPrices",
             {
                 "data": {
                     "type": "subscriptionPrices",
-                    "attributes": {"preserveCurrentPrice": preserve_existing},
+                    "attributes": {
+                        "preserveCurrentPrice": preserve_existing,
+                        "startDate": start_date,
+                    },
                     "relationships": {
                         "subscription": {"data": {"type": "subscriptions", "id": subscription_id}},
                         "subscriptionPricePoint": {
@@ -268,6 +278,10 @@ def run_apple(table: list[Product], args) -> int:
         return 1
 
     preserve = args.existing_subscribers == "preserve"
+    # ASC requires the price-change startDate to be at least 2 days out; use +3 for
+    # timezone margin. New price applies to new subscribers from this date (decreases
+    # need no customer consent).
+    start_date = (_dt.date.today() + _dt.timedelta(days=3)).isoformat()
     failures = 0
     for prod in table:
         sub_id = ids.get(prod.asc_product_id)
@@ -288,7 +302,7 @@ def run_apple(table: list[Product], args) -> int:
         print(f"  {prod.key}: ${current} {arrow}")
         if args.apply and current != prod.usd:
             try:
-                asc.set_price(sub_id, match, preserve_existing=preserve)
+                asc.set_price(sub_id, match, preserve_existing=preserve, start_date=start_date)
                 print(f"    applied ({'grandfathered' if preserve else 'migrated'} existing subs)")
             except Exception as e:  # noqa: BLE001
                 print(f"    ERROR applying: {e}")
@@ -336,7 +350,14 @@ class GooglePlay:
             timeout=30,
         )
         r.raise_for_status()
-        return r.json()
+        result = r.json()
+        # convertRegionPrices applies local price-templating to EVERY region, including
+        # the US -- e.g. it rounds USD 66.99 down to 64.99. We want the US storefront to
+        # be the exact intended price, so override the US entry with the literal input;
+        # other regions keep Google's locally-appropriate conversions.
+        us = result.setdefault("convertedRegionPrices", {}).setdefault("US", {})
+        us["price"] = {"currencyCode": "USD", "units": str(units), "nanos": nanos}
+        return result
 
     def patch_base_plan_prices(
         self, subscription: dict, base_plan_id: str, converted: dict, regions_version: str
@@ -366,7 +387,10 @@ class GooglePlay:
             params={
                 "updateMask": "basePlans",
                 "regionsVersion.version": regions_version,
-                "latencyTolerance": "PRODUCT_UPDATE_LATENCY_TOLERANCE_SENSITIVE",
+                # Price updates touch many regions; the tolerant mode is the value
+                # Google accepts for bulk catalog changes (the SENSITIVE spelling
+                # used before is not a valid enum -> 400 INVALID_ARGUMENT).
+                "latencyTolerance": "PRODUCT_UPDATE_LATENCY_TOLERANCE_LATENCY_TOLERANT",
             },
             json=body,
             timeout=30,
@@ -429,10 +453,16 @@ def run_google(table: list[Product], args) -> int:
             if args.apply and current != prod.usd:
                 try:
                     converted = play.convert_region_prices(prod.usd)
+                    # Use the regions version the convert call actually resolved to
+                    # (e.g. 2025/03). Pinning a stale --regions-version makes the PATCH
+                    # reject newly-euro regions (e.g. BG: expected BGN but convert gave EUR).
+                    regions_version = (
+                        converted.get("regionVersion", {}).get("version") or args.regions_version
+                    )
                     # Re-fetch to avoid clobbering a concurrent edit, then patch.
                     fresh = play.get_subscription(sub_id)
                     play.patch_base_plan_prices(
-                        fresh, prod.play_base_plan, converted, args.regions_version
+                        fresh, prod.play_base_plan, converted, regions_version
                     )
                     subscription = play.get_subscription(sub_id)  # refresh for next product
                     print("    applied")
