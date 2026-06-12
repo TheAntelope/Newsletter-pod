@@ -4,7 +4,8 @@ from datetime import date, datetime, timezone
 
 from newsletter_pod.broadcast.models import BroadcastEpisodeRecord, BroadcastLoopRecord
 from newsletter_pod.broadcast.repository import InMemoryBroadcastRepository
-from newsletter_pod.broadcast.topic_picker import BroadcastTopicPicker
+from newsletter_pod.broadcast.topic_picker import BroadcastTopicPicker, TopicProposal
+from newsletter_pod.models import SourceItem
 
 
 class _FakeProposer:
@@ -105,3 +106,112 @@ def test_pick_proposer_none_skips_llm_step():
     topic, _ = picker.pick(_loop(seed_topics=["a"]))
 
     assert topic == "a"
+
+
+# --- Source-led selection (no feedback yet) ---------------------------------
+
+
+class _FakeSourceProposer:
+    """Proposer that supports both the feedback path and source-led selection.
+    `source_proposal` is what propose_from_sources returns."""
+
+    def __init__(self, *, returns: str | None = None, source_proposal: TopicProposal | None = None) -> None:
+        self.returns = returns
+        self.source_proposal = source_proposal
+        self.propose_calls: list[dict] = []
+        self.source_calls: list[dict] = []
+
+    def propose(self, *, audience_persona, prior_feedback_summary, seed_topics):
+        self.propose_calls.append({
+            "prior_feedback_summary": prior_feedback_summary,
+            "seed_topics": list(seed_topics),
+        })
+        return self.returns
+
+    def propose_from_sources(self, *, audience_persona, source_items):
+        self.source_calls.append({
+            "audience_persona": audience_persona,
+            "source_items": list(source_items),
+        })
+        return self.source_proposal
+
+
+def _src_item(title: str, *, source_id: str = "src-a") -> SourceItem:
+    return SourceItem(
+        source_id=source_id,
+        source_name=f"name-{source_id}",
+        guid=title,
+        link=f"https://x.test/{title}",
+        title=title,
+        summary=f"summary for {title}",
+        published_at=datetime(2026, 5, 30, tzinfo=timezone.utc),
+        dedupe_key=title,
+    )
+
+
+def test_pick_no_feedback_uses_source_led_topic_and_narrows_grounding():
+    repo = InMemoryBroadcastRepository()
+    items = [_src_item("Story A"), _src_item("Story B"), _src_item("Story C")]
+    proposer = _FakeSourceProposer(
+        source_proposal=TopicProposal(topic="Story B, in depth", source_dedupe_key="Story B"),
+    )
+    picker = BroadcastTopicPicker(proposer=proposer, repository=repo)
+
+    topic, brief = picker.pick(_loop(seed_topics=["seed-x"]), source_items=items)
+
+    # Topic came from the sources, not the seed list...
+    assert topic == "Story B, in depth"
+    assert proposer.source_calls and proposer.source_calls[0]["source_items"] == items
+    # ...and the episode is grounded on just the chosen story.
+    assert [i.title for i in brief.source_items] == ["Story B"]
+    # The seed-topic proposer path is not used when sources produced a topic.
+    assert proposer.propose_calls == []
+
+
+def test_pick_source_led_topic_without_pin_keeps_broad_grounding():
+    repo = InMemoryBroadcastRepository()
+    items = [_src_item("Story A"), _src_item("Story B")]
+    proposer = _FakeSourceProposer(
+        source_proposal=TopicProposal(topic="An angle", source_dedupe_key=None),
+    )
+    picker = BroadcastTopicPicker(proposer=proposer, repository=repo)
+
+    topic, brief = picker.pick(_loop(), source_items=items)
+
+    assert topic == "An angle"
+    # No specific item pinned → ground on all recent items.
+    assert [i.title for i in brief.source_items] == ["Story A", "Story B"]
+
+
+def test_pick_no_feedback_falls_back_to_seed_proposer_when_no_source_topic():
+    repo = InMemoryBroadcastRepository()
+    items = [_src_item("Story A")]
+    # Source selection declines (returns None); seed proposer still answers.
+    proposer = _FakeSourceProposer(returns="Seed-based topic", source_proposal=None)
+    picker = BroadcastTopicPicker(proposer=proposer, repository=repo)
+
+    topic, brief = picker.pick(_loop(seed_topics=["seed-x"]), source_items=items)
+
+    assert topic == "Seed-based topic"
+    assert proposer.propose_calls[0]["prior_feedback_summary"] is None
+    # Falls back to broad grounding on the available items.
+    assert [i.title for i in brief.source_items] == ["Story A"]
+
+
+def test_pick_with_feedback_ignores_source_led_selection():
+    repo = InMemoryBroadcastRepository()
+    _episode_with_feedback(repo, loop_id="us-morning", summary="more on pricing")
+    items = [_src_item("Story A"), _src_item("Story B")]
+    proposer = _FakeSourceProposer(
+        returns="Pricing deep dive",
+        source_proposal=TopicProposal(topic="Story A", source_dedupe_key="Story A"),
+    )
+    picker = BroadcastTopicPicker(proposer=proposer, repository=repo)
+
+    topic, brief = picker.pick(_loop(), source_items=items)
+
+    # Feedback wins; source-led selection is not consulted.
+    assert topic == "Pricing deep dive"
+    assert proposer.source_calls == []
+    # Grounding stays broad in the feedback case.
+    assert [i.title for i in brief.source_items] == ["Story A", "Story B"]

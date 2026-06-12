@@ -294,3 +294,35 @@ def test_run_skips_provider_when_loop_has_no_source_ids(tmp_path):
     runner.run("us-morning")
 
     assert calls == []
+
+
+def test_run_picks_source_led_topic_and_grounds_on_chosen_story(tmp_path):
+    from newsletter_pod.broadcast.topic_picker import BroadcastTopicPicker, TopicProposal
+
+    # Two stories available; the proposer commits to the second one.
+    def provider(source_ids: list[str]):
+        return [_src_item(title="Story A"), _src_item(title="Story B", source_id="src-b")]
+
+    class _SourceProposer:
+        def propose(self, *, audience_persona, prior_feedback_summary, seed_topics):
+            return "should-not-be-used"
+
+        def propose_from_sources(self, *, audience_persona, source_items):
+            return TopicProposal(topic="Story B, in depth", source_dedupe_key="Story B")
+
+    client = _CapturingPodcastClient()
+    runner, repo, _ = _build_runner(
+        tmp_path, source_item_provider=provider, podcast_client=client
+    )
+    # Swap in the source-aware proposer (no prior feedback exists for this loop).
+    runner._topic_picker = BroadcastTopicPicker(proposer=_SourceProposer(), repository=repo)
+    repo.save_loop(_loop().model_copy(update={"source_ids": ["src-a", "src-b"]}))
+
+    result = runner.run("us-morning")
+
+    assert result.topic == "Story B, in depth"
+    assert repo.get_episode("deadbeefdeadbeef").topic_used == "Story B, in depth"
+    prompt = client.prompts[0]
+    # The episode is grounded on the chosen story only — Story A is dropped.
+    assert "Story B" in prompt
+    assert "Story A" not in prompt
