@@ -811,6 +811,88 @@ sources:
     jurisdiction_sensitive: false
 
   # =====================================================================
+  # Food & Beverage
+  # Validated end-to-end 2026-06-12 via
+  # scripts/validate_candidate_sources_food_beverage.py (global, no region
+  # bias — recipes and drinks travel well). Deliberately cooking/drinks-focused
+  # and kept distinct from "Food & Travel" (which leans on destinations).
+  # =====================================================================
+  # --- Cooking / recipes / food writing ---
+  - id: fnb-smitten-kitchen
+    name: Smitten Kitchen
+    rss_url: https://smittenkitchen.com/feed/
+    topic: Food & Beverage
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: fnb-the-kitchn
+    name: The Kitchn
+    rss_url: https://www.thekitchn.com/main.rss
+    topic: Food & Beverage
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: fnb-david-lebovitz
+    name: David Lebovitz
+    rss_url: https://www.davidlebovitz.com/feed/
+    topic: Food & Beverage
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: fnb-vittles
+    name: Vittles
+    rss_url: https://www.vittlesmagazine.com/feed
+    topic: Food & Beverage
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  # Bon Appétit — Condé Nast; RSS delivers excerpts.
+  - id: fnb-bon-appetit
+    name: Bon Appétit
+    rss_url: https://www.bonappetit.com/feed/rss
+    topic: Food & Beverage
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  # --- Beverage: cocktails, wine, beer, coffee ---
+  - id: fnb-punch
+    name: PUNCH
+    rss_url: https://punchdrink.com/feed/
+    topic: Food & Beverage
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: fnb-vinepair
+    name: VinePair
+    rss_url: https://vinepair.com/feed/
+    topic: Food & Beverage
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: fnb-good-beer-hunting
+    name: Good Beer Hunting
+    rss_url: https://www.goodbeerhunting.com/blog?format=rss
+    topic: Food & Beverage
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: fnb-sprudge
+    name: Sprudge
+    rss_url: https://sprudge.com/feed
+    topic: Food & Beverage
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  # =====================================================================
   # Romantasy
   # =====================================================================
   - id: romantasy-bookriot

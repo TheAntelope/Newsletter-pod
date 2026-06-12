@@ -17,6 +17,7 @@ const _topicIcons = <String, IconData>{
   'Fitness': Icons.fitness_center,
   'Family Life': Icons.family_restroom_outlined,
   'Food & Travel': Icons.restaurant_outlined,
+  'Food & Beverage': Icons.local_bar_outlined,
   'Romantasy': Icons.auto_stories_outlined,
   'Cybersecurity': Icons.shield_outlined,
 };
