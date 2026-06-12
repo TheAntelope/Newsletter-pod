@@ -35,6 +35,13 @@ class AudioStorage(ABC):
         when the object doesn't exist."""
         raise NotImplementedError
 
+    @abstractmethod
+    def object_size(self, object_name: str) -> int:
+        """Return the byte size of an object without downloading it. Raises
+        FileNotFoundError when the object doesn't exist. Used to fill the RSS
+        <enclosure length="…"> without pulling the whole asset into memory."""
+        raise NotImplementedError
+
 
 class InMemoryAudioStorage(AudioStorage):
     def __init__(self) -> None:
@@ -63,6 +70,12 @@ class InMemoryAudioStorage(AudioStorage):
         if data is None:
             raise FileNotFoundError(object_name)
         return data
+
+    def object_size(self, object_name: str) -> int:
+        data = self._objects.get(object_name)
+        if data is None:
+            raise FileNotFoundError(object_name)
+        return len(data)
 
 
 class GCSAudioStorage(AudioStorage):
@@ -100,3 +113,11 @@ class GCSAudioStorage(AudioStorage):
         if not blob.exists():
             raise FileNotFoundError(object_name)
         return blob.download_as_bytes()
+
+    def object_size(self, object_name: str) -> int:
+        # get_blob() does a metadata GET (no payload download) and returns
+        # None when the object is missing.
+        blob = self._bucket.get_blob(object_name)
+        if blob is None:
+            raise FileNotFoundError(object_name)
+        return blob.size or 0
