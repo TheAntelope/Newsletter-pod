@@ -251,6 +251,17 @@ class Settings(BaseSettings):
     pro_default_pods_per_week: int = Field(default=4, alias="PRO_DEFAULT_PODS_PER_WEEK")
     max_premium_pods_per_week: int = Field(default=7, alias="MAX_PREMIUM_PODS_PER_WEEK")
 
+    # 7-day full-access trial (2026-06-13). Every new user gets `trial_tier`
+    # entitlements for `trial_window_days` days from signup; existing unpaid
+    # users were granted the same window via scripts/grant_time_trial.py. While
+    # the window is open a free user is treated as `trial_tier` for capability
+    # purposes (their subscription tier stays "free", so the paywall still
+    # shows). After it closes they fall back to the free model (1 default-voice
+    # pod/week). This supersedes the legacy pod-count trial
+    # (`trial_premium_pods_total`) for users created after the change.
+    trial_window_days: int = Field(default=7, alias="TRIAL_WINDOW_DAYS")
+    trial_tier: str = Field(default="max", alias="TRIAL_TIER")
+
     cloud_tasks_project_id: Optional[str] = Field(default=None, alias="CLOUD_TASKS_PROJECT_ID")
     cloud_tasks_location: Optional[str] = Field(default=None, alias="CLOUD_TASKS_LOCATION")
     cloud_tasks_queue: Optional[str] = Field(default=None, alias="CLOUD_TASKS_QUEUE")
