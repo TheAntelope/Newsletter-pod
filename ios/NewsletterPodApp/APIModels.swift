@@ -126,6 +126,9 @@ struct EntitlementsDTO: Codable {
     let trialPremiumPodsRemaining: Int
     let isInFirstMonth: Bool
     let firstMonthEndsAt: Date?
+    // Set while the 7-day full-access trial window is open; nil otherwise.
+    // Drives the "X days left" countdown on the paywall trial card.
+    let trialEndsAt: Date?
 
     private enum CodingKeys: String, CodingKey {
         case tier
@@ -141,6 +144,7 @@ struct EntitlementsDTO: Codable {
         case trialPremiumPodsRemaining = "trial_premium_pods_remaining"
         case isInFirstMonth = "is_in_first_month"
         case firstMonthEndsAt = "first_month_ends_at"
+        case trialEndsAt = "trial_ends_at"
     }
 
     init(from decoder: Decoder) throws {
@@ -158,6 +162,7 @@ struct EntitlementsDTO: Codable {
         trialPremiumPodsRemaining = (try? c.decode(Int.self, forKey: .trialPremiumPodsRemaining)) ?? 0
         isInFirstMonth = (try? c.decode(Bool.self, forKey: .isInFirstMonth)) ?? false
         firstMonthEndsAt = try? c.decodeIfPresent(Date.self, forKey: .firstMonthEndsAt)
+        trialEndsAt = try? c.decodeIfPresent(Date.self, forKey: .trialEndsAt)
     }
 
     init(
@@ -173,7 +178,8 @@ struct EntitlementsDTO: Codable {
         isInTrial: Bool = false,
         trialPremiumPodsRemaining: Int = 0,
         isInFirstMonth: Bool = false,
-        firstMonthEndsAt: Date? = nil
+        firstMonthEndsAt: Date? = nil,
+        trialEndsAt: Date? = nil
     ) {
         self.tier = tier
         self.maxDeliveryDays = maxDeliveryDays
@@ -188,6 +194,7 @@ struct EntitlementsDTO: Codable {
         self.trialPremiumPodsRemaining = trialPremiumPodsRemaining
         self.isInFirstMonth = isInFirstMonth
         self.firstMonthEndsAt = firstMonthEndsAt
+        self.trialEndsAt = trialEndsAt
     }
 }
 
