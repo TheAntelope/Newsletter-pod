@@ -247,6 +247,18 @@ class _TrialStatusCard extends StatelessWidget {
   }
 
   (String, String, String) get _content {
+    final trialEnd = entitlements.trialEndsAt;
+    if (trialEnd != null) {
+      final secondsLeft = trialEnd.difference(DateTime.now()).inSeconds;
+      final daysLeft = (secondsLeft / 86400).ceil().clamp(1, 365);
+      return (
+        'Free trial',
+        '$daysLeft ${daysLeft == 1 ? 'day' : 'days'} left in your free trial',
+        'You have full access to every premium voice, longer episodes, and daily '
+            'delivery. When the trial ends, free users get 1 default-voice pod/week '
+            '— upgrade any time to keep it all.',
+      );
+    }
     if (entitlements.isInTrial && entitlements.trialPremiumPodsRemaining > 0) {
       return (
         'Free trial',
