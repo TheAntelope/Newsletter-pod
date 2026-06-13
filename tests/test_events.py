@@ -12,8 +12,11 @@ from newsletter_pod.events import (
     EventPIIError,
     bucket_play_position_seconds,
     log_event,
+    normalize_platform,
+    platform_from_user_agent,
 )
 from newsletter_pod.main import _build_container, create_app
+from newsletter_pod.user_models import UserEpisodeRecord
 
 
 class FakeAppleVerifier:
@@ -90,10 +93,14 @@ def test_log_event_emits_expected_shape(caplog):
     events = _captured_events(caplog)
     assert len(events) == 1
     event = events[0]
-    assert set(event.keys()) == {"event", "event_name", "user_id", "ts", "properties"}
+    assert set(event.keys()) == {
+        "event", "event_name", "user_id", "platform", "ts", "properties"
+    }
     assert event["event"] == "app_event"
     assert event["event_name"] == "sign_in"
     assert event["user_id"] == "user-123"
+    # No client header and no explicit platform -> null, not a crash.
+    assert event["platform"] is None
     assert event["properties"] == {"is_new_user": True}
     # ts is ISO 8601, parseable
     from datetime import datetime
@@ -211,3 +218,153 @@ def test_sign_in_emits_event_via_auth_flow(caplog):
     ]
     assert len(sign_ins) == 1
     assert sign_ins[0]["properties"] == {"is_new_user": True}
+
+
+# ---------------------------------------------------------------------------
+# Platform dimension
+# ---------------------------------------------------------------------------
+
+
+def test_log_event_explicit_platform_recorded_and_normalised(caplog):
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    log_event(EventName.SIGN_IN, "user-1", platform="Android")
+    events = _captured_events(caplog)
+    assert events[0]["platform"] == "android"
+    # platform is top-level, never leaked into properties.
+    assert "platform" not in events[0]["properties"]
+
+
+def test_log_event_unknown_platform_dropped_to_null(caplog):
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    log_event(EventName.SIGN_IN, "user-1", platform="symbian")
+    assert _captured_events(caplog)[0]["platform"] is None
+
+
+def test_normalize_platform():
+    assert normalize_platform("iOS") == "ios"
+    assert normalize_platform(" ANDROID ") == "android"
+    assert normalize_platform("web") == "web"
+    assert normalize_platform("windows-phone") is None
+    assert normalize_platform("") is None
+    assert normalize_platform(None) is None
+
+
+def test_platform_from_user_agent():
+    assert platform_from_user_agent("Podcasts/1500 CFNetwork AppleCoreMedia") == "ios"
+    assert platform_from_user_agent("iTunes/12.0") == "ios"
+    assert platform_from_user_agent("PodcastAddict/v5 (Android 14)") == "android"
+    assert platform_from_user_agent("Mozilla/5.0 Overcast") is None
+    assert platform_from_user_agent(None) is None
+
+
+def test_x_client_platform_header_tags_events(caplog):
+    """End-to-end through the middleware: a client that sends
+    X-Client-Platform gets every event for that request stamped with it."""
+    _, client = _build_app()
+    app = client.app
+    app.state.container.control_plane.apple_identity_verifier = FakeAppleVerifier(
+        "plat-user", "plat@example.com"
+    )
+
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    resp = client.post(
+        "/v1/auth/apple",
+        json={"identity_token": "apple-token"},
+        headers={"X-Client-Platform": "android"},
+    )
+    assert resp.status_code == 200
+
+    sign_ins = [
+        e for e in _captured_events(caplog) if e["event_name"] == EventName.SIGN_IN.value
+    ]
+    assert sign_ins and sign_ins[0]["platform"] == "android"
+
+
+def test_media_route_emits_listening_pulse_with_platform(caplog):
+    """An external podcast app fetching audio from /media produces a
+    server-side play-pulse tagged with the platform inferred from its
+    User-Agent — the only cross-stack listening signal we get."""
+    from datetime import datetime, timezone
+
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("media-plat-user", "mp@example.com")
+    )
+    me = client.get("/v1/me", headers=headers).json()["user"]
+    repo = container.control_repository
+    storage = container.storage
+    token = repo.get_feed_token(me["id"])
+
+    audio = b"y" * 300_000  # ~37.5s at the assumed 8 KB/s
+    object_name, size = storage.upload_audio("ep-plat", audio, "audio/mpeg")
+    repo.save_user_episode(
+        UserEpisodeRecord(
+            id="ep-plat",
+            user_id=me["id"],
+            title="Plat Test",
+            description="Notes",
+            published_at=datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc),
+            audio_object_name=object_name,
+            audio_size_bytes=size,
+        )
+    )
+
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    # Range starting 250 KB in ~= 31s at the assumed 8 KB/s, so it lands past
+    # the intro bucket; Podcast Addict UA -> android.
+    resp = client.get(
+        f"/media/{token.token}/ep-plat.mp3",
+        headers={
+            "Range": "bytes=250000-",
+            "User-Agent": "PodcastAddict/v5 (Android 14)",
+        },
+    )
+    assert resp.status_code == 206
+
+    pulses = [
+        e for e in _captured_events(caplog)
+        if e["event_name"] == EventName.EPISODE_PLAY_PULSE.value
+    ]
+    assert len(pulses) == 1
+    pulse = pulses[0]
+    assert pulse["platform"] == "android"
+    assert pulse["user_id"] == me["id"]
+    assert pulse["properties"]["episode_id"] == "ep-plat"
+    assert pulse["properties"]["source"] == "media_fetch"
+    # 250000 // 8000 = 31s -> the "30-120" (past-intro) bucket.
+    assert pulse["properties"]["position_bucket"] == "30-120"
+
+
+def test_media_head_request_emits_no_pulse(caplog):
+    """HEAD is a metadata probe, not a listen — it must not emit a pulse."""
+    from datetime import datetime, timezone
+
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("media-head-user", "mh@example.com")
+    )
+    me = client.get("/v1/me", headers=headers).json()["user"]
+    repo = container.control_repository
+    storage = container.storage
+    token = repo.get_feed_token(me["id"])
+    object_name, size = storage.upload_audio("ep-head", b"z" * 1000, "audio/mpeg")
+    repo.save_user_episode(
+        UserEpisodeRecord(
+            id="ep-head",
+            user_id=me["id"],
+            title="Head Test",
+            description="Notes",
+            published_at=datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc),
+            audio_object_name=object_name,
+            audio_size_bytes=size,
+        )
+    )
+
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    resp = client.head(f"/media/{token.token}/ep-head.mp3")
+    assert resp.status_code == 200
+    pulses = [
+        e for e in _captured_events(caplog)
+        if e["event_name"] == EventName.EPISODE_PLAY_PULSE.value
+    ]
+    assert pulses == []

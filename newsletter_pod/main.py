@@ -63,7 +63,14 @@ from .churn_risk import ChurnRiskScoringService
 from .cohort_report import CohortReportService
 from .control_plane import ControlPlaneError, ControlPlaneService, build_task_enqueuer
 from .embeddings import EmbeddingProvider, OpenAIEmbeddingProvider
-from .events import EventName, bucket_play_position_seconds, log_event
+from .events import (
+    EventName,
+    bucket_play_position_seconds,
+    log_event,
+    platform_from_user_agent,
+    reset_current_platform,
+    set_current_platform,
+)
 from .feed import build_feed_xml
 from .inbound import (
     InboundConfigError,
@@ -306,6 +313,19 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
 
     app = FastAPI(title="Newsletter Pod", version="0.1.0")
     app.state.container = container
+
+    @app.middleware("http")
+    async def _tag_client_platform(request: Request, call_next):
+        """Stamp every event emitted during this request with the calling
+        client's platform (iOS / Android / web) from the X-Client-Platform
+        header, so analytics can slice any metric by stack. Starlette copies
+        the context into the threadpool, so the value reaches sync routes too.
+        """
+        token = set_current_platform(request.headers.get("x-client-platform"))
+        try:
+            return await call_next(request)
+        finally:
+            reset_current_platform(token)
 
     static_dir = Path(__file__).resolve().parent / "static"
     if static_dir.is_dir():
@@ -1779,6 +1799,32 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         except FileNotFoundError:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
+        if request.method == "GET":
+            # Server-side listening pulse. External podcast apps (Apple
+            # Podcasts on iOS, Podcast Addict on Android) fetch audio here,
+            # so this route is the only place we observe listening across
+            # both the iOS and Flutter stacks uniformly. Platform comes from
+            # the podcast client's User-Agent (no X-Client-Platform header on
+            # these third-party fetches); position is approximated from the
+            # Range start. Best-effort — an analytics failure must never break
+            # audio delivery.
+            try:
+                approx_seconds = (
+                    _range_start_bytes(range_header) // _MEDIA_APPROX_BYTES_PER_SECOND
+                )
+                log_event(
+                    EventName.EPISODE_PLAY_PULSE,
+                    token_record.user_id,
+                    platform=platform_from_user_agent(
+                        request.headers.get("user-agent")
+                    ),
+                    episode_id=episode_id,
+                    position_bucket=bucket_play_position_seconds(approx_seconds),
+                    source="media_fetch",
+                )
+            except Exception:  # pragma: no cover - defensive, never fail audio
+                logger.warning("media play-pulse event failed", exc_info=True)
+
         return _build_media_response(
             audio_bytes=audio_bytes,
             media_type=episode.audio_mime_type,
@@ -2463,6 +2509,28 @@ def _build_media_response(
         media_type=media_type,
         headers=headers,
     )
+
+
+# Audio is rendered at ~64 kbps mono (see ElevenLabs TTS settings), i.e. about
+# 8 KB/s, so a Range request's start byte / this ≈ the playhead in seconds. The
+# mapping is intentionally coarse — older episodes and any VBR drift make it
+# approximate — and is only used to bucket the server-side /media listening
+# pulse into "got past the intro" vs not. Never relied on for exact position.
+_MEDIA_APPROX_BYTES_PER_SECOND = 8000
+
+
+def _range_start_bytes(range_header: str | None) -> int:
+    """Best-effort start offset of a Range request, for the listening event
+    only. Unlike _parse_range_header this never raises — malformed or absent
+    ranges fall back to 0 so an analytics read can't break audio delivery."""
+    if not range_header:
+        return 0
+    prefix = "bytes="
+    if not range_header.startswith(prefix):
+        return 0
+    first = range_header[len(prefix):].strip().split(",")[0]
+    start_text = first.partition("-")[0].strip()
+    return int(start_text) if start_text.isdigit() else 0
 
 
 def _parse_range_header(range_header: str | None, total_length: int) -> tuple[int, int] | None:

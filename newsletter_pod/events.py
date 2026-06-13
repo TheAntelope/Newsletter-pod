@@ -15,6 +15,7 @@ derived flags (counts, booleans, enums, buckets) belong here.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 from enum import Enum
@@ -23,6 +24,64 @@ from typing import Any, Optional
 from .utils import utc_now
 
 logger = logging.getLogger(__name__)
+
+
+# Platform of the calling client, stashed per-request so every log_event in
+# the request gets tagged without each call site threading it through. Set by
+# the X-Client-Platform middleware in main.py; None for server jobs / webhooks
+# / unauthenticated paths that have no client header.
+_current_platform: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "current_platform", default=None
+)
+
+# The only platform labels we record. Anything else is dropped to None rather
+# than logged verbatim, so a malformed header can't pollute the dimension.
+_ALLOWED_PLATFORMS = frozenset({"ios", "android", "web"})
+
+
+def normalize_platform(value: Optional[str]) -> Optional[str]:
+    """Lower-case + allow-list a platform string; None if unrecognised."""
+    if not value:
+        return None
+    candidate = value.strip().lower()
+    return candidate if candidate in _ALLOWED_PLATFORMS else None
+
+
+def set_current_platform(value: Optional[str]) -> Optional[contextvars.Token]:
+    """Record the requesting client's platform for the rest of this request.
+
+    Returns a reset token (pass to reset_current_platform) or None if the
+    value was unrecognised and nothing was set.
+    """
+    normalized = normalize_platform(value)
+    if normalized is None:
+        return None
+    return _current_platform.set(normalized)
+
+
+def reset_current_platform(token: Optional[contextvars.Token]) -> None:
+    """Undo a set_current_platform call once the request is done."""
+    if token is not None:
+        _current_platform.reset(token)
+
+
+def platform_from_user_agent(user_agent: Optional[str]) -> Optional[str]:
+    """Best-effort map of a podcast client's User-Agent to a platform.
+
+    Used for the server-side /media listening event, where the audio fetch
+    comes from an external podcast app (Apple Podcasts on iOS, Podcast Addict
+    on Android) rather than our own client — so there is no X-Client-Platform
+    header to read. Apple's AVFoundation stack and Podcast Addict both send
+    stable, distinguishable User-Agents; anything else stays None ("unknown").
+    """
+    if not user_agent:
+        return None
+    ua = user_agent.lower()
+    if "podcastaddict" in ua:
+        return "android"
+    if "applecoremedia" in ua or "itunes" in ua or "apple podcasts" in ua:
+        return "ios"
+    return None
 
 
 class EventName(str, Enum):
@@ -85,6 +144,8 @@ class EventPIIError(ValueError):
 def log_event(
     name: EventName,
     user_id: Optional[str],
+    *,
+    platform: Optional[str] = None,
     **properties: Any,
 ) -> None:
     """Emit a single structured event log line.
@@ -94,6 +155,12 @@ def log_event(
             into ImportErrors instead of orphan event names.
         user_id: The acting user, or None for unauthenticated events
             (e.g. a paywall view before sign-in).
+        platform: The client stack the event came from ("ios" / "android" /
+            "web"). When omitted, falls back to the per-request value set by
+            the X-Client-Platform middleware; pass it explicitly for events
+            whose platform is derived another way (e.g. the /media route reads
+            it from the podcast client's User-Agent). Recorded top-level so
+            analytics can slice every metric by platform in a single view.
         **properties: ID-only / derived-flag context. Forbidden keys
             (see _FORBIDDEN_PROPERTY_KEYS) raise EventPIIError.
     """
@@ -107,10 +174,15 @@ def log_event(
             f"log_event refused PII property keys: {sorted(forbidden)}"
         )
 
+    resolved_platform = normalize_platform(platform)
+    if resolved_platform is None:
+        resolved_platform = _current_platform.get()
+
     payload = {
         "event": "app_event",
         "event_name": name.value,
         "user_id": user_id,
+        "platform": resolved_platform,
         "ts": utc_now().isoformat(),
         "properties": properties,
     }

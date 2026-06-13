@@ -370,6 +370,9 @@ final class APIClient {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Tag every event this request emits with the stack it came from, so
+        // iOS and Flutter/Android users can be analysed in one view.
+        request.setValue("ios", forHTTPHeaderField: "X-Client-Platform")
         if let token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }

@@ -330,3 +330,50 @@ WHERE (lp.last_play_at IS NULL
        OR lp.last_play_at < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY))
   AND IFNULL(sw.swipes_14d, 0) = 0
 ORDER BY lp.last_play_at NULLS FIRST;
+
+
+CREATE OR REPLACE VIEW `analytics.vw_engagement_by_platform` AS
+-- Single pane for comparing the iOS and Flutter/Android stacks side by side.
+-- Every event now carries a top-level `platform` field:
+--   * iOS / Android / web for first-party API calls — stamped from the
+--     X-Client-Platform header by the backend middleware.
+--   * iOS / Android for server-side episode_play_pulse events emitted by the
+--     /media route, derived from the podcast client's User-Agent (Apple
+--     Podcasts ~= iOS, Podcast Addict ~= Android). These carry
+--     properties.source = 'media_fetch' to distinguish them from in-app
+--     client play-pulses.
+-- Events with no resolvable platform (server jobs, webhooks, legacy rows
+-- logged before this field shipped) bucket as 'unknown'.
+WITH events AS (
+  SELECT
+    SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*S%Ez',
+      JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.ts')) AS ts,
+    JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.user_id') AS user_id,
+    JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.event_name') AS event_name,
+    LOWER(IFNULL(
+      JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.platform'), 'unknown'
+    )) AS platform,
+    JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.properties.episode_id')
+      AS episode_id,
+    JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.properties.position_bucket')
+      AS position_bucket
+  FROM `analytics.events_raw`
+  WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 DAY)
+    AND JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.user_id') IS NOT NULL
+)
+SELECT
+  DATE(ts) AS event_date,
+  platform,
+  COUNT(DISTINCT user_id) AS active_users,
+  COUNT(DISTINCT IF(event_name = 'sign_in', user_id, NULL)) AS signed_in_users,
+  -- Distinct user×episode that got past the intro, on this platform/day.
+  COUNT(DISTINCT IF(
+    event_name = 'episode_play_pulse'
+      AND position_bucket IS NOT NULL
+      AND position_bucket != '0-30',
+    CONCAT(user_id, '|', episode_id), NULL)) AS episodes_played_30s,
+  COUNT(*) AS events
+FROM events
+WHERE ts IS NOT NULL
+GROUP BY event_date, platform
+ORDER BY event_date DESC, platform;
