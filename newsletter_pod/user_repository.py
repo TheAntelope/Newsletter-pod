@@ -1573,28 +1573,37 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
     ) -> list[SourceItemRecord]:
         if not source_ids or limit <= 0:
             return []
+        include = set(source_ids)
         cutoff = utc_now() - timedelta(days=lookback_days)
-        # Firestore "in" queries are limited to 30 values per query; chunk the
-        # source list and merge in app code. The date filter is also applied
-        # app-side because combining `in` with a range filter requires a
-        # composite index per source-id arity — more ops surface than is
-        # warranted at the current corpus size.
+        # Bounded scan: walk the global recent-embedded stream newest-first
+        # (single-field `embedded_at` index) and keep items from the requested
+        # sources, app-side. This replaces an unbounded per-chunk `in`-query
+        # `.stream()` that read EVERY doc for up to 30 sources at a time and
+        # blew the Firestore deadline (→ 500s) when onboarding selected every
+        # topic. Combining `in` with `order_by`/range would need a composite
+        # index per source-arity, which the repo deliberately avoids (see the
+        # sibling list_recent_embedded_items_excluding_sources). We read a
+        # multiple of `limit` to absorb the app-side filter without
+        # re-querying; sources sparse in the recent window are covered by the
+        # caller's global-cold-start backfill.
+        scan_size = max(limit * 4, 50)
+        docs = list(
+            self._source_items
+                .order_by("embedded_at", direction=firestore.Query.DESCENDING)
+                .limit(scan_size)
+                .stream()
+        )
         results: list[SourceItemRecord] = []
-        for chunk_start in range(0, len(source_ids), 30):
-            chunk = source_ids[chunk_start : chunk_start + 30]
-            docs = list(
-                self._source_items
-                    .where("source_id", "in", chunk)
-                    .stream()
-            )
-            for doc in docs:
-                data = doc.to_dict() or {}
-                if not data.get("embedding"):
-                    continue
-                record = SourceItemRecord.model_validate(data)
-                if record.last_seen_at < cutoff:
-                    continue
-                results.append(record)
+        for doc in docs:
+            data = doc.to_dict() or {}
+            if not data.get("embedding"):
+                continue
+            record = SourceItemRecord.model_validate(data)
+            if record.source_id not in include:
+                continue
+            if record.last_seen_at < cutoff:
+                continue
+            results.append(record)
         results.sort(key=lambda record: record.last_seen_at, reverse=True)
         return results[:limit]
 
