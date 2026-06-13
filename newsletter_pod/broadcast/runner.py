@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import logging
 from dataclasses import dataclass
 from datetime import date
@@ -109,35 +108,33 @@ class ScheduledBroadcastRunner:
         # through to whatever's currently persisted on the prior record.
         self._auto_poll_prior_episode(loop_id)
 
-        topic, brief = self._topic_picker.pick(loop)
-        logger.info(
-            "Broadcast run picked topic loop_id=%s desired_minutes=%d topic=%r",
-            loop.loop_id,
-            brief.desired_minutes,
-            topic,
-        )
-
-        # Ground the brief in recent items from the loop's configured
-        # source list. Fails open: any provider error is logged and we
-        # fall back to the un-grounded brief so the loop still runs.
+        # Fetch recent items from the loop's configured sources up front:
+        # topic selection uses them (when there's no audience feedback yet, the
+        # topic is chosen from these items) and so does grounding. Fails open —
+        # any provider error is logged and we run with no source items.
+        source_items: list[SourceItem] = []
         if self._source_item_provider is not None and loop.source_ids:
             try:
-                items = self._source_item_provider(loop.source_ids)
+                source_items = self._source_item_provider(loop.source_ids)
             except Exception:
                 logger.warning(
-                    "Source item provider failed for loop_id=%s — falling back to "
-                    "un-grounded brief",
+                    "Source item provider failed for loop_id=%s — running without "
+                    "source items",
                     loop.loop_id,
                     exc_info=True,
                 )
-                items = []
-            if items:
-                brief = dataclasses.replace(brief, source_items=items)
-                logger.info(
-                    "Broadcast run grounded brief loop_id=%s source_items=%d",
-                    loop.loop_id,
-                    len(items),
-                )
+                source_items = []
+
+        topic, brief = self._topic_picker.pick(loop, source_items=source_items)
+        logger.info(
+            "Broadcast run picked topic loop_id=%s desired_minutes=%d "
+            "source_items=%d grounded_items=%d topic=%r",
+            loop.loop_id,
+            brief.desired_minutes,
+            len(source_items),
+            len(brief.source_items),
+            topic,
+        )
 
         run_date = self._run_date_factory(loop)
         title = self._default_title(loop=loop, topic=topic, run_date=run_date)
