@@ -35,6 +35,11 @@ class UserRecord(BaseModel):
     trial_premium_pods_remaining: Optional[int] = None
     trial_exhausted_at: Optional[datetime] = None
     first_month_ends_at: Optional[datetime] = None
+    # 7-day full-access trial (2026-06-13). When set and still in the future, the
+    # user gets `trial_tier` (Max) entitlements regardless of subscription tier.
+    # This supersedes the legacy pod-count trial above. None for users who never
+    # got a time trial (their entitlements fall through to the tier/pod logic).
+    trial_ends_at: Optional[datetime] = None
     # Weekly counters. `current_week_iso` is "YYYY-Www" (ISO 8601 week);
     # counters are zeroed when the stored week differs from the current week.
     current_week_iso: Optional[str] = None
@@ -329,6 +334,9 @@ class UserEntitlements(BaseModel):
     trial_premium_pods_remaining: int = 0
     is_in_first_month: bool = False
     first_month_ends_at: Optional[datetime] = None
+    # Set to the trial expiry while the 7-day full-access trial is open; None
+    # otherwise. Clients show a "X days left" countdown when present.
+    trial_ends_at: Optional[datetime] = None
 
 
 class ChurnRiskRecord(BaseModel):

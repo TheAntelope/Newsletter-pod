@@ -1203,6 +1203,13 @@ def test_control_plane_auth_profile_sources_and_schedule_limits():
     container, client = _build_app()
     _, headers = _auth_headers(client, FakeAppleVerifier("apple-user-1", "first@example.com"))
 
+    # New signups land on the 7-day Max trial; expire it so this test exercises
+    # the free-tier caps it was written for.
+    user_id = client.get("/v1/me", headers=headers).json()["user"]["id"]
+    trial_user = container.control_repository.get_user(user_id)
+    trial_user.trial_ends_at = utc_now() - timedelta(days=1)
+    container.control_repository.save_user(trial_user)
+
     me = client.patch("/v1/me", json={"display_name": "Vince", "timezone": "America/Chicago"}, headers=headers)
     assert me.status_code == 200
     assert me.json()["user"]["display_name"] == "Vince"
@@ -1299,6 +1306,50 @@ def test_signed_app_store_notification_flips_tier_to_max():
     assert subscription.status == "active"
     assert subscription.product_id == container.settings.app_store_max_annual_product_id
     assert subscription.expires_at is not None
+
+
+def test_new_user_gets_seven_day_full_access_trial():
+    """A fresh signup lands on the 7-day full-access trial: subscription tier
+    stays "free" (so the paywall still shows) but capabilities are Max-level
+    and the entitlements carry an is_in_trial flag + a trial_ends_at countdown."""
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("time-trial-user", "trial@example.com")
+    )
+    me = client.get("/v1/me", headers=headers).json()
+    ent = me["entitlements"]
+
+    assert me["subscription"]["tier"] == "free"
+    assert ent["tier"] == "free"
+    assert ent["is_in_trial"] is True
+    assert ent["trial_ends_at"] is not None
+    # Max-level capability caps during the window.
+    assert ent["premium_pods_per_week"] == container.settings.max_premium_pods_per_week
+    assert ent["max_delivery_days"] == container.settings.max_max_delivery_days
+
+
+def test_expired_time_trial_falls_back_to_free_model():
+    """Once the 7-day window closes, the user drops to the free model
+    (1 default-voice pod/week, no premium, no trial countdown)."""
+    container, client = _build_app()
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("expired-trial-user", "expired@example.com")
+    )
+    user_id = client.get("/v1/me", headers=headers).json()["user"]["id"]
+
+    repo = container.control_repository
+    user = repo.get_user(user_id)
+    user.trial_ends_at = utc_now() - timedelta(days=1)
+    repo.save_user(user)
+
+    ent = client.get("/v1/me", headers=headers).json()["entitlements"]
+    assert ent["is_in_trial"] is False
+    assert ent["trial_ends_at"] is None
+    assert ent["premium_pods_per_week"] == 0
+    assert (
+        ent["default_pods_per_week"]
+        == container.settings.free_post_month_default_pods_per_week
+    )
 
 
 def test_signed_app_store_notification_rejects_bad_signature():
@@ -1679,6 +1730,11 @@ def test_process_user_generation_records_visible_cap(monkeypatch):
     )
 
     container.settings.free_max_items_per_episode = 1
+    # New signups land on the 7-day Max trial; expire it so the free-tier item
+    # cap under test actually applies.
+    _trial_user = container.control_repository.get_user(user_id)
+    _trial_user.trial_ends_at = utc_now() - timedelta(days=1)
+    container.control_repository.save_user(_trial_user)
     container.control_plane.podcast_client = FakePodcastClient()
 
     def fake_fetch(self, sources):
@@ -1956,6 +2012,11 @@ def test_inbound_items_dropped_by_cap_stay_unconsumed(monkeypatch):
         email="cap@example.com", subject="apple-inbound-4",
     )
     container.settings.free_max_items_per_episode = 1
+    # New signups land on the 7-day Max trial; expire it so the free-tier item
+    # cap under test actually applies.
+    _trial_user = container.control_repository.get_user(user_id)
+    _trial_user.trial_ends_at = utc_now() - timedelta(days=1)
+    container.control_repository.save_user(_trial_user)
 
     repo = container.control_plane.repository
     older = InboundEmailItem(

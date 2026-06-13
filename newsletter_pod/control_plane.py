@@ -2784,7 +2784,11 @@ class ControlPlaneService:
             email=email,
             display_name=display_name,
             timezone="UTC",
-            trial_premium_pods_remaining=self.settings.trial_premium_pods_total,
+            # New users start on the 7-day full-access (Max) trial. The legacy
+            # pod-count trial is superseded, so set it to 0 — after the window
+            # closes they fall through to the free model (1 default-voice pod/wk).
+            trial_premium_pods_remaining=0,
+            trial_ends_at=now + timedelta(days=self.settings.trial_window_days),
             created_at=now,
             updated_at=now,
         )
@@ -2930,7 +2934,21 @@ class ControlPlaneService:
         trial_remaining = max(0, user.trial_premium_pods_remaining or 0)
         first_month_ends_at = user.first_month_ends_at
 
-        is_in_trial = tier == "free" and trial_remaining > 0
+        # 7-day full-access trial (2026-06-13). While the window is open a free
+        # user is treated as `trial_tier` (Max) for capability purposes. Paid
+        # users already sit at/above it, so the time trial only matters for
+        # free. `effective_tier` drives the capability caps below; the returned
+        # `tier` stays the subscription tier so the paywall keeps showing.
+        time_trial_active = (
+            tier == "free"
+            and user.trial_ends_at is not None
+            and user.trial_ends_at > now_utc
+        )
+        effective_tier = self.settings.trial_tier if time_trial_active else tier
+
+        # `is_in_trial` covers either the time trial or the legacy pod-count
+        # trial (the latter only reachable when no time trial is active).
+        is_in_trial = time_trial_active or (tier == "free" and trial_remaining > 0)
         is_in_first_month = (
             tier == "free"
             and not is_in_trial
@@ -2939,19 +2957,19 @@ class ControlPlaneService:
         )
 
         s = self.settings
-        if tier == "max":
+        if effective_tier == "max":
             premium_pw = s.max_premium_pods_per_week
             default_pw = 0
             min_d, max_d = s.max_min_duration_minutes, s.max_max_duration_minutes
             items_cap = s.max_max_items_per_episode
             days_cap = s.max_max_delivery_days
-        elif tier == "pro":
+        elif effective_tier == "pro":
             premium_pw = s.pro_premium_pods_per_week
             default_pw = s.pro_default_pods_per_week
             min_d, max_d = s.pro_min_duration_minutes, s.pro_max_duration_minutes
             items_cap = s.pro_max_items_per_episode
             days_cap = s.pro_max_delivery_days
-        else:  # free
+        else:  # free, no active time trial
             if is_in_trial:
                 # Trial: every pod the user generates this week is premium-voice,
                 # drained against the global trial counter. The weekly budget is
@@ -2994,6 +3012,7 @@ class ControlPlaneService:
             trial_premium_pods_remaining=trial_remaining,
             is_in_first_month=is_in_first_month,
             first_month_ends_at=first_month_ends_at,
+            trial_ends_at=user.trial_ends_at if time_trial_active else None,
         )
 
     def _entitlements_for_user(self, user_id: str) -> UserEntitlements:
