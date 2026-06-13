@@ -461,8 +461,17 @@ String _openInPodcastAppLabel() {
 
 /// "2 of 3 premium voice pods left this week" — the weekly premium-voice quota
 /// shown under the Generate action. Trial users see their trial allowance.
+/// Whole days remaining in the 7-day full-access trial, rounded up so a
+/// partial final day still reads as "1 day left".
+int _trialDaysLeft(DateTime trialEnd) {
+  final secondsLeft = trialEnd.difference(DateTime.now()).inSeconds;
+  return (secondsLeft / 86400).ceil().clamp(1, 365);
+}
+
 String _premiumRemainingLabel(EntitlementsDto ent) {
-  if (ent.isInTrial) {
+  // 7-day full-access trial: premium pods are tracked against the weekly Max
+  // budget (not the legacy pod counter), so show the weekly remaining count.
+  if (ent.trialEndsAt == null && ent.isInTrial) {
     final n = ent.trialPremiumPodsRemaining;
     return 'Trial: $n premium voice pod${n == 1 ? '' : 's'} left';
   }
@@ -746,10 +755,14 @@ class _PlanCard extends StatelessWidget {
           style: DesignTokens.typographyTitle.copyWith(color: DesignTokens.colorInk),
         ),
         Text(
-          entitlements.isInTrial
-              ? 'Trial: ${entitlements.trialPremiumPodsRemaining} premium pods left'
-              : '${entitlements.premiumPodsRemainingThisWeek} of '
-                  '${entitlements.premiumPodsPerWeek} premium pods left this week',
+          entitlements.trialEndsAt != null
+              ? '${_trialDaysLeft(entitlements.trialEndsAt!)} '
+                  '${_trialDaysLeft(entitlements.trialEndsAt!) == 1 ? 'day' : 'days'} '
+                  'left in your free trial'
+              : entitlements.isInTrial
+                  ? 'Trial: ${entitlements.trialPremiumPodsRemaining} premium pods left'
+                  : '${entitlements.premiumPodsRemainingThisWeek} of '
+                      '${entitlements.premiumPodsPerWeek} premium pods left this week',
           style: DesignTokens.typographyBody.copyWith(color: DesignTokens.colorInkSoft),
         ),
         Row(
