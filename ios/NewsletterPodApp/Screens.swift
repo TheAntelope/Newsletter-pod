@@ -2654,7 +2654,18 @@ struct PaywallView: View {
     @ViewBuilder
     private var trialStatusCard: some View {
         if let entitlements = viewModel.entitlements, !viewModel.isPaid {
-            if entitlements.isInTrial && entitlements.trialPremiumPodsRemaining > 0 {
+            if let trialEnd = entitlements.trialEndsAt {
+                let daysLeft = max(1, Int(ceil(trialEnd.timeIntervalSinceNow / 86_400)))
+                EditorialCard {
+                    MetaLabel(text: "Free trial")
+                    Text("\(daysLeft) \(daysLeft == 1 ? "day" : "days") left in your free trial")
+                        .font(Theme.Typography.calloutStrong)
+                        .foregroundStyle(Theme.Palette.ink)
+                    Text("You have full access to every premium voice, longer episodes, and daily delivery. When the trial ends, free users get 1 default-voice pod/week — upgrade any time to keep it all.")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Palette.inkSoft)
+                }
+            } else if entitlements.isInTrial && entitlements.trialPremiumPodsRemaining > 0 {
                 EditorialCard {
                     MetaLabel(text: "Free trial")
                     Text("\(entitlements.trialPremiumPodsRemaining) premium-voice pods left in your trial")
@@ -2698,7 +2709,7 @@ struct PaywallView: View {
                 EditorialDivider()
                 comparisonRow(label: "Episode length", free: "3–5 min", pro: "3–5 min", max: "3–5 min")
             }
-            Text("¹ Free trial: 5 premium pods. First month: 1 premium pod/week.")
+            Text("¹ New users start with a 7-day free trial of full Max access. After it ends, free users get 1 default-voice pod/week.")
                 .font(Theme.Typography.meta)
                 .foregroundStyle(Theme.Palette.muted)
                 .padding(.top, Theme.Spacing.xs)
