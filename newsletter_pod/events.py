@@ -18,12 +18,29 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import sys
 from enum import Enum
 from typing import Any, Optional
 
 from .utils import utc_now
 
 logger = logging.getLogger(__name__)
+
+# app_event lines must reach Cloud Run's logging agent as a *pure JSON* line so
+# it parses them into `jsonPayload`: the clawcast-app-events sink filters on
+# `jsonPayload.event="app_event"` and every analytics view reads `jsonPayload.*`.
+# The root logger (configured in main.py via logging.basicConfig) uses the
+# default "LEVELNAME:logger:message" format — that prefix made each line plain
+# text, so Cloud Logging stored it as `textPayload` (jsonPayload=null), the sink
+# matched nothing, and BigQuery stayed empty. Give this logger its own
+# bare-message stdout handler and stop propagation so exactly one clean JSON
+# line is emitted per event. (Tests attach caplog's handler directly — see
+# tests/conftest.py — since propagate=False keeps records off the root handler.)
+_event_stream_handler = logging.StreamHandler(sys.stdout)
+_event_stream_handler.setFormatter(logging.Formatter("%(message)s"))
+logger.addHandler(_event_stream_handler)
+logger.propagate = False
+logger.setLevel(logging.INFO)
 
 
 # Platform of the calling client, stashed per-request so every log_event in
