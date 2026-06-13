@@ -6,6 +6,7 @@
 // the Apple path is kept for parity.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:http/http.dart' as http;
 
@@ -13,6 +14,16 @@ import '../config.dart';
 import 'models.dart';
 import 'responses.dart';
 import 'weekday.dart';
+
+/// Stack this build is running on, sent as `X-Client-Platform` so the backend
+/// can tag every analytics event with its platform and we can analyse the iOS
+/// and Flutter/Android users in one view. Computed once; null on any other
+/// host (e.g. tests on desktop) so we simply omit the header there.
+final String? _clientPlatform = Platform.isAndroid
+    ? 'android'
+    : Platform.isIOS
+        ? 'ios'
+        : null;
 
 /// Thrown for non-2xx responses and transport/shape errors. `message` is the
 /// backend `detail` when present.
@@ -489,6 +500,7 @@ class ApiClient {
     final uri = Uri.parse(_baseUrl).replace(path: path, queryParameters: query);
     final headers = <String, String>{'Content-Type': 'application/json'};
     if (token != null) headers['Authorization'] = 'Bearer $token';
+    if (_clientPlatform != null) headers['X-Client-Platform'] = _clientPlatform!;
     final encoded = body == null ? null : jsonEncode(body);
 
     final Future<http.Response> pending;
