@@ -7,6 +7,15 @@ from newsletter_pod.models import SourceItemRecord
 from newsletter_pod.swipe_deck import COLD_START_DECK_ID, SwipeDeckService
 from newsletter_pod.user_models import SwipeRecord
 from newsletter_pod.user_repository import InMemoryControlPlaneRepository
+from newsletter_pod.utils import utc_now
+
+# Anchor fixtures to "now" (computed once per run) rather than a hardcoded
+# calendar date. The recent-deck filters items by a lookback window relative to
+# the wall clock, so a fixed past date silently ages out of the window over time
+# and turns these tests red on their own. Items sit one day in the past —
+# comfortably inside every lookback the suite uses — and offsets preserve
+# deterministic ordering.
+_NOW = utc_now()
 
 
 @dataclass
@@ -26,7 +35,7 @@ def _record(
     source_id: str = "src-1",
     last_seen_offset_minutes: int = 0,
 ) -> SourceItemRecord:
-    base = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    base = _NOW - timedelta(days=1)
     return SourceItemRecord(
         dedupe_key=key,
         source_id=source_id,
@@ -56,7 +65,7 @@ def _swipe(user_id: str, dedupe_key: str) -> SwipeRecord:
         source_name="Name src-1",
         embedding=[1.0, 0.0],
         embedding_model="fake",
-        swiped_at=datetime(2026, 5, 11, tzinfo=timezone.utc),
+        swiped_at=_NOW - timedelta(days=1),
     )
 
 
