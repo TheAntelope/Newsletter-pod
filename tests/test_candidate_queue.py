@@ -26,6 +26,7 @@ from newsletter_pod.models import (
 from newsletter_pod.source_persistence import SourceItemPersistenceService
 from newsletter_pod.user_models import UserSourceRecord
 from newsletter_pod.user_repository import InMemoryControlPlaneRepository
+from newsletter_pod.utils import utc_now
 
 
 # --- shared fixtures --------------------------------------------------------
@@ -438,6 +439,11 @@ def test_pinned_item_force_included_in_episode_and_stamped_consumed(monkeypatch)
     container.control_plane.settings.swipe_ranker_enabled = False
 
     user_id = list(container.control_repository._users.values())[0].id
+    # New signups land on the 7-day Max trial; expire it so the per-tier item
+    # cap under test (free=1) actually applies.
+    _trial_user = container.control_repository.get_user(user_id)
+    _trial_user.trial_ends_at = utc_now() - timedelta(days=1)
+    container.control_repository.save_user(_trial_user)
 
     # Two items from a source the user has attached. The "fresh" one is the
     # one chronological fallback would pick; the "stale" one is what we'll
