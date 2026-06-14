@@ -65,6 +65,7 @@ from .admin_metrics import (
     render_user_not_found_html,
     render_user_timeline_html,
 )
+from .analytics_export import BigQueryTableWriter, run_export
 from .churn_risk import ChurnRiskScoringService
 from .cohort_report import CohortReportService
 from .control_plane import ControlPlaneError, ControlPlaneService, build_task_enqueuer
@@ -420,6 +421,23 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         _validate_job_auth(container.settings, authorization, x_job_trigger_token)
         assert container.control_plane is not None
         return container.control_plane.refresh_cold_start_deck()
+
+    @app.post("/jobs/export-analytics-snapshot")
+    def export_analytics_snapshot(
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Daily snapshot of Firestore subscriptions + device tokens into
+        BigQuery (analytics.subscriptions_export / device_tokens_export), which
+        back the tier/churn views and the per-user platform join. No-op unless
+        ANALYTICS_EXPORT_ENABLED — so it's safe to schedule before BigQuery
+        IAM/config is in place, and never touches BigQuery in tests."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        if not container.settings.analytics_export_enabled:
+            return {"skipped": "analytics_export_disabled"}
+        assert container.control_repository is not None
+        writer = BigQueryTableWriter(container.settings)
+        return {"exported": run_export(container.control_repository, writer)}
 
     @app.post("/jobs/score-churn-risk")
     def score_churn_risk(

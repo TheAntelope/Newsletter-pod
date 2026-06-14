@@ -334,25 +334,37 @@ ORDER BY lp.last_play_at NULLS FIRST;
 
 CREATE OR REPLACE VIEW `analytics.vw_engagement_by_platform` AS
 -- Single pane for comparing the iOS and Flutter/Android stacks side by side.
--- Every event now carries a top-level `platform` field:
---   * iOS / Android / web for first-party API calls — stamped from the
---     X-Client-Platform header by the backend middleware.
---   * iOS / Android for server-side episode_play_pulse events emitted by the
---     /media route, derived from the podcast client's User-Agent (Apple
---     Podcasts ~= iOS, Podcast Addict ~= Android). These carry
---     properties.source = 'media_fetch' to distinguish them from in-app
---     client play-pulses.
--- Events with no resolvable platform (server jobs, webhooks, legacy rows
--- logged before this field shipped) bucket as 'unknown'.
-WITH events AS (
+-- Platform per event is resolved in priority order:
+--   1. The event's own `platform` field — first-party API calls stamp it from
+--      the X-Client-Platform header (ios/android/web); the /media route stamps
+--      it from the podcast client's User-Agent (and, when that's a
+--      cross-platform client, from the user's device token).
+--   2. Otherwise, the user's stack from their newest active device token
+--      (analytics.device_tokens_export) — this attributes events that have no
+--      event-level platform (e.g. swipes/sign-ins logged before the app build
+--      ships the header) to the right stack.
+--   3. Otherwise 'unknown' (users with no device token and no event platform).
+WITH user_device_platform AS (
+  -- One platform per user: their most-recently-seen active device token.
+  SELECT user_id, platform
+  FROM (
+    SELECT
+      user_id,
+      LOWER(platform) AS platform,
+      ROW_NUMBER() OVER (
+        PARTITION BY user_id ORDER BY last_seen_at DESC
+      ) AS rn
+    FROM `analytics.device_tokens_export`
+  )
+  WHERE rn = 1
+),
+events AS (
   SELECT
     SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*S%Ez',
       JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.ts')) AS ts,
     JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.user_id') AS user_id,
     JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.event_name') AS event_name,
-    LOWER(IFNULL(
-      JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.platform'), 'unknown'
-    )) AS platform,
+    LOWER(JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.platform')) AS event_platform,
     JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.properties.episode_id')
       AS episode_id,
     JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.properties.position_bucket')
@@ -362,18 +374,20 @@ WITH events AS (
     AND JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.user_id') IS NOT NULL
 )
 SELECT
-  DATE(ts) AS event_date,
-  platform,
-  COUNT(DISTINCT user_id) AS active_users,
-  COUNT(DISTINCT IF(event_name = 'sign_in', user_id, NULL)) AS signed_in_users,
+  DATE(e.ts) AS event_date,
+  COALESCE(e.event_platform, d.platform, 'unknown') AS platform,
+  COUNT(DISTINCT e.user_id) AS active_users,
+  COUNT(DISTINCT IF(e.event_name = 'sign_in', e.user_id, NULL))
+    AS signed_in_users,
   -- Distinct user×episode that got past the intro, on this platform/day.
   COUNT(DISTINCT IF(
-    event_name = 'episode_play_pulse'
-      AND position_bucket IS NOT NULL
-      AND position_bucket != '0-30',
-    CONCAT(user_id, '|', episode_id), NULL)) AS episodes_played_30s,
+    e.event_name = 'episode_play_pulse'
+      AND e.position_bucket IS NOT NULL
+      AND e.position_bucket != '0-30',
+    CONCAT(e.user_id, '|', e.episode_id), NULL)) AS episodes_played_30s,
   COUNT(*) AS events
-FROM events
-WHERE ts IS NOT NULL
+FROM events e
+LEFT JOIN user_device_platform d USING (user_id)
+WHERE e.ts IS NOT NULL
 GROUP BY event_date, platform
 ORDER BY event_date DESC, platform;

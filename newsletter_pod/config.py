@@ -21,6 +21,15 @@ class Settings(BaseSettings):
     use_inmemory_adapters: bool = Field(default=False, alias="USE_INMEMORY_ADAPTERS")
     google_cloud_project: Optional[str] = Field(default=None, alias="GOOGLE_CLOUD_PROJECT")
 
+    # Daily Firestore->BigQuery snapshot export (analytics_export.py). Off by
+    # default so it's a no-op locally / in tests; set true on Cloud Run. The
+    # dataset must already exist (created with the log sink) and live in
+    # `bigquery_location`. Project falls back to the BigQuery client's inferred
+    # project (the Cloud Run metadata server) when google_cloud_project is unset.
+    analytics_export_enabled: bool = Field(default=False, alias="ANALYTICS_EXPORT_ENABLED")
+    bigquery_dataset_id: str = Field(default="analytics", alias="BIGQUERY_DATASET_ID")
+    bigquery_location: str = Field(default="europe-west1", alias="BIGQUERY_LOCATION")
+
     job_trigger_token: Optional[str] = Field(default=None, alias="JOB_TRIGGER_TOKEN")
     session_signing_secret: str = Field(default="dev-session-secret", alias="SESSION_SIGNING_SECRET")
     session_ttl_hours: int = Field(default=720, alias="SESSION_TTL_HOURS")

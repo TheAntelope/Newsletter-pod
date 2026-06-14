@@ -48,7 +48,11 @@ steps:
       # Android/Flutter /v1/auth/firebase sign-in. Non-secret (the project id is
       # public, also in google-services.json). Without it, every Firebase
       # sign-in 400s with "FIREBASE_PROJECT_ID is not configured".
-      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true,CANDIDATE_QUEUE_ENABLED=true,APNS_ENABLED=true,APNS_TEAM_ID=R7HS2T53Z8,APNS_BUNDLE_ID=com.newsletterpod.app,APNS_ENVIRONMENT=production,FIREBASE_PROJECT_ID=theclawcast-9a045,FCM_ENABLED=true
+      # ANALYTICS_EXPORT_ENABLED turns on the daily Firestore->BigQuery snapshot
+      # (/jobs/export-analytics-snapshot) that backs the tier/churn views and
+      # the per-user platform join. Needs the Cloud Run SA to have BigQuery
+      # dataEditor + jobUser (granted out-of-band, one-time).
+      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true,CANDIDATE_QUEUE_ENABLED=true,APNS_ENABLED=true,APNS_TEAM_ID=R7HS2T53Z8,APNS_BUNDLE_ID=com.newsletterpod.app,APNS_ENVIRONMENT=production,FIREBASE_PROJECT_ID=theclawcast-9a045,FCM_ENABLED=true,ANALYTICS_EXPORT_ENABLED=true
       # Pin every critical secret on every deploy so that if a future config
       # edit strips a binding (as happened on revision 00045 on 2026-05-01,
       # and again with MAILGUN_WEBHOOK_SIGNING_KEY in 2026-05), the next deploy
