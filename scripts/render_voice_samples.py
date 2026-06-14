@@ -66,6 +66,14 @@ SAMPLE_SCRIPTS: dict[str, str] = {
         "I'm Ruby Rebel. Bold, punchy — I read the headlines like "
         "I mean them. Buckle up."
     ),
+    "L0Dsvb3SLTyegXwtm47J": (  # Archer Ames
+        "I'm Archer Ames. Crisp, precise, and straight to the point — "
+        "I'll land every story right where it matters."
+    ),
+    "lcMyyd2HUfFzxdCaC4Ta": (  # Lucy Livermore
+        "Hi, I'm Lucy Livermore. Bright and easy-going — I'll talk you "
+        "through the day's headlines like we're catching up over coffee."
+    ),
 }
 
 
