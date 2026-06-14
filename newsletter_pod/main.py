@@ -4,6 +4,7 @@ import hashlib
 import logging
 import re
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import format_datetime, parsedate_to_datetime
@@ -66,7 +67,9 @@ from .embeddings import EmbeddingProvider, OpenAIEmbeddingProvider
 from .events import (
     EventName,
     bucket_play_position_seconds,
+    is_bot_user_agent,
     log_event,
+    normalize_platform,
     platform_from_user_agent,
     reset_current_platform,
     set_current_platform,
@@ -1800,30 +1803,34 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
         if request.method == "GET":
-            # Server-side listening pulse. External podcast apps (Apple
-            # Podcasts on iOS, Podcast Addict on Android) fetch audio here,
-            # so this route is the only place we observe listening across
-            # both the iOS and Flutter stacks uniformly. Platform comes from
-            # the podcast client's User-Agent (no X-Client-Platform header on
-            # these third-party fetches); position is approximated from the
-            # Range start. Best-effort — an analytics failure must never break
-            # audio delivery.
-            try:
-                approx_seconds = (
-                    _range_start_bytes(range_header) // _MEDIA_APPROX_BYTES_PER_SECOND
-                )
-                log_event(
-                    EventName.EPISODE_PLAY_PULSE,
-                    token_record.user_id,
-                    platform=platform_from_user_agent(
-                        request.headers.get("user-agent")
-                    ),
-                    episode_id=episode_id,
-                    position_bucket=bucket_play_position_seconds(approx_seconds),
-                    source="media_fetch",
-                )
-            except Exception:  # pragma: no cover - defensive, never fail audio
-                logger.warning("media play-pulse event failed", exc_info=True)
+            # Server-side listening pulse. External podcast apps fetch audio
+            # here, so this route is the only place we observe listening across
+            # both the iOS and Flutter stacks. Attribute the stack from the
+            # podcast client's User-Agent; for cross-platform clients we can't
+            # resolve from the UA (e.g. Pocket Casts), fall back to the user's
+            # own stack from their newest device token. Skip link-preview bots
+            # (their fetch isn't a listen). Position is approximated from the
+            # Range start. Best-effort — analytics must never break delivery.
+            user_agent = request.headers.get("user-agent")
+            if not is_bot_user_agent(user_agent):
+                try:
+                    platform = platform_from_user_agent(
+                        user_agent
+                    ) or _user_device_platform(container, token_record.user_id)
+                    approx_seconds = (
+                        _range_start_bytes(range_header)
+                        // _MEDIA_APPROX_BYTES_PER_SECOND
+                    )
+                    log_event(
+                        EventName.EPISODE_PLAY_PULSE,
+                        token_record.user_id,
+                        platform=platform,
+                        episode_id=episode_id,
+                        position_bucket=bucket_play_position_seconds(approx_seconds),
+                        source="media_fetch",
+                    )
+                except Exception:  # pragma: no cover - never fail audio
+                    logger.warning("media play-pulse event failed", exc_info=True)
 
         return _build_media_response(
             audio_bytes=audio_bytes,
@@ -2517,6 +2524,43 @@ def _build_media_response(
 # approximate — and is only used to bucket the server-side /media listening
 # pulse into "got past the intro" vs not. Never relied on for exact position.
 _MEDIA_APPROX_BYTES_PER_SECOND = 8000
+
+
+# Per-user stack (ios/android) cache for the /media listening pulse. A podcast
+# app downloads an episode in a burst of Range requests, so cache the device-
+# token lookup briefly to avoid a Firestore read per chunk. Bounded so a long-
+# lived instance can't grow it without limit (cleared wholesale on overflow —
+# entries are cheap to repopulate).
+_user_platform_cache: dict[str, tuple[Optional[str], float]] = {}
+_USER_PLATFORM_TTL_SECONDS = 300.0
+_USER_PLATFORM_CACHE_MAX = 5000
+
+
+def _user_device_platform(container, user_id: str) -> Optional[str]:
+    """Best-effort platform for a user from their newest active device token.
+
+    The /media attribution fallback: when the podcast client's User-Agent is a
+    cross-platform one we can't resolve (e.g. Pocket Casts), we still know which
+    stack the *user* is on from the device token they registered for push.
+    Returns None if the user has no device token or on any lookup error — this
+    must never break audio delivery.
+    """
+    now = time.monotonic()
+    cached = _user_platform_cache.get(user_id)
+    if cached is not None and cached[1] > now:
+        return cached[0]
+    platform: Optional[str] = None
+    try:
+        if container.control_repository is not None:
+            tokens = container.control_repository.list_active_device_tokens(user_id)
+            if tokens:
+                platform = normalize_platform(tokens[0].platform)
+    except Exception:  # pragma: no cover - never fail audio on a token read
+        platform = None
+    if len(_user_platform_cache) >= _USER_PLATFORM_CACHE_MAX:
+        _user_platform_cache.clear()
+    _user_platform_cache[user_id] = (platform, now + _USER_PLATFORM_TTL_SECONDS)
+    return platform
 
 
 def _range_start_bytes(range_header: str | None) -> int:

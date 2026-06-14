@@ -11,12 +11,13 @@ from newsletter_pod.events import (
     EventName,
     EventPIIError,
     bucket_play_position_seconds,
+    is_bot_user_agent,
     log_event,
     normalize_platform,
     platform_from_user_agent,
 )
 from newsletter_pod.main import _build_container, create_app
-from newsletter_pod.user_models import UserEpisodeRecord
+from newsletter_pod.user_models import DeviceTokenRecord, UserEpisodeRecord
 
 
 class FakeAppleVerifier:
@@ -250,11 +251,39 @@ def test_normalize_platform():
 
 
 def test_platform_from_user_agent():
-    assert platform_from_user_agent("Podcasts/1500 CFNetwork AppleCoreMedia") == "ios"
+    # Apple Podcasts' real UA carries no applecoremedia/itunes token — the
+    # CFNetwork/Darwin networking-stack markers are what catch it.
+    assert platform_from_user_agent(
+        "Podcasts/4025.610.1 CFNetwork/3860.600.12 Darwin/25.5.0"
+    ) == "ios"
+    assert platform_from_user_agent("AppleCoreMedia/1.0 (iPhone; CPU OS 18_0)") == "ios"
     assert platform_from_user_agent("iTunes/12.0") == "ios"
+    assert platform_from_user_agent(
+        "Overcast/3.0 (+http://overcast.fm/; iOS podcast app)"
+    ) == "ios"
+    assert platform_from_user_agent("atc/1.0 watchOS/26.5") == "ios"
+    assert platform_from_user_agent(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 26_5_0 like Mac OS X) EdgiOS/148"
+    ) == "ios"
     assert platform_from_user_agent("PodcastAddict/v5 (Android 14)") == "android"
-    assert platform_from_user_agent("Mozilla/5.0 Overcast") is None
+    assert platform_from_user_agent(
+        "Snipd/4.1.14 Dalvik/2.1.0 (Linux; U; Android 16; motorola razr)"
+    ) == "android"
+    assert platform_from_user_agent("okhttp/5.3.2") == "android"
+    # Cross-platform clients expose no OS token -> unknown (device-token fallback).
+    assert platform_from_user_agent("Pocket Casts") is None
     assert platform_from_user_agent(None) is None
+
+
+def test_is_bot_user_agent():
+    assert is_bot_user_agent("WhatsApp/2.23.20.0") is True
+    assert is_bot_user_agent(
+        "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"
+    ) is True
+    assert is_bot_user_agent("WordPress.com - Audio/1.0") is True
+    assert is_bot_user_agent("Pocket Casts") is False
+    assert is_bot_user_agent("Podcasts/4025.610.1 CFNetwork/3860 Darwin/25.5.0") is False
+    assert is_bot_user_agent(None) is False
 
 
 def test_x_client_platform_header_tags_events(caplog):
@@ -362,6 +391,90 @@ def test_media_head_request_emits_no_pulse(caplog):
 
     caplog.set_level(logging.INFO, logger=events_module.__name__)
     resp = client.head(f"/media/{token.token}/ep-head.mp3")
+    assert resp.status_code == 200
+    pulses = [
+        e for e in _captured_events(caplog)
+        if e["event_name"] == EventName.EPISODE_PLAY_PULSE.value
+    ]
+    assert pulses == []
+
+
+def _seed_media_episode(container, client, *, subject, email, episode_id):
+    """Auth a fresh user and give them one playable episode; returns
+    (user_id, feed_token)."""
+    from datetime import datetime, timezone
+
+    _, headers = _auth_headers(client, FakeAppleVerifier(subject, email))
+    me = client.get("/v1/me", headers=headers).json()["user"]
+    repo = container.control_repository
+    storage = container.storage
+    token = repo.get_feed_token(me["id"])
+    object_name, size = storage.upload_audio(episode_id, b"q" * 1000, "audio/mpeg")
+    repo.save_user_episode(
+        UserEpisodeRecord(
+            id=episode_id,
+            user_id=me["id"],
+            title="T",
+            description="d",
+            published_at=datetime(2026, 6, 14, 9, 0, tzinfo=timezone.utc),
+            audio_object_name=object_name,
+            audio_size_bytes=size,
+        )
+    )
+    return me["id"], token
+
+
+def test_media_route_device_token_fallback_for_ambiguous_ua(caplog):
+    """A cross-platform client (Pocket Casts) has no OS token in its UA, so the
+    listening pulse falls back to the user's stack from their device token."""
+    from datetime import datetime, timezone
+
+    container, client = _build_app()
+    user_id, token = _seed_media_episode(
+        container, client, subject="media-dt", email="dt@example.com",
+        episode_id="ep-dt",
+    )
+    now = datetime(2026, 6, 14, 9, 0, tzinfo=timezone.utc)
+    container.control_repository.save_device_token(
+        DeviceTokenRecord(
+            id=f"{user_id}::tok",
+            user_id=user_id,
+            token="devicetoken-abcd",
+            platform="android",
+            bundle_id="com.newsletterpod.app",
+            created_at=now,
+            last_seen_at=now,
+        )
+    )
+
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    resp = client.get(
+        f"/media/{token.token}/ep-dt.mp3",
+        headers={"User-Agent": "Pocket Casts"},
+    )
+    assert resp.status_code == 200
+    pulses = [
+        e for e in _captured_events(caplog)
+        if e["event_name"] == EventName.EPISODE_PLAY_PULSE.value
+    ]
+    assert len(pulses) == 1
+    # UA was ambiguous -> platform resolved from the android device token.
+    assert pulses[0]["platform"] == "android"
+
+
+def test_media_route_skips_bot_user_agent(caplog):
+    """A link-preview bot fetching the media URL is not a listen -> no pulse."""
+    container, client = _build_app()
+    _, token = _seed_media_episode(
+        container, client, subject="media-bot", email="bot@example.com",
+        episode_id="ep-bot",
+    )
+
+    caplog.set_level(logging.INFO, logger=events_module.__name__)
+    resp = client.get(
+        f"/media/{token.token}/ep-bot.mp3",
+        headers={"User-Agent": "WhatsApp/2.23.20.0"},
+    )
     assert resp.status_code == 200
     pulses = [
         e for e in _captured_events(caplog)
