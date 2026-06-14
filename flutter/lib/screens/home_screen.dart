@@ -187,6 +187,10 @@ class _Dashboard extends StatelessWidget {
           const SizedBox(height: DesignTokens.spacingL),
           _NextEpisodeQueueCard(pinnedCount: pinnedCount),
         ],
+        if (me.entitlements.trialGiftPending && !app.trialGiftDismissed) ...[
+          const SizedBox(height: DesignTokens.spacingL),
+          _TrialGiftCard(onAcknowledge: app.acknowledgeTrialGift),
+        ],
         const SizedBox(height: DesignTokens.spacingL),
         _PlanCard(
           subscription: me.subscription,
@@ -856,6 +860,55 @@ class _NextEpisodeQueueCard extends StatelessWidget {
           'Preview & pin the stories',
           style: DesignTokens.typographyCallout
               .copyWith(color: DesignTokens.colorInkSoft),
+        ),
+      ],
+    );
+  }
+}
+
+/// One-time courtesy card announcing the early-adopter trial-gift reset. Shown
+/// while the backend reports `entitlements.trialGiftPending` and the user hasn't
+/// tapped "Got it" yet (see [AppState.trialGiftDismissed] /
+/// [AppState.acknowledgeTrialGift]). Styled with the shared [EditorialCard]
+/// idiom; the copy is the cross-stack shared contract — keep it byte-for-byte
+/// in sync with the iOS card and the push body.
+class _TrialGiftCard extends StatelessWidget {
+  const _TrialGiftCard({required this.onAcknowledge});
+
+  final VoidCallback onAcknowledge;
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        const MetaLabel('Gift'),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '🎁 A gift from theclawcast',
+              style: DesignTokens.typographySubtitle
+                  .copyWith(color: DesignTokens.colorInk),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Your 7-day free trial has been reset as a thank-you for '
+              'being one of the first 100 users. Full access to every '
+              'premium voice, longer episodes, and daily delivery — '
+              'enjoy.',
+              style: DesignTokens.typographyCallout
+                  .copyWith(color: DesignTokens.colorInkSoft),
+            ),
+          ],
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: AmberButton.filled(
+            label: 'Got it',
+            expand: false,
+            onPressed: onAcknowledge,
+          ),
         ),
       ],
     );
