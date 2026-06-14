@@ -85,6 +85,11 @@ class UserSourceRecord(BaseModel):
     rss_url: str
     is_custom: bool = False
     enabled: bool = True
+    # Snapshot of the catalog source's medium at attach time, alongside name and
+    # rss_url. "article" (default) or "podcast"; lets generation, polling, and the
+    # candidate queue rebuild a SourceDefinition that still carries the kind.
+    # Existing rows and custom feeds default to "article".
+    kind: str = "article"
     validated_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime

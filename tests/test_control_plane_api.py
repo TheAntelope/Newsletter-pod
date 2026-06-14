@@ -3295,3 +3295,28 @@ def test_reap_stale_runs_endpoint_is_idempotent():
     second = client.post("/jobs/reap-stale-runs")
     assert second.status_code == 200
     assert second.json()["reaped"] == 0
+
+
+def test_catalog_exposes_podcast_kind_and_attach_snapshots_it():
+    # Phase 1a: GET /v1/sources/catalog must surface kind, and attaching a
+    # podcast source must snapshot kind='podcast' onto the UserSourceRecord so
+    # generation/poll rebuild it as a podcast (not the 'article' default).
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("podcast-kind-user", "pk@example.com"))
+
+    catalog = client.get("/v1/sources/catalog").json()["sources"]
+    podcasts = [s for s in catalog if s.get("kind") == "podcast"]
+    assert podcasts, "catalog should expose podcast sources with kind=='podcast'"
+    pod = podcasts[0]
+
+    put = client.put(
+        "/v1/me/sources",
+        json={"sources": [{"source_id": pod["source_id"]}]},
+        headers=headers,
+    )
+    assert put.status_code == 200
+
+    mine = client.get("/v1/me/sources", headers=headers).json()["sources"]
+    attached = [s for s in mine if s["source_id"] == pod["source_id"]]
+    assert attached, "the podcast source should be attached"
+    assert attached[0]["kind"] == "podcast"

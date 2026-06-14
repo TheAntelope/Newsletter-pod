@@ -1105,7 +1105,7 @@ class ControlPlaneService:
         if not sources:
             return {"sources_processed": 0, "items_ingested": 0}
         source_defs = [
-            SourceDefinition(id=s.source_id, name=s.name, rss_url=s.rss_url, enabled=s.enabled)
+            SourceDefinition(id=s.source_id, name=s.name, rss_url=s.rss_url, enabled=s.enabled, kind=s.kind)
             for s in sources
         ]
         cursor_repo = _UserCursorRepositoryAdapter(self.repository, user_id)
@@ -1203,6 +1203,7 @@ class ControlPlaneService:
                     source_id=catalog_source.id,
                     name=catalog_source.name,
                     rss_url=catalog_source.rss_url,
+                    kind=catalog_source.kind,
                     is_custom=False,
                     enabled=True,
                     validated_at=now,
@@ -1266,6 +1267,7 @@ class ControlPlaneService:
                 "rss_url": source.rss_url,
                 "enabled": source.enabled,
                 "topic": source.topic,
+                "kind": source.kind,
             }
             for source in self._catalog.values()
         ]
@@ -1312,6 +1314,7 @@ class ControlPlaneService:
                     source_id=catalog_source.id,
                     name=catalog_source.name,
                     rss_url=catalog_source.rss_url,
+                    kind=catalog_source.kind,
                     is_custom=False,
                     enabled=True,
                     validated_at=utc_now(),
@@ -2157,7 +2160,7 @@ class ControlPlaneService:
             return run.model_dump(mode="json")
 
         source_defs = [
-            SourceDefinition(id=source.source_id, name=source.name, rss_url=source.rss_url, enabled=source.enabled)
+            SourceDefinition(id=source.source_id, name=source.name, rss_url=source.rss_url, enabled=source.enabled, kind=source.kind)
             for source in sources
         ]
         cursor_repo = _UserCursorRepositoryAdapter(self.repository, user_id)
