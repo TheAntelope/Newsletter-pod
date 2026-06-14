@@ -36,6 +36,10 @@ final class AppViewModel: ObservableObject {
     @Published var activeRunID: String?
     @Published var showOnboarding: Bool = false
     @Published var selectedTab: DashboardTab = .home
+    /// Local-only flag that hides the trial-gift Home card after the user
+    /// taps "Got it". The backend persists the acknowledgement, but this lets
+    /// the card disappear instantly without waiting on a /me refresh.
+    @Published private(set) var trialGiftDismissed = false
     /// Last transcript submitted via the onboarding voice intake step. We hold
     /// onto it so the newsletters step can pre-search Substacks based on what
     /// the user just told us, instead of waiting for them to retype it.
@@ -73,6 +77,13 @@ final class AppViewModel: ObservableObject {
         PushAppDelegate.deviceTokenHandler = { [weak self] hex in
             Task { @MainActor [weak self] in
                 self?.registerPushDeviceToken(hex)
+            }
+        }
+        // A tapped trial-gift notification should re-pull /me so the gift card
+        // surfaces (its visibility is entitlement-driven).
+        PushAppDelegate.notificationTapHandler = { [weak self] _ in
+            Task { @MainActor [weak self] in
+                try? await self?.refresh()
             }
         }
     }
@@ -624,6 +635,18 @@ final class AppViewModel: ObservableObject {
         selectedTab = .home
         flashSaved("Algorithm reset")
         return true
+    }
+
+    /// Acknowledges the trial-gift announcement. Optimistically hides the
+    /// Home card, then fires the ack endpoint best-effort. A failed call is
+    /// non-fatal: the next /me refresh will re-surface the card (because
+    /// trial_gift_pending stays true server-side) so nothing is lost.
+    func acknowledgeTrialGift() {
+        trialGiftDismissed = true
+        guard let sessionToken else { return }
+        Task {
+            _ = try? await apiClient.acknowledgeTrialGift(token: sessionToken)
+        }
     }
 
     func discoverSubstacks(query: String) async -> [SubstackCandidateDTO] {

@@ -129,6 +129,10 @@ struct EntitlementsDTO: Codable {
     // Set while the 7-day full-access trial window is open; nil otherwise.
     // Drives the "X days left" countdown on the paywall trial card.
     let trialEndsAt: Date?
+    // True when a trial-gift reset has been granted but the user hasn't yet
+    // acknowledged it. Drives the "gift from theclawcast" Home card. Optional
+    // so an older backend response (without the field) still decodes.
+    let trialGiftPending: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case tier
@@ -145,6 +149,7 @@ struct EntitlementsDTO: Codable {
         case isInFirstMonth = "is_in_first_month"
         case firstMonthEndsAt = "first_month_ends_at"
         case trialEndsAt = "trial_ends_at"
+        case trialGiftPending = "trial_gift_pending"
     }
 
     init(from decoder: Decoder) throws {
@@ -163,6 +168,7 @@ struct EntitlementsDTO: Codable {
         isInFirstMonth = (try? c.decode(Bool.self, forKey: .isInFirstMonth)) ?? false
         firstMonthEndsAt = try? c.decodeIfPresent(Date.self, forKey: .firstMonthEndsAt)
         trialEndsAt = try? c.decodeIfPresent(Date.self, forKey: .trialEndsAt)
+        trialGiftPending = try? c.decodeIfPresent(Bool.self, forKey: .trialGiftPending)
     }
 
     init(
@@ -179,7 +185,8 @@ struct EntitlementsDTO: Codable {
         trialPremiumPodsRemaining: Int = 0,
         isInFirstMonth: Bool = false,
         firstMonthEndsAt: Date? = nil,
-        trialEndsAt: Date? = nil
+        trialEndsAt: Date? = nil,
+        trialGiftPending: Bool? = nil
     ) {
         self.tier = tier
         self.maxDeliveryDays = maxDeliveryDays
@@ -195,6 +202,7 @@ struct EntitlementsDTO: Codable {
         self.isInFirstMonth = isInFirstMonth
         self.firstMonthEndsAt = firstMonthEndsAt
         self.trialEndsAt = trialEndsAt
+        self.trialGiftPending = trialGiftPending
     }
 }
 

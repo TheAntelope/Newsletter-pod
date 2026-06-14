@@ -25,6 +25,12 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     /// from multiple places overwrites — we only ever have one VM.
     static var deviceTokenHandler: ((String) -> Void)?
 
+    /// Invoked when the user taps a notification whose `type` is one the app
+    /// reacts to by reloading server state (currently `trial_gift`). The
+    /// AppViewModel registers this at init to refresh /me so the relevant
+    /// surface (e.g. the trial-gift Home card) appears.
+    static var notificationTapHandler: ((String) -> Void)?
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
@@ -63,9 +69,12 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
         completionHandler([.banner, .sound, .badge])
     }
 
-    /// Tap handler: for Substack verification pushes, copy the code to the
-    /// clipboard and try to open the publication URL so the user can paste
-    /// the code straight into the subscribe form.
+    /// Tap handler. Dispatches on the payload `type`:
+    ///   - `substack_verification`: copy the code to the clipboard and try to
+    ///     open the publication URL so the user can paste it into the
+    ///     subscribe form.
+    ///   - `trial_gift`: forward to the app so it refreshes /me, which makes
+    ///     the "gift from theclawcast" Home card appear.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -73,16 +82,25 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     ) {
         defer { completionHandler() }
         let userInfo = response.notification.request.content.userInfo
-        guard let type = userInfo["type"] as? String, type == "substack_verification" else {
+        guard let type = userInfo["type"] as? String else {
             return
         }
-        if let code = userInfo["code"] as? String, !code.isEmpty {
-            UIPasteboard.general.string = code
-        }
-        if let urlString = userInfo["pub_url"] as? String, let url = URL(string: urlString) {
-            DispatchQueue.main.async {
-                UIApplication.shared.open(url, options: [:], completionHandler: nil)
+        switch type {
+        case "substack_verification":
+            if let code = userInfo["code"] as? String, !code.isEmpty {
+                UIPasteboard.general.string = code
             }
+            if let urlString = userInfo["pub_url"] as? String, let url = URL(string: urlString) {
+                DispatchQueue.main.async {
+                    UIApplication.shared.open(url, options: [:], completionHandler: nil)
+                }
+            }
+        case "trial_gift":
+            // Foregrounding already refreshes most surfaces, but the gift card
+            // is driven by entitlements — refresh /me explicitly so it shows.
+            Self.notificationTapHandler?(type)
+        default:
+            break
         }
     }
 }
