@@ -226,6 +226,7 @@ CatalogSourceDto _$CatalogSourceDtoFromJson(Map<String, dynamic> json) =>
       rssUrl: json['rss_url'] as String,
       enabled: json['enabled'] as bool,
       topic: json['topic'] as String?,
+      kind: json['kind'] as String?,
     );
 
 Map<String, dynamic> _$CatalogSourceDtoToJson(CatalogSourceDto instance) =>
@@ -235,6 +236,7 @@ Map<String, dynamic> _$CatalogSourceDtoToJson(CatalogSourceDto instance) =>
       'rss_url': instance.rssUrl,
       'enabled': instance.enabled,
       'topic': instance.topic,
+      'kind': instance.kind,
     };
 
 CatalogVoiceDto _$CatalogVoiceDtoFromJson(Map<String, dynamic> json) =>

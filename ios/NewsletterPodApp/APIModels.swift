@@ -204,8 +204,12 @@ struct CatalogSourceDTO: Codable, Identifiable, Hashable {
     let rssURL: String
     let enabled: Bool
     let topic: String?
+    /// Content medium: "podcast" for audio sources, "article" (or nil on older
+    /// payloads) otherwise. Drives the mic glyph in the Sources catalog.
+    let kind: String?
 
     var id: String { sourceID }
+    var isPodcast: Bool { kind == "podcast" }
 
     private enum CodingKeys: String, CodingKey {
         case sourceID = "source_id"
@@ -213,6 +217,7 @@ struct CatalogSourceDTO: Codable, Identifiable, Hashable {
         case rssURL = "rss_url"
         case enabled
         case topic
+        case kind
     }
 }
 
