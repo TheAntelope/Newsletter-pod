@@ -252,6 +252,11 @@ class _CatalogGroupState extends State<_CatalogGroup> {
           for (final s in widget.sources)
             Row(
               children: [
+                if (s.isPodcast) ...[
+                  const Icon(Icons.mic,
+                      size: 16, color: DesignTokens.colorMuted),
+                  const SizedBox(width: DesignTokens.spacingXs),
+                ],
                 Expanded(
                   child: Text(
                     s.name,

@@ -1006,7 +1006,7 @@ struct SourcesView: View {
                     ForEach(catalogTopicGroups) { group in
                         DisclosureGroup {
                             ForEach(group.sources) { source in
-                                Toggle(source.name, isOn: Binding(
+                                Toggle(isOn: Binding(
                                     get: { selectedCatalogIDs.contains(source.sourceID) },
                                     set: { isSelected in
                                         if isSelected {
@@ -1016,7 +1016,16 @@ struct SourcesView: View {
                                         }
                                         autosaveSources()
                                     }
-                                ))
+                                )) {
+                                    HStack(spacing: Theme.Spacing.xs) {
+                                        if source.isPodcast {
+                                            Image(systemName: "mic.fill")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Text(source.name)
+                                    }
+                                }
                             }
                         } label: {
                             HStack(spacing: Theme.Spacing.s) {
@@ -2797,6 +2806,7 @@ struct OnboardingStarterPack: Identifiable {
         "Family Life": "figure.2.and.child.holdinghands",
         "Food & Travel": "airplane",
         "Romantasy": "heart.text.square.fill",
+        "Podcasts": "mic.fill",
     ]
 
     /// Curated balanced mix used by the "Inspire me" shortcut. Listed in priority

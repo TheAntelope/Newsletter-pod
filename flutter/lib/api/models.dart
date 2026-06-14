@@ -244,13 +244,20 @@ class CatalogSourceDto {
   final bool enabled;
   final String? topic;
 
+  /// Content medium: `"podcast"` for audio sources, `"article"` (or null on
+  /// older payloads) otherwise. Drives the mic icon in the Sources catalog.
+  final String? kind;
+
   CatalogSourceDto({
     required this.sourceId,
     required this.name,
     required this.rssUrl,
     required this.enabled,
     this.topic,
+    this.kind,
   });
+
+  bool get isPodcast => kind == 'podcast';
 
   factory CatalogSourceDto.fromJson(Map<String, dynamic> json) =>
       _$CatalogSourceDtoFromJson(json);
