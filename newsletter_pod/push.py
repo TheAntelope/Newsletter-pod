@@ -508,6 +508,71 @@ def send_pod_ready_push(
     )
 
 
+# Verbatim push copy for the "gift" trial reset (first-100-users thank-you).
+# Kept as module constants so the payload and any tests share one source of
+# truth for the wording.
+_TRIAL_GIFT_PUSH_TITLE = "A gift from ClawCast 🎁"
+_TRIAL_GIFT_PUSH_BODY = (
+    "We've reset your 7-day free trial. Full access is back. Tap to open."
+)
+
+
+def build_trial_gift_payload() -> dict:
+    """Construct the APNs JSON body for the "we reset your trial" gift push.
+
+    `category` lets the iOS handler match this kind of push (a tap opens the
+    app, where the gift card is shown). The top-level `type` mirrors the other
+    push kinds so a single handler can branch on it.
+    """
+    return {
+        "aps": {
+            "alert": {
+                "title": _TRIAL_GIFT_PUSH_TITLE,
+                "body": _TRIAL_GIFT_PUSH_BODY,
+            },
+            "sound": "default",
+            "category": "TRIAL_GIFT",
+        },
+        "type": "trial_gift",
+    }
+
+
+def send_trial_gift_push(
+    *,
+    sender: Optional[PushSender],
+    repository: ControlPlaneRepository,
+    user_id: str,
+    fcm_sender: Optional["FcmSender"] = None,
+) -> dict:
+    """Notify every active device a user has that we've reset their 7-day free
+    trial as a thank-you gift, routing iOS→APNs and Android→FCM. Thin wrapper
+    over [_dispatch_to_user_devices]; see it for return shape and no-op
+    behavior.
+
+    The collapse id is keyed on the user so a retry replaces rather than stacks
+    a duplicate gift alert.
+    """
+    apns_payload = build_trial_gift_payload()
+
+    fcm_notification = {
+        "title": _TRIAL_GIFT_PUSH_TITLE,
+        "body": _TRIAL_GIFT_PUSH_BODY,
+    }
+    fcm_data: dict = {"type": "trial_gift"}
+
+    return _dispatch_to_user_devices(
+        sender=sender,
+        fcm_sender=fcm_sender,
+        repository=repository,
+        user_id=user_id,
+        apns_payload=apns_payload,
+        fcm_notification=fcm_notification,
+        fcm_data=fcm_data,
+        collapse_id=f"trial-gift-{user_id[:8]}",
+        log_label="trial-gift push",
+    )
+
+
 def build_push_sender_from_settings(
     *,
     enabled: bool,
