@@ -358,6 +358,17 @@ final class APIClient {
         )
     }
 
+    /// Acknowledges the trial-gift announcement so the "gift from theclawcast"
+    /// Home card stops surfacing. Idempotent server-side.
+    func acknowledgeTrialGift(token: String) async throws -> TrialGiftAck {
+        try await request(
+            path: "/v1/me/trial-gift/ack",
+            method: "POST",
+            body: Optional<Int>.none,
+            token: token
+        )
+    }
+
     private func request<T: Decodable, Body: Encodable>(
         path: String,
         method: String,
@@ -647,4 +658,10 @@ struct AccountResetAck: Decodable {
     private enum CodingKeys: String, CodingKey {
         case userID = "user_id"
     }
+}
+
+struct TrialGiftAck: Decodable {
+    // Backend returns {"ok": true}. Optional so a refreshed-me-envelope
+    // convention (without "ok") would still decode without throwing.
+    let ok: Bool?
 }

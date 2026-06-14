@@ -147,11 +147,20 @@ struct HomeView: View {
     @State private var isShowingSwipeDeck: Bool = false
     @State private var isShowingAccountSheet: Bool = false
 
+    /// Show the trial-gift card only while the backend says a gift is pending
+    /// AND the user hasn't dismissed it locally this session.
+    private var showsTrialGiftCard: Bool {
+        (viewModel.entitlements?.trialGiftPending == true) && !viewModel.trialGiftDismissed
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                     GreetingHeader()
+                    if showsTrialGiftCard {
+                        TrialGiftCard()
+                    }
                     if viewModel.isGenerating {
                         HomeGenerationBanner()
                     }
@@ -225,6 +234,33 @@ private struct HomeGenerationBanner: View {
         viewModel.feed?.latestEpisode == nil
             ? "Your first episode is being made."
             : "We're putting together your next episode."
+    }
+}
+
+/// Celebratory top-of-home card announcing a one-time trial reset gifted to
+/// the first 100 users. Visibility is driven by `entitlements.trialGiftPending`
+/// (see `HomeView.showsTrialGiftCard`); tapping "Got it" acknowledges the gift
+/// so it stops surfacing. Uses the same EditorialCard + Theme idioms as the
+/// surrounding Home cards so it sits flush in the editorial layout.
+private struct TrialGiftCard: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+
+    var body: some View {
+        EditorialCard {
+            Text("🎁 A gift from theclawcast")
+                .font(Theme.Typography.subtitle)
+                .foregroundStyle(Theme.Palette.ink)
+            Text("Your 7-day free trial has been reset as a thank-you for being one of the first 100 users. Full access to every premium voice, longer episodes, and daily delivery — enjoy.")
+                .font(Theme.Typography.callout)
+                .foregroundStyle(Theme.Palette.inkSoft)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                viewModel.acknowledgeTrialGift()
+            } label: {
+                Text("Got it")
+            }
+            .buttonStyle(.amberFilled)
+        }
     }
 }
 
