@@ -48,6 +48,49 @@ AUTH_QUERY_PARAMS = {
 }
 
 
+def _parse_itunes_duration(raw) -> Optional[int]:
+    """Normalise an <itunes:duration> to whole seconds.
+
+    Feeds publish either a bare second count ("1515") or a clock string
+    ("HH:MM:SS" / "MM:SS"). Returns None for anything unparseable so a malformed
+    value never blocks ingestion of an otherwise-good episode.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        if ":" in text:
+            seconds = 0
+            for part in text.split(":"):
+                seconds = seconds * 60 + int(part)
+            value = seconds
+        else:
+            value = int(float(text))
+    except (ValueError, TypeError):
+        return None
+    # Reject negative/implausible durations (a malformed feed could publish
+    # "-1"); the contract is "None for anything unparseable".
+    return value if value >= 0 else None
+
+
+def _audio_enclosure_url(entry: dict) -> Optional[str]:
+    """First audio/* enclosure href on the entry, or None.
+
+    Stored raw (NOT through sanitize_link): a podcast enclosure is the playable
+    asset itself, and many feeds front it with a tracking-prefix URL that 302s to
+    the real CDN file — stripping query params there breaks playback. These are
+    public catalog feeds, so the URL carries no per-subscriber secret to leak.
+    """
+    for enclosure in entry.get("enclosures", []) or []:
+        if str(enclosure.get("type", "")).startswith("audio"):
+            href = enclosure.get("href") or enclosure.get("url")
+            if href:
+                return href
+    return None
+
+
 def sanitize_link(url: str) -> str:
     if not url:
         return url
@@ -180,6 +223,9 @@ class RSSIngestionService:
             summary=summary,
             published_at=published,
             dedupe_key=guid_or_link_hash(guid, link),
+            kind=source.kind,
+            audio_url=_audio_enclosure_url(entry),
+            audio_duration_seconds=_parse_itunes_duration(entry.get("itunes_duration")),
         )
 
     def _dedupe_items(self, items: list[SourceItem]) -> list[SourceItem]:

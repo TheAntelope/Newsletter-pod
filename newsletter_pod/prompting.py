@@ -45,6 +45,8 @@ def build_digest_prompt(
     for item in items:
         grouped[item.source_name].append(item)
 
+    has_podcast = any(item.kind == "podcast" for item in items)
+
     thin_day = len(items) <= 2
     runtime_label = (
         _format_runtime_label(ux.thin_day_minutes, 4)
@@ -250,6 +252,15 @@ def build_digest_prompt(
     lines += [
         "Attribution requirements:",
         "- Keep spoken attribution light and natural by source name when relevant.",
+        *(
+            [
+                "- Items under a \"Podcast:\" heading come from a podcast — attribute "
+                "them as an episode (e.g. \"on the latest episode of <name>\"), never "
+                "as a newsletter, and summarise from the show notes provided."
+            ]
+            if has_podcast
+            else []
+        ),
         "Output requirements:",
         "- Return a dynamic `episode_title` in date-plus-main-theme style.",
         "- Return `show_notes` as markdown shaped for skimming, NOT a paragraph wall:",
@@ -270,7 +281,8 @@ def build_digest_prompt(
     ]
 
     for source_name, source_items in grouped.items():
-        lines.append(f"Source: {source_name}")
+        label = "Podcast" if any(i.kind == "podcast" for i in source_items) else "Source"
+        lines.append(f"{label}: {source_name}")
         for item in source_items:
             lines.append(f"- Title: {item.title}")
             lines.append(f"  Link: {item.link}")

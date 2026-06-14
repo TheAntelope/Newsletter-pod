@@ -61,6 +61,9 @@ def _record_to_source_item(record: SourceItemRecord) -> SourceItem:
         summary=record.summary,
         published_at=record.published_at,
         dedupe_key=record.dedupe_key,
+        kind=record.kind,
+        audio_url=record.audio_url,
+        audio_duration_seconds=record.audio_duration_seconds,
     )
 
 
@@ -93,6 +96,7 @@ class CandidateQueueService:
                 name=record.name,
                 rss_url=record.rss_url,
                 enabled=True,
+                kind=record.kind,
             )
         if not unique:
             return {

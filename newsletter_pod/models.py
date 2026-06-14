@@ -33,6 +33,13 @@ class SourceDefinition(BaseModel):
     # True for press publishers established in EU/EEA member states where
     # Article 15 DSM Directive (press-publisher neighbouring right) may apply.
     jurisdiction_sensitive: bool = False
+    # Content medium. "article" (default) — a text newsletter/blog item.
+    # "podcast" — an episode whose RSS item carries an audio <enclosure>.
+    # Drives the mic icon in the Sources UI and podcast-flavoured on-air
+    # attribution. Phase 1a still ingests the show notes as the item summary
+    # exactly like an article; the captured audio_url/duration are groundwork
+    # for later in-app playback and transcript enrichment (Phase 1b).
+    kind: Literal["article", "podcast"] = "article"
 
 
 class VoiceDefinition(BaseModel):
@@ -58,6 +65,14 @@ class SourceItem(BaseModel):
     summary: str
     published_at: datetime
     dedupe_key: str
+    # "article" (default) or "podcast" — inherited from the SourceDefinition the
+    # item was fetched from. Podcast items also carry the episode audio asset and
+    # its length; both are captured unconditionally from the RSS <enclosure> /
+    # <itunes:duration> so the data is there for any source, but only podcast
+    # feeds populate them in practice.
+    kind: str = "article"
+    audio_url: Optional[str] = None
+    audio_duration_seconds: Optional[int] = None
 
 
 class SwipeDeckRecord(BaseModel):
@@ -96,6 +111,11 @@ class SourceItemRecord(BaseModel):
     published_at: datetime
     first_seen_at: datetime
     last_seen_at: datetime
+    # Podcast metadata (see SourceItem). Nullable so existing rows and all
+    # article items round-trip unchanged; kind defaults to "article".
+    kind: str = "article"
+    audio_url: Optional[str] = None
+    audio_duration_seconds: Optional[int] = None
     embedding: Optional[list[float]] = None
     embedding_model: Optional[str] = None
     embedded_at: Optional[datetime] = None

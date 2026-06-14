@@ -837,3 +837,164 @@ sources:
     enabled: true
     ingest_mode: full
     jurisdiction_sensitive: false
+
+  # =====================================================================
+  # Podcasts (kind: podcast — show notes ingested like any item; audio
+  # enclosure + duration captured as groundwork for later playback. Every
+  # feed below validated end-to-end via scripts/validate_candidate_podcasts.py:
+  # full audio coverage on recent items, live within the last few days.)
+  # =====================================================================
+  - id: pod-up-first
+    name: Up First (NPR)
+    region: US
+    rss_url: https://feeds.npr.org/510318/podcast.xml
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-the-daily
+    name: The Daily (NYT)
+    region: US
+    rss_url: https://feeds.simplecast.com/54nAGcIl
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-global-news
+    name: Global News Podcast (BBC)
+    region: GB
+    rss_url: https://podcasts.files.bbci.co.uk/p02nq0gn.rss
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-newscast
+    name: Newscast (BBC)
+    region: GB
+    rss_url: https://podcasts.files.bbci.co.uk/p05299nl.rss
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-planet-money
+    name: Planet Money (NPR)
+    region: US
+    rss_url: https://feeds.npr.org/510289/podcast.xml
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-the-indicator
+    name: The Indicator from Planet Money
+    region: US
+    rss_url: https://feeds.npr.org/510325/podcast.xml
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-freakonomics
+    name: Freakonomics Radio
+    rss_url: https://feeds.simplecast.com/Y8lFbOT4
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-vergecast
+    name: The Vergecast
+    rss_url: https://feeds.megaphone.fm/vergecast
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-lex-fridman
+    name: Lex Fridman Podcast
+    rss_url: https://lexfridman.com/feed/podcast/
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-short-wave
+    name: Short Wave (NPR)
+    region: US
+    rss_url: https://feeds.npr.org/510351/podcast.xml
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-radiolab
+    name: Radiolab
+    region: US
+    rss_url: https://feeds.simplecast.com/EmVW7VGp
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-ted-radio-hour
+    name: TED Radio Hour (NPR)
+    region: US
+    rss_url: https://feeds.npr.org/510298/podcast.xml
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-fresh-air
+    name: Fresh Air (NPR)
+    region: US
+    rss_url: https://feeds.npr.org/381444908/podcast.xml
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-ted-talks-daily
+    name: TED Talks Daily
+    rss_url: https://feeds.feedburner.com/TEDTalks_audio
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-huberman-lab
+    name: Huberman Lab
+    rss_url: https://feeds.megaphone.fm/hubermanlab
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+
+  - id: pod-pod-save-america
+    name: Pod Save America
+    region: US
+    rss_url: https://feeds.simplecast.com/dxZsm5kX
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
