@@ -1369,6 +1369,17 @@ class ControlPlaneService:
 
         return self.get_me(user_id)
 
+    def acknowledge_trial_gift(self, user_id: str) -> dict[str, Any]:
+        """Mark the "gift" trial-reset card as dismissed by the user. Stamps
+        `trial_gift_acknowledged_at` (which flips `trial_gift_pending` False)
+        the first time it's called; subsequent calls are no-ops. Idempotent."""
+        user = self._require_user(user_id)
+        if user.trial_gift_acknowledged_at is None:
+            user.trial_gift_acknowledged_at = utc_now()
+            user.updated_at = utc_now()
+            self.repository.save_user(user)
+        return {"ok": True}
+
     def get_source_catalog(self) -> list[dict[str, Any]]:
         return [
             {
@@ -3062,6 +3073,11 @@ class ControlPlaneService:
             is_in_first_month=is_in_first_month,
             first_month_ends_at=first_month_ends_at,
             trial_ends_at=user.trial_ends_at if time_trial_active else None,
+            # Gift trial reset (2026-06-14): pending while granted-but-unacked.
+            trial_gift_pending=(
+                user.trial_gift_granted_at is not None
+                and user.trial_gift_acknowledged_at is None
+            ),
         )
 
     def _entitlements_for_user(self, user_id: str) -> UserEntitlements:

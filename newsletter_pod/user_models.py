@@ -75,6 +75,15 @@ class UserRecord(BaseModel):
     premium_pods_this_week: int = 0
     default_pods_this_week: int = 0
 
+    # "Gift" trial reset for the first 100 users (2026-06-14). `granted_at` is
+    # stamped when an operator script resets the 7-day trial as a thank-you;
+    # `acknowledged_at` is set when the user taps "Got it" on the in-app card;
+    # `pushed_at` is set once the announcement push has been dispatched. The
+    # entitlements surface a `trial_gift_pending` flag while granted-but-unacked.
+    trial_gift_granted_at: Optional[datetime] = None
+    trial_gift_acknowledged_at: Optional[datetime] = None
+    trial_gift_pushed_at: Optional[datetime] = None
+
 
 class PodcastProfileRecord(BaseModel):
     user_id: str
@@ -364,6 +373,10 @@ class UserEntitlements(BaseModel):
     # Set to the trial expiry while the 7-day full-access trial is open; None
     # otherwise. Clients show a "X days left" countdown when present.
     trial_ends_at: Optional[datetime] = None
+    # True while the "gift" trial reset has been granted but not yet acked by
+    # the user (granted_at set, acknowledged_at None). Clients show a one-time
+    # "A gift from theclawcast" card while this is True.
+    trial_gift_pending: bool = False
 
 
 class ChurnRiskRecord(BaseModel):
