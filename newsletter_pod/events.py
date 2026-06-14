@@ -82,23 +82,78 @@ def reset_current_platform(token: Optional[contextvars.Token]) -> None:
         _current_platform.reset(token)
 
 
+# Substrings that identify a platform from a podcast client's User-Agent.
+# Tuned against the real /media traffic mix (2026-06): the dominant iOS client
+# is Apple Podcasts, which sends "Podcasts/<build> CFNetwork/<v> Darwin/<v>" —
+# no "applecoremedia"/"itunes" token — so the Apple networking-stack markers
+# (cfnetwork/darwin) and Apple-only apps/devices are what actually catch it.
+# Android markers cover the Android runtime (dalvik), the standard Android HTTP
+# client (okhttp), and Android-only podcast apps. Cross-platform clients that
+# expose no OS token (Pocket Casts, Spotify, bare Player FM) deliberately stay
+# None here — they're resolved per-user from the device token instead.
+_ANDROID_UA_MARKERS = (
+    "podcastaddict",
+    "android",
+    "dalvik",
+    "okhttp",
+    "antennapod",
+)
+_IOS_UA_MARKERS = (
+    "applecoremedia",
+    "cfnetwork",
+    "darwin",
+    "itunes",
+    "apple podcasts",
+    "overcast",
+    "castro",
+    "watchos",
+    "iphone",
+    "ipad",
+)
+
+# Link-preview / crawler User-Agents that fetch the media URL but are NOT a
+# listen (chat-app unfurlers, search bots, embed players). We skip emitting a
+# play-pulse for these so they don't inflate listen counts or get mis-attributed
+# to a user's platform via the device-token fallback.
+_BOT_UA_MARKERS = (
+    "bot",
+    "crawler",
+    "spider",
+    "whatsapp",
+    "discord",
+    "facebookexternalhit",
+    "telegram",
+    "slackbot",
+    "wordpress.com - audio",
+)
+
+
 def platform_from_user_agent(user_agent: Optional[str]) -> Optional[str]:
     """Best-effort map of a podcast client's User-Agent to a platform.
 
     Used for the server-side /media listening event, where the audio fetch
-    comes from an external podcast app (Apple Podcasts on iOS, Podcast Addict
-    on Android) rather than our own client — so there is no X-Client-Platform
-    header to read. Apple's AVFoundation stack and Podcast Addict both send
-    stable, distinguishable User-Agents; anything else stays None ("unknown").
+    comes from an external podcast app rather than our own client — so there is
+    no X-Client-Platform header to read. Single-platform clients map cleanly;
+    cross-platform clients with no OS token return None (the caller then falls
+    back to the user's device-token platform).
     """
     if not user_agent:
         return None
     ua = user_agent.lower()
-    if "podcastaddict" in ua:
+    if any(marker in ua for marker in _ANDROID_UA_MARKERS):
         return "android"
-    if "applecoremedia" in ua or "itunes" in ua or "apple podcasts" in ua:
+    if any(marker in ua for marker in _IOS_UA_MARKERS):
         return "ios"
     return None
+
+
+def is_bot_user_agent(user_agent: Optional[str]) -> bool:
+    """True for link-preview/crawler User-Agents whose media fetch isn't a
+    real listen, so the /media route can skip emitting a play-pulse for them."""
+    if not user_agent:
+        return False
+    ua = user_agent.lower()
+    return any(marker in ua for marker in _BOT_UA_MARKERS)
 
 
 class EventName(str, Enum):
