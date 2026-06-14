@@ -31,7 +31,7 @@ voices:
     speed: 1.2
 
   # ============================================================
-  # Premium voices (2 male / 3 female on top of Vinnie + Demi = 7 total).
+  # Premium voices (3 male / 4 female on top of Vinnie + Demi = 9 total).
   # ============================================================
   - id: 5e3JKXK83vvgQqBcdUol
     name: Chaz Cobalt
@@ -66,4 +66,18 @@ voices:
     gender: female
     description: Bold and punchy; reads the headlines like she means it.
     preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/0S5oIfi8zOZixuSj8K6n.mp3
+    enabled: true
+
+  - id: L0Dsvb3SLTyegXwtm47J
+    name: Archer Ames
+    gender: male
+    description: Crisp and precise; a polished newsreader who lands every point.
+    preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/L0Dsvb3SLTyegXwtm47J.mp3
+    enabled: true
+
+  - id: lcMyyd2HUfFzxdCaC4Ta
+    name: Lucy Livermore
+    gender: female
+    description: Bright and personable; turns the day's headlines into easy conversation.
+    preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/lcMyyd2HUfFzxdCaC4Ta.mp3
     enabled: true
