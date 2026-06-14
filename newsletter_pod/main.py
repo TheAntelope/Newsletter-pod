@@ -60,6 +60,7 @@ from .admin_metrics import (
     render_user_not_found_html,
     render_user_timeline_html,
 )
+from .analytics_export import BigQueryTableWriter, run_export
 from .churn_risk import ChurnRiskScoringService
 from .cohort_report import CohortReportService
 from .control_plane import ControlPlaneError, ControlPlaneService, build_task_enqueuer
@@ -90,6 +91,7 @@ from .push import (
     build_fcm_sender_from_settings,
     build_push_sender_from_settings,
     send_pod_ready_push,
+    send_trial_gift_push,
 )
 from .shared_items import MAX_UPLOAD_BYTES as SHARED_MAX_UPLOAD_BYTES, SUPPORTED_KINDS as SHARED_SUPPORTED_KINDS
 from .storage import AudioStorage, GCSAudioStorage, InMemoryAudioStorage
@@ -418,6 +420,23 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         _validate_job_auth(container.settings, authorization, x_job_trigger_token)
         assert container.control_plane is not None
         return container.control_plane.refresh_cold_start_deck()
+
+    @app.post("/jobs/export-analytics-snapshot")
+    def export_analytics_snapshot(
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Daily snapshot of Firestore subscriptions + device tokens into
+        BigQuery (analytics.subscriptions_export / device_tokens_export), which
+        back the tier/churn views and the per-user platform join. No-op unless
+        ANALYTICS_EXPORT_ENABLED — so it's safe to schedule before BigQuery
+        IAM/config is in place, and never touches BigQuery in tests."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        if not container.settings.analytics_export_enabled:
+            return {"skipped": "analytics_export_disabled"}
+        assert container.control_repository is not None
+        writer = BigQueryTableWriter(container.settings)
+        return {"exported": run_export(container.control_repository, writer)}
 
     @app.post("/jobs/score-churn-risk")
     def score_churn_risk(
@@ -1026,6 +1045,18 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    @app.post("/v1/me/trial-gift/ack")
+    def acknowledge_trial_gift(authorization: str | None = Header(default=None)) -> dict:
+        """Dismiss the one-time "A gift from theclawcast" trial-reset card.
+        Sets trial_gift_acknowledged_at (flipping trial_gift_pending False).
+        Idempotent — re-acking is a no-op."""
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.acknowledge_trial_gift(user.id)
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
     @app.get("/v1/sources/catalog")
     def get_source_catalog() -> dict:
         assert container.control_plane is not None
@@ -1575,6 +1606,54 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             content=render_summary_html(summary),
             media_type="text/html; charset=utf-8",
         )
+
+    @app.post("/admin/trial-gift/notify")
+    def admin_trial_gift_notify(
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        """Admin-only: announce the "gift" trial reset. Finds every user whose
+        trial gift has been granted (trial_gift_granted_at set) but not yet
+        announced (trial_gift_pushed_at None), sends the gift push, and stamps
+        trial_gift_pushed_at so a re-run only targets newcomers. Gated by
+        ADMIN_USER_IDS exactly like /admin/metrics (403 for non-admins)."""
+        session_user = _require_session_user(container, authorization)
+        if not is_admin(session_user.id, container.settings):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+        assert container.control_repository is not None
+        repository = container.control_repository
+
+        candidates = [
+            user
+            for user in repository.list_all_users(limit=5000)
+            if user.trial_gift_granted_at is not None
+            and user.trial_gift_pushed_at is None
+        ]
+        pushed = 0
+        deregistered = 0
+        for user in candidates:
+            try:
+                result = send_trial_gift_push(
+                    sender=container.push_sender,
+                    fcm_sender=container.fcm_sender,
+                    repository=repository,
+                    user_id=user.id,
+                )
+            except Exception:  # pragma: no cover — push is best-effort
+                logger.warning("Trial-gift push failed: user=%s", user.id)
+                continue
+            deregistered += result.get("deregistered", 0)
+            user.trial_gift_pushed_at = utc_now()
+            repository.save_user(user)
+            pushed += 1
+
+        return {
+            "candidates": len(candidates),
+            "pushed": pushed,
+            "deregistered": deregistered,
+        }
 
     @app.post("/v1/me/generate", status_code=status.HTTP_202_ACCEPTED)
     def generate_episode_now(

@@ -380,6 +380,15 @@ class ControlPlaneRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_all_active_device_tokens(
+        self, limit: int = 5000
+    ) -> list[DeviceTokenRecord]:
+        """Return up to `limit` active (non-invalidated) device tokens across
+        every user. Backs the daily analytics export's per-user platform
+        snapshot (analytics_export.py). Order is unspecified."""
+        raise NotImplementedError
+
+    @abstractmethod
     def list_recent_episodes_across_users(
         self, since: datetime, limit: int = 1000
     ) -> list[UserEpisodeRecord]:
@@ -926,6 +935,16 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
     def list_all_subscriptions(self, limit: int = 1000) -> list[SubscriptionRecord]:
         return list(self._subscriptions.values())[:limit]
 
+    def list_all_active_device_tokens(
+        self, limit: int = 5000
+    ) -> list[DeviceTokenRecord]:
+        active = [
+            record
+            for record in self._device_tokens.values()
+            if record.invalidated_at is None
+        ]
+        return active[:limit]
+
     def list_recent_episodes_across_users(
         self, since: datetime, limit: int = 1000
     ) -> list[UserEpisodeRecord]:
@@ -1260,6 +1279,18 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
     def list_all_subscriptions(self, limit: int = 1000) -> list[SubscriptionRecord]:
         docs = list(self._subscriptions.limit(limit).stream())
         return [SubscriptionRecord.model_validate(doc.to_dict()) for doc in docs]
+
+    def list_all_active_device_tokens(
+        self, limit: int = 5000
+    ) -> list[DeviceTokenRecord]:
+        # Stream up to `limit` then drop invalidated in Python — the active set
+        # is small at current scale and Firestore null-equality filters on a
+        # maybe-absent field are unreliable (mirrors list_active_device_tokens).
+        docs = list(self._device_tokens.limit(limit).stream())
+        records = [
+            DeviceTokenRecord.model_validate(doc.to_dict() or {}) for doc in docs
+        ]
+        return [record for record in records if record.invalidated_at is None]
 
     def list_recent_episodes_across_users(
         self, since: datetime, limit: int = 1000

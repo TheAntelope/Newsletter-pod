@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # One-shot, idempotent setup for the Phase 3 analytics jobs:
+#   - export-analytics-snapshot  (daily 03:30 Europe/Amsterdam)
 #   - score-churn-risk-daily     (daily 04:00 Europe/Amsterdam)
 #   - weekly-cohort-report-mon   (Mondays 07:00 Europe/Amsterdam)
+#
+# The snapshot export runs first (before churn scoring) so
+# analytics.subscriptions_export / device_tokens_export are fresh for the day.
 #
 # Both endpoints are idempotent (re-runs overwrite per-user state /
 # resend the report) so retries from Cloud Scheduler are safe.
@@ -41,6 +45,8 @@ set -euo pipefail
 
 REGION="${REGION:-europe-west1}"
 TIME_ZONE="${TIME_ZONE:-Europe/Amsterdam}"
+EXPORT_JOB_NAME="${EXPORT_JOB_NAME:-export-analytics-snapshot}"
+EXPORT_SCHEDULE="${EXPORT_SCHEDULE:-30 3 * * *}"
 CHURN_JOB_NAME="${CHURN_JOB_NAME:-score-churn-risk-daily}"
 CHURN_SCHEDULE="${CHURN_SCHEDULE:-0 4 * * *}"
 COHORT_JOB_NAME="${COHORT_JOB_NAME:-weekly-cohort-report-mon}"
@@ -91,6 +97,12 @@ apply_job() {
 }
 
 apply_job \
+  "$EXPORT_JOB_NAME" \
+  "$EXPORT_SCHEDULE" \
+  "${SERVICE_URL%/}/jobs/export-analytics-snapshot" \
+  "Daily Firestore->BigQuery snapshot of subscriptions + device tokens (backs the tier/churn views and the per-user platform join). Idempotent: WRITE_TRUNCATE replace."
+
+apply_job \
   "$CHURN_JOB_NAME" \
   "$CHURN_SCHEDULE" \
   "${SERVICE_URL%/}/jobs/score-churn-risk" \
@@ -109,8 +121,10 @@ fi
 
 echo
 echo "Done. Verify with:"
+echo "  gcloud scheduler jobs describe $EXPORT_JOB_NAME --location=$REGION --project=$GCP_PROJECT"
 echo "  gcloud scheduler jobs describe $CHURN_JOB_NAME --location=$REGION --project=$GCP_PROJECT"
 echo "  gcloud scheduler jobs describe $COHORT_JOB_NAME --location=$REGION --project=$GCP_PROJECT"
 echo "Trigger manually with:"
+echo "  gcloud scheduler jobs run $EXPORT_JOB_NAME --location=$REGION --project=$GCP_PROJECT"
 echo "  gcloud scheduler jobs run $CHURN_JOB_NAME --location=$REGION --project=$GCP_PROJECT"
 echo "  gcloud scheduler jobs run $COHORT_JOB_NAME --location=$REGION --project=$GCP_PROJECT"
