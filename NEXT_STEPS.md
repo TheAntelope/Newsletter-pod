@@ -320,6 +320,29 @@ triages from `/admin/metrics?user_id=...` manually.
 
 **Revisit trigger:** if onboarding-to-first-episode-listen funnel data shows users dropping off before episode #1 generates. Then the splice becomes worth the latency.
 
+### Podcast self-transcription (Phase 1b) (logged 2026-06-15)
+
+**Context:** Phase 1a shipped podcasts as a first-class source type (live in prod; see [[podcasts_source_type_phase1a]]). It ingests each episode's **show notes** as the item summary, exactly like an article, and already captures `audio_url` + `audio_duration_seconds` + `kind="podcast"` on `SourceItem`/`SourceItemRecord` as groundwork. The original 1b plan was "use the Podcasting 2.0 `<podcast:transcript>` tag when the feed provides it (free, exact text)." **That path is mostly dead on arrival:** validating the 16 catalog feeds (`scripts/validate_candidate_podcasts.py`) showed **zero** expose `<podcast:transcript>` on recent items. So to get real episode *content* (not just a one-line show note), we have to **transcribe the audio ourselves.** This is the deferred, more expensive path.
+
+**Why it matters:** show-note quality is wildly inconsistent. The news/curated feeds write rich notes (Up First ~1775c, Planet Money ~2843c) and produce good briefing lines today; thin-note shows (The Daily ~390c, Freakonomics ~227c) currently yield "X released an episode about Y." Transcription closes that gap and is the unlock for an eventual in-app player / "key moments" feature.
+
+**The work (layered, cheap → universal):**
+1. **Tag fallback first (already designed):** in `ingestion._entry_to_item`, read `entry.get("podcast_transcript")` → store `transcript_url`+`transcript_type` on the record (cheap, no network). When present (rare), fetch + strip to plain text by type (VTT/SRT → drop timestamps; HTML → strip tags; JSON → join segments). feedparser only surfaces the *last* `<podcast:transcript>` element, so format choice is limited — accept whatever it gives.
+2. **Audio transcription (the real work):** download the `<enclosure>` audio (`audio_url`, already captured) → transcribe via OpenAI (`whisper-1` or `gpt-4o-transcribe`, consistent with the existing OpenAI generation/embedding stack) → **condense** to a ~150-word synopsis (one LLM call) → cache on the record. A raw 60-min transcript is ~50KB and cannot go verbatim into `build_digest_prompt` (the 1200-char `summary` cap exists for exactly this), so the condense step is mandatory.
+3. **Where it runs — NOT synchronous generation.** Per-user generation (`control_plane.process_user_generation`) does a synchronous RSS fetch; a 1–3hr episode download + transcribe + condense is minutes + dollars and would wreck generation latency. Do the heavy work in the **hourly global poll** (`candidate_queue.run_poll`, where persistence + embedding already happen) or a dedicated async job, and **cache** the condensed text on `SourceItemRecord` (add e.g. `content_digest` + `transcribed_at` + `transcript_model`, mirroring the existing lazy-cached `card_summary` pattern). Transcribe each episode **once globally** (dedupe by `dedupe_key`), never per-user.
+4. **Overlay into generation:** generation builds its own in-memory `SourceItem` list, so after `fetch_new_items` batch-look-up the matching `SourceItemRecord`s (`repository.get_source_items([keys])` already exists) and swap `content_digest` in as the prompt summary when present. Keeps the hot path fast — the expensive work is cached, not on the critical path.
+5. **Cost gating (load-bearing):** do **not** blindly transcribe every episode of every catalog podcast — a 3hr Lex Fridman nobody will hear about is pure waste. Gate to high-value episodes: e.g. only episodes from sources a user actually has **enabled**, or only **pinned** items in the next-episode queue, and/or a `MAX_TRANSCRIBE_DURATION_SECONDS` cap. `log()` anything skipped so coverage isn't silently truncated.
+
+**Why deferred:** recurring per-hour-of-audio transcription cost + storage + a new async job + the dedupe/cache/overlay plumbing — material build and ongoing spend for a feature whose functional core (podcasts in the feed, briefed from show notes) is already live. Phase 1a deliberately chose the free, synchronous show-notes path first.
+
+**Open questions:**
+- **Model + cost:** benchmark `whisper-1` vs `gpt-4o-transcribe` $/hr and accuracy; estimate monthly spend from catalog size × episodes/week × avg duration *after* gating.
+- **Audio egress/storage:** download to a tmp/GCS staging path; cap size; handle tracking-prefix 302s (the `audio_url` is stored raw precisely so playback/transcription can follow the redirect).
+- **Copyright/ToS posture:** transcribing + summarizing *full audio* is a heavier IP stance than summarizing publisher-provided show notes. Worth a deliberate call (analogous to the `jurisdiction_sensitive` flag for press publishers) before turning it on broadly — possibly limit to summary/synopsis output, never republishing verbatim transcript.
+- **Backfill:** existing `SourceItemRecord`s won't have `content_digest`; decide lazy-on-next-poll vs a one-off backfill job.
+
+**Revisit trigger:** when podcast engagement justifies the spend — e.g. podcast sources show meaningful attach/listen rates in the platform analytics (`vw_engagement_by_platform` / play-pulse data), OR a user-facing in-app podcast player lands and needs transcript/"key moments" data. Until then, show-notes (1a) stands.
+
 ## Useful files
 
 - `codemagic.yaml`: hosted macOS build and TestFlight workflow.
