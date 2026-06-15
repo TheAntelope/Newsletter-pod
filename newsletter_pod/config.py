@@ -78,6 +78,21 @@ class Settings(BaseSettings):
     elevenlabs_voice_secondary_name: str = Field(
         default="Demi Dreams", alias="ELEVENLABS_VOICE_SECONDARY_NAME"
     )
+    # Post-render audio mastering: loudness-normalize every TTS segment to one
+    # target and crossfade the joins (newsletter_pod/audio_mastering.py) instead
+    # of byte-concatenating raw chunks. Fixes the "hosts aren't at the same
+    # volume / don't sound like the same room" complaint. Off by default; flip
+    # PODCAST_AUDIO_MASTERING_ENABLED=true on Cloud Run to enable and back to
+    # roll back (no redeploy). Any ffmpeg failure falls back to the raw concat.
+    podcast_audio_mastering_enabled: bool = Field(
+        default=False, alias="PODCAST_AUDIO_MASTERING_ENABLED"
+    )
+    podcast_audio_target_lufs: float = Field(
+        default=-16.0, alias="PODCAST_AUDIO_TARGET_LUFS"
+    )
+    podcast_audio_crossfade_ms: int = Field(
+        default=40, alias="PODCAST_AUDIO_CROSSFADE_MS"
+    )
     podcast_host_primary_name: str = Field(default="Vinnie", alias="PODCAST_HOST_PRIMARY_NAME")
     podcast_host_secondary_name: str = Field(default="Demi", alias="PODCAST_HOST_SECONDARY_NAME")
     podcast_format: str = Field(default="anchor_guest", alias="PODCAST_FORMAT")
