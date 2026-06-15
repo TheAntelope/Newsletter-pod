@@ -4,5 +4,18 @@
 <dict>
 	<key>aps-environment</key>
 	<string>production</string>
+	<!-- Shared with the Share Extension (and the native build); already
+	     registered to com.newsletterpod.app in the Apple Developer Portal. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.newsletterpod.shared</string>
+	</array>
+	<!-- Sign in with Apple (primary auth on iOS). Enable the matching
+	     capability on the com.newsletterpod.app App ID in the Apple Developer
+	     Portal, or signing fails. -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
 </dict>
 </plist>
