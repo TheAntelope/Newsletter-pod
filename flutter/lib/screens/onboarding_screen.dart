@@ -128,6 +128,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool get _isTwoHost => _showPreset == 'two_hosts';
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Warm the source catalog the moment onboarding opens so the "Pick your
+    // topics" step (several taps in) paints instantly instead of waiting on a
+    // live round-trip — the catalog endpoint is in-memory server-side, so a
+    // slow load is almost always a Cloud Run cold start. `??=` keeps this a
+    // one-shot; the topics step's own lazy init is the fallback, and the retry
+    // path resets `_catalog` to force a refetch.
+    _catalog ??= AppScope.of(context).repository.fetchCatalog();
+  }
+
+  @override
   void dispose() {
     _nameController.dispose();
     super.dispose();
@@ -232,6 +244,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         weekdays: _selectedDays.toList(),
         localTime: _formatTime(_deliveryTime),
       );
+
+      // Persist the greeting name so the app-entered value — not the account
+      // name pulled from Google/Apple at sign-in — becomes the display name.
+      // Mirrors podcast_setup_screen._save(); only writes when the greeting is
+      // on and a name was typed, so users who skip it keep the account default.
+      final name = _nameController.text.trim();
+      if (_greeting && name.isNotEmpty && name != app.me?.user.displayName) {
+        await app.repository.updateProfile(
+          displayName: name,
+          timezone: schedule.schedule.timezone,
+        );
+        await app.loadMe();
+      }
       return true;
     } catch (_) {
       return false;
@@ -468,6 +493,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             child: Center(child: CircularProgressIndicator()),
           );
         }
+        if (snapshot.hasError) {
+          return _topicsError();
+        }
         final topics = _topicsFrom(snapshot.data);
         return EditorialCard(
           children: [
@@ -495,6 +523,35 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ],
         );
       },
+    );
+  }
+
+  /// Shown when the catalog fetch fails or times out on the topics step.
+  /// Without this the FutureBuilder falls through to an empty card (zero chips,
+  /// no explanation) with the failed future still cached, so the user can never
+  /// recover. The retry resets `_catalog` to a fresh fetch and rebuilds.
+  Widget _topicsError() {
+    return EditorialCard(
+      children: [
+        const MetaLabel('Topics'),
+        Text(
+          "We couldn't load topics. Check your connection and try again.",
+          style: DesignTokens.typographyCallout
+              .copyWith(color: DesignTokens.colorMuted),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(
+            onPressed: () => setState(() {
+              _catalog = AppScope.of(context).repository.fetchCatalog();
+            }),
+            style: TextButton.styleFrom(
+              foregroundColor: DesignTokens.colorAmberDeep,
+            ),
+            child: const Text('Try again'),
+          ),
+        ),
+      ],
     );
   }
 
