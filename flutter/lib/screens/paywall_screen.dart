@@ -57,6 +57,7 @@ class PaywallScreen extends StatefulWidget {
 
 class _PaywallScreenState extends State<PaywallScreen> {
   String? _busyTier;
+  bool _restoring = false;
 
   Future<void> _choose(AppState app, String tier) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -84,6 +85,31 @@ class _PaywallScreenState extends State<PaywallScreen> {
       );
     } finally {
       if (mounted) setState(() => _busyTier = null);
+    }
+  }
+
+  /// Restore an existing store subscription (App Store requires a visible
+  /// restore path; harmless on Play). Refreshes `/v1/me` so a recovered
+  /// entitlement reflects immediately.
+  Future<void> _restore(AppState app) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _restoring = true);
+    try {
+      final restored = await PurchasesController.restorePurchases();
+      if (restored) await app.loadMe();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(restored
+              ? 'Subscription restored.'
+              : 'No previous purchase found to restore.'),
+        ),
+      );
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Restore failed. Please try again.')),
+      );
+    } finally {
+      if (mounted) setState(() => _restoring = false);
     }
   }
 
@@ -129,10 +155,17 @@ class _PaywallScreenState extends State<PaywallScreen> {
               const SizedBox(height: DesignTokens.spacingM),
             ],
             const SizedBox(height: DesignTokens.spacingS),
+            if (FeatureFlags.purchasesRevenueCat)
+              Center(
+                child: TextButton(
+                  onPressed: _restoring ? null : () => _restore(app),
+                  child: Text(_restoring ? 'Restoring…' : 'Restore purchases'),
+                ),
+              ),
             if (!FeatureFlags.purchasesRevenueCat)
               Text(
-                'Subscriptions are handled by Google Play via RevenueCat — '
-                'wiring in once the project is set up.',
+                'Subscriptions are handled by the App Store / Google Play via '
+                'RevenueCat — wiring in once the project is set up.',
                 style: DesignTokens.typographyMeta
                     .copyWith(color: DesignTokens.colorMuted),
               ),

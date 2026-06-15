@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App Group container shared with the host app. receive_sharing_intent
+	     reads this exact key (RSIShareViewController.loadIds), so hardcode the
+	     literal rather than a $(CUSTOM_GROUP_ID) build var — no build-setting to
+	     forget, and it can't drift from the entitlements value. Must match
+	     Runner/Info.plist + both .entitlements. -->
+	<key>AppGroupId</key>
+	<string>group.com.newsletterpod.shared</string>
+	<key>CFBundleDisplayName</key>
+	<string>ClawCast</string>
+	<!-- Keep the extension's version in lock-step with the app, or App Store
+	     validation rejects the build (extension CFBundleVersion must match). -->
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<!-- ClawCast accepts shared links, selected text, and document
+			     files (pdf / epub / docx). No images or video. -->
+			<key>NSExtensionActivationRule</key>
+			<dict>
+				<key>NSExtensionActivationSupportsText</key>
+				<true/>
+				<key>NSExtensionActivationSupportsWebURLWithMaxCount</key>
+				<integer>1</integer>
+				<!-- Attachments + File both present, mirroring the native
+				     extension — some document providers surface a shared file as
+				     a generic attachment rather than a file-url on iOS 17+. -->
+				<key>NSExtensionActivationSupportsAttachmentsWithMaxCount</key>
+				<integer>1</integer>
+				<key>NSExtensionActivationSupportsFileWithMaxCount</key>
+				<integer>1</integer>
+			</dict>
+		</dict>
+		<key>NSExtensionMainStoryboard</key>
+		<string>MainInterface</string>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.share-services</string>
+	</dict>
+</dict>
+</plist>

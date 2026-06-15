@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Must match the host app's App Group (Runner.entitlements) and the
+	     CUSTOM_GROUP_ID build setting. Already registered to the
+	     com.newsletterpod.app.share bundle id from the native build. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.newsletterpod.shared</string>
+	</array>
+</dict>
+</plist>

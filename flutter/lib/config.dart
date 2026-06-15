@@ -24,6 +24,14 @@ class AppConfig {
   /// inert even with the flag on.
   static const String revenueCatAndroidKey =
       String.fromEnvironment('REVENUECAT_ANDROID_KEY', defaultValue: '');
+
+  /// RevenueCat **iOS public SDK key** (non-secret; restricted by app + store).
+  /// Provide at build time: `--dart-define=REVENUECAT_IOS_KEY=appl_xxx`. Empty →
+  /// purchases stay inert on iOS even with the flag on. (iOS keys are prefixed
+  /// `appl_`; Android keys `goog_`.) [PurchasesController] picks the key for the
+  /// running platform, so a single build can ship to both stores.
+  static const String revenueCatIosKey =
+      String.fromEnvironment('REVENUECAT_IOS_KEY', defaultValue: '');
 }
 
 /// Compile-time feature flags (set via `--dart-define`).
