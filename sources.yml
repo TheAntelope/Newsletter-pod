@@ -173,6 +173,15 @@ sources:
     ingest_mode: excerpt
     jurisdiction_sensitive: true  # Italy (EU)
 
+  - id: news-local-denmark
+    name: The Local Denmark
+    region: DK
+    rss_url: https://feeds.thelocal.com/rss/dk
+    topic: News
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: true  # Denmark (EU)
+
   # =====================================================================
   # Politics
   # =====================================================================
