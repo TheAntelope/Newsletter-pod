@@ -1982,6 +1982,9 @@ def _build_container(settings: Settings) -> ServiceContainer:
         elevenlabs_api_key=settings.elevenlabs_api_key,
         elevenlabs_model=settings.elevenlabs_model,
         voice_speed_by_id=voice_speed_by_id,
+        audio_mastering_enabled=settings.podcast_audio_mastering_enabled,
+        audio_target_lufs=settings.podcast_audio_target_lufs,
+        audio_crossfade_ms=settings.podcast_audio_crossfade_ms,
     )
 
     mailer_required = (
@@ -2144,6 +2147,9 @@ def _build_control_plane(
             elevenlabs_api_key=settings.elevenlabs_api_key,
             elevenlabs_model=settings.elevenlabs_model,
             voice_speed_by_id=voice_speed_by_id,
+            audio_mastering_enabled=settings.podcast_audio_mastering_enabled,
+            audio_target_lufs=settings.podcast_audio_target_lufs,
+            audio_crossfade_ms=settings.podcast_audio_crossfade_ms,
         )
     session_manager = SessionManager(
         signing_secret=settings.session_signing_secret,

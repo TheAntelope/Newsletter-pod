@@ -10,6 +10,7 @@ from typing import Any, Iterator, Optional
 
 import requests
 
+from .audio_mastering import MasteringError, master_mp3_segments
 from .models import AudioSegment, GeneratedEpisode, PodcastUxConfig
 from .prompting import build_closing_prompt, fallback_closing_text
 
@@ -48,6 +49,14 @@ class PodcastApiClient:
     # from voices.yml at container construction; voices without an entry are
     # synthesized at ElevenLabs' default speed.
     voice_speed_by_id: dict[str, float] = field(default_factory=dict)
+    # Post-render audio mastering (see audio_mastering.py). When enabled, the
+    # per-segment MP3s are loudness-normalized to a shared target and crossfaded
+    # instead of byte-concatenated, so the two hosts land at the same volume and
+    # the joins stop sounding like separate takes. Defaults keep the legacy
+    # byte-concat path so existing behaviour/tests are unchanged until opted in.
+    audio_mastering_enabled: bool = False
+    audio_target_lufs: float = -16.0
+    audio_crossfade_ms: int = 40
 
     def generate(
         self,
@@ -173,7 +182,7 @@ class PodcastApiClient:
 
         audio_chunks = [self._synthesize_speech(segment.text, _voice_for(segment)) for segment in audio_segments]
         transcript = "\n\n".join(f"{segment.speaker}: {segment.text}" for segment in audio_segments)
-        audio_bytes = _concat_mp3_chunks(audio_chunks)
+        audio_bytes = self._assemble_audio(audio_chunks)
 
         # Prefer the duration decoded from the rendered MP3 frames; fall back to a
         # word-count estimate only if frame parsing finds nothing (e.g. a stub
@@ -381,6 +390,28 @@ class PodcastApiClient:
                 )
                 return self._generate_openai_speech(script, voice_id=None)
         return self._generate_openai_speech(script, voice_id)
+
+    def _assemble_audio(self, audio_chunks: list[bytes]) -> bytes:
+        """Combine per-segment TTS MP3s into the final episode audio.
+
+        When mastering is enabled, loudness-normalize each segment to a shared
+        target and crossfade the joins (audio_mastering.master_mp3_segments).
+        On ANY mastering failure — including ffmpeg being unavailable — fall
+        back to the legacy raw byte-concat so generation never breaks. With
+        mastering disabled this is exactly the old behaviour.
+        """
+        if self.audio_mastering_enabled and audio_chunks:
+            try:
+                return master_mp3_segments(
+                    audio_chunks,
+                    target_lufs=self.audio_target_lufs,
+                    crossfade_ms=self.audio_crossfade_ms,
+                )
+            except MasteringError as exc:
+                logger.warning(
+                    "Audio mastering failed (%s); falling back to raw concat", exc
+                )
+        return _concat_mp3_chunks(audio_chunks)
 
     def _speech_max_chars(self) -> int:
         provider = (self.tts_provider or "openai").strip().lower()
