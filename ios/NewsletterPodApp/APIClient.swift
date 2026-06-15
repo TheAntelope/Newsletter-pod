@@ -2,12 +2,15 @@ import Foundation
 
 enum APIError: Error, LocalizedError {
     case invalidResponse
+    case unauthorized
     case server(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
             return "Invalid server response."
+        case .unauthorized:
+            return "Your session expired. Please sign in again."
         case .server(let message):
             return message
         }
@@ -19,6 +22,15 @@ final class APIClient {
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
+
+    /// Invoked (on the main actor) when an *authenticated* request comes back
+    /// 401 — i.e. a token we sent was rejected. This happens when the stored
+    /// session token has expired or, more abruptly, when the backend rotates
+    /// its session-signing secret (which invalidates every previously issued
+    /// token at once). Lets the app clear the dead session and route back to
+    /// Sign in with Apple instead of stranding the user on an "Invalid session
+    /// token" error with no in-app way to recover. Set by AppViewModel.
+    var onUnauthorized: (@MainActor @Sendable () -> Void)?
 
     init(baseURL: URL = AppConfiguration.baseURL, session: URLSession = .shared) {
         self.baseURL = baseURL
@@ -397,6 +409,17 @@ final class APIClient {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
+            // A token we sent was rejected: clear the dead session and re-auth
+            // rather than surfacing a dead-end error. Only treat it as a
+            // session expiry when we actually carried a Bearer token — a 401
+            // on the tokenless sign-in call is a bad-credential failure, not an
+            // expiry, and shouldn't tear down state.
+            if httpResponse.statusCode == 401, token != nil {
+                if let handler = onUnauthorized {
+                    await MainActor.run { handler() }
+                }
+                throw APIError.unauthorized
+            }
             if let message = try? decoder.decode(ServerErrorEnvelope.self, from: data) {
                 throw APIError.server(message.detail)
             }

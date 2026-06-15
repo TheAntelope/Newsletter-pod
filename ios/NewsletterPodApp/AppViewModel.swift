@@ -70,6 +70,15 @@ final class AppViewModel: ObservableObject {
             // same shared-keychain access group.
             self.sessionToken = storedToken
         }
+        // Auto-recover from a rejected session token (expiry, or a backend
+        // session-signing-secret rotation that invalidates every issued
+        // token): clear the dead session so RootView drops back to Sign in
+        // with Apple instead of stranding the user. Without this, iOS — which
+        // has no sign-out button and persists the token in the keychain — can
+        // only recover by deleting and reinstalling the app.
+        apiClient.onUnauthorized = { [weak self] in
+            self?.handleUnauthorized()
+        }
         // Receive any APNs token the system delivers (cold start after a
         // previously granted permission, or just-in-time after the Substack
         // pre-prompt). We register on every delivery so a token rotation
@@ -586,9 +595,42 @@ final class AppViewModel: ObservableObject {
             errorMessage = error.localizedDescription
             return false
         }
+        clearSessionState(forgetOnboardingProgress: true)
+        flashSaved("Account deleted")
+        return true
+    }
+
+    /// Signs the user out on this device: clears the local session and the
+    /// keychain-stored token so RootView (which observes `isAuthenticated`)
+    /// returns to Sign in with Apple. Keeps the onboarding-complete flag so a
+    /// returning user isn't pushed back through the wizard. Mirrors the
+    /// Flutter app's sign-out, and gives users a way to recover from a
+    /// rejected session token without reinstalling.
+    func signOut() {
+        clearSessionState(forgetOnboardingProgress: false)
+    }
+
+    /// Invoked by APIClient when an authenticated request returns 401 — the
+    /// stored token is dead (expired, or the backend rotated its
+    /// session-signing secret). Clear it and surface a friendly prompt;
+    /// RootView then shows Sign in with Apple. Guarded so the parallel
+    /// requests fired by `refresh()` don't each re-trigger the teardown.
+    private func handleUnauthorized() {
+        guard sessionToken != nil else { return }
+        clearSessionState(forgetOnboardingProgress: false)
+        errorMessage = "Your session expired. Please sign in again."
+    }
+
+    /// Tears down every piece of per-user state we hold locally and clears the
+    /// stored session token, so RootView snaps back to the Sign-in screen.
+    /// Shared by `signOut`, `deleteAccount`, and the 401 auto-recovery path.
+    /// `forgetOnboardingProgress` also drops the local "completed onboarding"
+    /// flag — wanted for a full account wipe, but not for a plain sign-out
+    /// where the same user signing back in shouldn't redo the wizard.
+    private func clearSessionState(forgetOnboardingProgress: Bool) {
         pollTask?.cancel()
         pollTask = nil
-        self.sessionToken = nil
+        sessionToken = nil
         user = nil
         profile = nil
         schedule = nil
@@ -599,13 +641,14 @@ final class AppViewModel: ObservableObject {
         inboundItems = []
         substackIntents = []
         libraryEpisodes = []
+        nextEpisodeQueue = nil
         activeRunID = nil
         showOnboarding = false
         selectedTab = .home
-        UserDefaults.standard.removeObject(forKey: Self.onboardingCompleteKey)
+        if forgetOnboardingProgress {
+            UserDefaults.standard.removeObject(forKey: Self.onboardingCompleteKey)
+        }
         SharedSession.clear()
-        flashSaved("Account deleted")
-        return true
     }
 
     /// Wipes the user's onboarding state on the backend (sources, schedule,
