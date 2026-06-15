@@ -2420,6 +2420,42 @@ struct ResetAlgorithmSection: View {
     }
 }
 
+/// Signs the user out on this device. Clears the local session + the
+/// keychain-stored token; RootView observes `isAuthenticated` and falls back
+/// to SignInView automatically (same pattern as DeleteAccountSection — no
+/// explicit dismiss needed). Primary purpose beyond parity with the Flutter
+/// app: a way to recover from a rejected session token (e.g. after a backend
+/// session-secret rotation), which iOS otherwise can't self-heal short of a
+/// reinstall.
+struct SignOutSection: View {
+    @EnvironmentObject private var viewModel: AppViewModel
+    @State private var showConfirm = false
+
+    var body: some View {
+        Section("Session") {
+            Button {
+                showConfirm = true
+            } label: {
+                Text("Sign out")
+            }
+
+            Text("Signs you out on this device. Your account, sources, and episodes are kept — just sign back in with Apple.")
+                .font(Theme.Typography.callout)
+                .foregroundStyle(.secondary)
+        }
+        .confirmationDialog(
+            "Sign out of ClawCast?",
+            isPresented: $showConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Sign out", role: .destructive) {
+                viewModel.signOut()
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+}
+
 /// Final section of PodcastSetupView. Renders a destructive "Delete account"
 /// row with a two-step confirmation dialog. On confirm, calls the backend's
 /// `DELETE /v1/me` endpoint and clears local state; RootView observes
@@ -2504,6 +2540,8 @@ struct AccountSheet: View {
                 }
 
                 ResetAlgorithmSection()
+
+                SignOutSection()
 
                 DeleteAccountSection()
 
