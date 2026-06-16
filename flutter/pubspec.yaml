@@ -115,6 +115,16 @@ flutter_launcher_icons:
 # The following section is specific to Flutter packages.
 flutter:
 
+  # Opt out of Flutter's iOS UIScene lifecycle migration. Flutter 3.44's UIScene
+  # template (FlutterSceneDelegate + UIApplicationSceneManifest) crashes at launch
+  # on iOS 26 inside scene state-restoration (_saveSceneRestorationState ->
+  # stateRestorationActivity assertion, EXC_BREAKPOINT). We stay on the classic
+  # AppDelegate lifecycle (Runner/AppDelegate.swift + UIMainStoryboardFile=Main)
+  # until Flutter fixes the iOS 26 scene path. This flag also stops the build-time
+  # auto-migrator from re-injecting the scene manifest. See flutter#183586.
+  config:
+    enable-uiscene-migration: false
+
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.
