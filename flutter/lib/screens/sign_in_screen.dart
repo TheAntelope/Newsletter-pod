@@ -1,5 +1,9 @@
+import 'dart:io' show Platform;
+
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
 import '../api/api_client.dart' show ApiException;
 import '../config.dart';
@@ -31,28 +35,32 @@ class _SignInScreenState extends State<SignInScreen> {
 
   bool _busy = false;
 
-  Future<void> _onGetStarted(AppState app) async {
-    if (!FeatureFlags.googleSignIn) {
-      await app.signIn(); // demo stub path
-      return;
-    }
+  /// Runs a provider sign-in flow with shared busy/cancel/error handling.
+  /// Routing reacts to `app.signedIn` via AppScope — no navigation here.
+  Future<void> _run(AppState app, Future<void> Function() flow) async {
+    if (_busy) return;
     setState(() => _busy = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final result = await AuthController().signInWithGoogle();
-      await app.signInWithFirebaseToken(
-        result.idToken,
-        displayName: result.displayName,
-      );
-      // Routing reacts to app.signedIn via AppScope — no navigation here.
+      await flow();
     } on SignInCancelled {
-      // User dismissed the Google picker — quietly stand down.
+      // User dismissed the provider sheet — quietly stand down.
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(_signInError(e))));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  Future<void> _google(AppState app) => _run(app, () async {
+        final r = await AuthController().signInWithGoogle();
+        await app.signInWithFirebaseToken(r.idToken, displayName: r.displayName);
+      });
+
+  Future<void> _apple(AppState app) => _run(app, () async {
+        final r = await AuthController().signInWithApple();
+        await app.signInWithAppleToken(r.identityToken, displayName: r.displayName);
+      });
 
   /// A safe, user-facing message. Never interpolates a raw exception (a
   /// third-party plugin's toString() could carry sensitive data); maps known
@@ -122,20 +130,39 @@ class _SignInScreenState extends State<SignInScreen> {
                     ),
                     const Spacer(),
                     const SizedBox(height: DesignTokens.spacingL),
-                    AmberButton.filled(
-                      label: _busy
-                          ? 'Signing in…'
-                          : (realAuth ? 'Continue with Google' : 'Get started'),
-                      onPressed: () {
-                        if (_busy) return;
-                        _onGetStarted(app);
-                      },
-                    ),
+                    if (!realAuth)
+                      AmberButton.filled(
+                        label: _busy ? 'Signing in…' : 'Get started',
+                        onPressed: () {
+                          if (_busy) return;
+                          app.signIn(); // demo stub path
+                        },
+                      )
+                    else if (!kIsWeb && Platform.isIOS) ...[
+                      // iOS: Apple primary (App Store Guideline 4.8 requires the
+                      // compliant Sign in with Apple button when Google is also
+                      // offered), Google secondary.
+                      SignInWithAppleButton(
+                        onPressed: () => _apple(app),
+                        style: SignInWithAppleButtonStyle.black,
+                        height: 52,
+                      ),
+                      const SizedBox(height: DesignTokens.spacingM),
+                      AmberButton.outlined(
+                        label: _busy ? 'Signing in…' : 'Continue with Google',
+                        onPressed: () => _google(app),
+                      ),
+                    ] else
+                      // Android (+ web stub builds that flip the flag): Google only.
+                      AmberButton.filled(
+                        label: _busy ? 'Signing in…' : 'Continue with Google',
+                        onPressed: () => _google(app),
+                      ),
                     const SizedBox(height: DesignTokens.spacingM),
                     if (!realAuth)
                       Text(
-                        'Sign-in is stubbed in this build — Google / Apple via '
-                        'Firebase wires in once the project is set up.',
+                        'Sign-in is stubbed in this build — Apple / Google wire '
+                        'in on the real-auth build.',
                         style: DesignTokens.typographyMeta
                             .copyWith(color: DesignTokens.colorMuted),
                       ),
