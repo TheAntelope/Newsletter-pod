@@ -97,6 +97,32 @@ class AppState extends ChangeNotifier {
     unawaited(_configurePurchases());
   }
 
+  /// Real sign-in via **Sign in with Apple**: exchange the Apple identity token
+  /// at [ApiClient.signInWithApple] (→ `/v1/auth/apple`, NOT Firebase) so an
+  /// existing iOS user resolves to their same backend account by Apple `sub`,
+  /// preserving subscription/sources/history. Mirrors the Firebase path; the
+  /// backend's cross-provider linking unifies Apple+Google by verified email.
+  Future<void> signInWithAppleToken(
+    String identityToken, {
+    String? displayName,
+  }) async {
+    final client = _apiClient;
+    assert(client != null,
+        'signInWithAppleToken requires an ApiClient (real-auth build only)');
+    final session =
+        await client!.signInWithApple(identityToken, givenName: displayName);
+    _repository = ApiAppRepository(client, session.sessionToken);
+    _sessionToken = session.sessionToken;
+    _signedIn = true;
+    _onboardingComplete = !session.isNewUser;
+    notifyListeners();
+    await loadMe();
+    // Best-effort: register this device for FCM push.
+    unawaited(_registerForPush());
+    // Best-effort: identify the user to RevenueCat.
+    unawaited(_configurePurchases());
+  }
+
   /// Configures RevenueCat with our backend user id. No-ops unless the
   /// purchases flag + Android key are set; never throws into the sign-in flow.
   Future<void> _configurePurchases() async {

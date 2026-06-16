@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>App</string>
+	<string>ClawCast</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -71,6 +71,34 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
+	</array>
+	<!-- Share-to-ClawCast (receive_sharing_intent): the host app reads shared
+	     items from this App Group container, and the extension reopens the app
+	     via the ShareMedia-<bundleid> URL scheme. Hardcoded literal (the plugin
+	     reads this exact key) — must match the Share Extension Info.plist and
+	     both .entitlements. See docs/ios-share-extension-setup.md. -->
+	<key>AppGroupId</key>
+	<string>group.com.newsletterpod.shared</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>ShareMedia-$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+			</array>
+		</dict>
+		<!-- Google Sign-In OAuth callback. Value is the REVERSED_CLIENT_ID from
+		     GoogleService-Info.plist (Firebase project theclawcast-9a045). -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.650971509352-halih7umbmdrk6ljqp9shb8tl89jr699</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

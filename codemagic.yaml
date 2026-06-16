@@ -306,6 +306,136 @@ workflows:
       - ios/build/screenshots.zip
       - ios/build/screenshots/*.png
 
+  ios-flutter-testflight:
+    name: iOS Flutter TestFlight
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+    # Workstream G of the iOS native->Flutter cut-over. MANUAL-ONLY (no
+    # `triggering` block): the native `ios-testflight` workflow stays the
+    # production iOS pipeline during coexistence. Trigger this from the Codemagic
+    # UI/API to produce a Flutter iOS build for TestFlight testing.
+    #
+    # FIRST-RUN PREREQUISITES (this build will FAIL signing without them):
+    #   - Apple Developer Portal: enable "Sign in with Apple" capability on the
+    #     com.newsletterpod.app App ID (matches Runner.entitlements), and confirm
+    #     the App Group group.com.newsletterpod.shared is assigned to it.
+    #   - Codemagic: a variable group `revenuecat_ios` containing REVENUECAT_IOS_KEY
+    #     (the appl_... public SDK key).
+    #   - The share-extension Xcode target may not exist yet (see
+    #     docs/ios-share-extension-setup.md). Until it does, only the main app
+    #     builds; the share-extension profile provisioned below is simply unused.
+    #   - UNVERIFIED from CI yet (authored on a non-Mac box) — validate the first run.
+    integrations:
+      app_store_connect: codemagic
+    environment:
+      ios_signing:
+        # Installs the distribution cert into the managed keychain; the profiles
+        # themselves are regenerated fresh below (App Groups + Sign in with Apple
+        # can't be bound by automatic signing — same constraint as the native app).
+        distribution_type: app_store
+        bundle_identifier: com.newsletterpod.app
+      groups:
+        - revenuecat_ios
+      flutter: stable
+      vars:
+        APP_STORE_APPLE_ID: "6762568729"
+        # Major version for the cut-over train (CFBundleShortVersionString).
+        FLUTTER_MARKETING_VERSION: "2.0.0"
+      xcode: latest
+    scripts:
+      - name: Build design tokens (refresh Dart copy + staleness guard)
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          git submodule update --init --recursive
+          cd "$CM_BUILD_DIR/design-tokens"
+          npm ci
+          npm run build
+          cp dist/design_tokens.dart "$CM_BUILD_DIR/flutter/lib/design_tokens.dart"
+          cd "$CM_BUILD_DIR"
+          if ! git diff --exit-code flutter/lib/design_tokens.dart; then
+            echo "ERROR: flutter/lib/design_tokens.dart is stale. Run 'npm run build' in design-tokens/, copy dist/design_tokens.dart to flutter/lib/, and commit."
+            exit 1
+          fi
+      - name: Flutter pub get
+        script: |
+          cd "$CM_BUILD_DIR/flutter"
+          flutter pub get
+      - name: Regenerate provisioning profiles for both bundle ids
+        script: |
+          # Mirrors the native ios-testflight signing: regenerate fresh App Store
+          # profiles for BOTH bundle ids against the newest distribution cert.
+          # Exact-identifier match avoids the --bundle-id-identifier PREFIX trap
+          # (a query for com.newsletterpod.app also returns ...app.share).
+          set -e
+          MAIN_BUNDLE=com.newsletterpod.app
+          EXT_BUNDLE=com.newsletterpod.app.share
+          CERT_ID=$(app-store-connect certificates list --json | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          certs = [c for c in data if 'DISTRIBUTION' in (c.get('attributes', {}).get('certificateType') or '').upper()]
+          certs.sort(key=lambda c: c.get('attributes', {}).get('expirationDate', ''), reverse=True)
+          print(certs[0]['id'] if certs else '')
+          ")
+          if [ -z "$CERT_ID" ]; then echo "ERROR: no distribution certificate found"; exit 1; fi
+          db_id() {
+            app-store-connect bundle-ids list --bundle-id-identifier "$1" --json | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          for b in data:
+              if b.get('attributes', {}).get('identifier') == '$1':
+                  print(b['id']); break
+          "
+          }
+          MAIN_DB_ID=$(db_id $MAIN_BUNDLE)
+          EXT_DB_ID=$(db_id $EXT_BUNDLE)
+          if [ -z "$MAIN_DB_ID" ]; then echo "ERROR: main bundle id $MAIN_BUNDLE not found in ASC"; exit 1; fi
+          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/"*.mobileprovision
+          TS=$(date +%Y%m%d_%H%M%S)
+          app-store-connect profiles create "$MAIN_DB_ID" --certificate-ids "$CERT_ID" --type IOS_APP_STORE --name "ClawCast Flutter Main $TS" --save
+          if [ -n "$EXT_DB_ID" ] && [ "$EXT_DB_ID" != "$MAIN_DB_ID" ]; then
+            app-store-connect profiles create "$EXT_DB_ID" --certificate-ids "$CERT_ID" --type IOS_APP_STORE --name "ClawCast Flutter Share $TS" --save
+          fi
+          xcode-project use-profiles \
+            --project "$CM_BUILD_DIR/flutter/ios/Runner.xcodeproj" \
+            --export-options-plist "$CM_BUILD_DIR/export_options.plist"
+      - name: Determine build number
+        script: |
+          # Max of TestFlight + App Store, then +1 — same guard as the native
+          # workflow (a draft version once stuck uploads at build 93).
+          TF=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" --platform IOS 2>/dev/null || echo 0)
+          AS=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APPLE_ID" --platform IOS 2>/dev/null || echo 0)
+          case "$TF" in ''|*[!0-9]*) TF=0 ;; esac
+          case "$AS" in ''|*[!0-9]*) AS=0 ;; esac
+          LATEST=$TF; [ "$AS" -gt "$LATEST" ] && LATEST=$AS
+          if [ "$LATEST" -eq 0 ]; then
+            echo "ERROR: ASC build-number lookup returned 0 — refusing to upload build 1." >&2
+            exit 1
+          fi
+          echo "BUILD_NUMBER=$((LATEST + 1))" >> "$CM_ENV"
+          echo "Build number: $((LATEST + 1)) (TestFlight=$TF AppStore=$AS)"
+      - name: Build IPA for TestFlight
+        script: |
+          cd "$CM_BUILD_DIR/flutter"
+          # Real-auth build: enable Google + Apple sign-in (both gated by the
+          # real-auth flag) and RevenueCat purchases with the iOS key.
+          flutter build ipa --release \
+            --build-name="$FLUTTER_MARKETING_VERSION" \
+            --build-number="$BUILD_NUMBER" \
+            --dart-define=ENABLE_GOOGLE_SIGN_IN=true \
+            --dart-define=ENABLE_PURCHASES_REVENUECAT=true \
+            --dart-define=REVENUECAT_IOS_KEY="$REVENUECAT_IOS_KEY" \
+            --export-options-plist="$CM_BUILD_DIR/export_options.plist"
+    artifacts:
+      - flutter/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        beta_groups:
+          - Internal Testers
+
   android-playstore:
     name: Android Play Store (internal)
     max_build_duration: 60
