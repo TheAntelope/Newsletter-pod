@@ -20,6 +20,10 @@ weekly_changes.json
 build/
 DerivedData/
 *.xcworkspace
+# Exception: the Flutter iOS Runner workspace MUST be tracked. Flutter's SPM
+# integration builds *through* it, so CI fails with "Xcode workspace not found"
+# if it's absent (the blanket *.xcworkspace above otherwise dropped it).
+!flutter/ios/Runner.xcworkspace/
 *.xcodeproj/xcuserdata/
 *.xcuserstate
 ios/build/
