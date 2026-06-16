@@ -132,6 +132,47 @@ def test_revenuecat_max_resolved_via_entitlement_fallback():
     assert _tier(client, headers) == "max"
 
 
+def test_revenuecat_ios_app_store_product_id_resolves_to_pro():
+    # iOS funnels through the SAME RevenueCat webhook (single source of truth for
+    # the Flutter cut-over). Its product_id is an App Store SKU, not a Play one;
+    # _revenuecat_tier must still resolve it (defense-in-depth, no entitlement_ids).
+    _, client = _build_app()
+    uid, headers = _auth(client)
+    resp = client.post(
+        "/webhooks/revenuecat",
+        headers={"Authorization": SECRET},
+        json=_event(
+            type="INITIAL_PURCHASE",
+            app_user_id=uid,
+            product_id="com.newsletterpod.pro.monthly",
+        ),
+    )
+    assert resp.status_code == 200
+    sub = client.get("/v1/me", headers=headers).json()["subscription"]
+    assert sub["tier"] == "pro"
+    assert sub["status"] == "active"
+    assert sub["product_id"] == "com.newsletterpod.pro.monthly"
+
+
+def test_revenuecat_ios_event_resolves_via_entitlement_when_product_absent():
+    # The store-agnostic primary path: an iOS event carrying only entitlement_ids
+    # (App Store annual SKU we still recognise) resolves to max.
+    _, client = _build_app()
+    uid, headers = _auth(client)
+    resp = client.post(
+        "/webhooks/revenuecat",
+        headers={"Authorization": SECRET},
+        json=_event(
+            type="INITIAL_PURCHASE",
+            app_user_id=uid,
+            product_id="com.newsletterpod.max.annual",
+            entitlement_ids=["max"],
+        ),
+    )
+    assert resp.status_code == 200
+    assert _tier(client, headers) == "max"
+
+
 def test_revenuecat_expiration_revokes_to_free():
     _, client = _build_app()
     uid, headers = _auth(client)

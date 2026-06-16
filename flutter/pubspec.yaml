@@ -54,6 +54,10 @@ dependencies:
   firebase_core: ^3.6.0
   firebase_auth: ^5.3.1
   google_sign_in: ^6.2.1
+  # Sign in with Apple (iOS primary auth; required by App Store Guideline 4.8
+  # since we also offer Google). Used only on the real-auth path; the token is
+  # exchanged at /v1/auth/apple to preserve existing Apple-`sub` identities.
+  sign_in_with_apple: ^6.1.0
   # FCM push (Android + iOS). Registration runs only on the real-auth path; the
   # demo build never touches it.
   firebase_messaging: ^15.1.3

@@ -1,9 +1,10 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
 import '../config.dart';
 
-/// Thrown when the user cancels the Google account picker (so the caller can
+/// Thrown when the user cancels a provider's sign-in sheet (so the caller can
 /// quietly stand down rather than surface an error).
 class SignInCancelled implements Exception {
   const SignInCancelled();
@@ -13,6 +14,11 @@ class SignInCancelled implements Exception {
 /// (the thing the backend's FirebaseIdentityVerifier validates) plus the
 /// display name to seed the new-user profile.
 typedef FirebaseSignIn = ({String idToken, String? displayName});
+
+/// Result of a successful Sign in with Apple: the **Apple** identity token
+/// (validated by the backend's AppleIdentityVerifier at /v1/auth/apple) plus
+/// the display name, which Apple returns ONLY on the first authorization.
+typedef AppleSignIn = ({String identityToken, String? displayName});
 
 /// Wraps the Google account picker + Firebase credential exchange.
 ///
@@ -63,8 +69,45 @@ class AuthController {
     return (idToken: idToken, displayName: user.displayName);
   }
 
+  /// Runs the native Sign in with Apple sheet and returns the Apple **identity
+  /// token** (exchanged at /v1/auth/apple, NOT via Firebase, so an existing
+  /// iOS user resolves to their same backend account by Apple `sub`). Throws
+  /// [SignInCancelled] if the user dismisses the sheet.
+  ///
+  /// Apple only returns the user's name on the FIRST authorization for this
+  /// Apple ID; on later sign-ins givenName/familyName are null (the backend
+  /// already has the account by then, so that's fine).
+  Future<AppleSignIn> signInWithApple() async {
+    final AuthorizationCredentialAppleID credential;
+    try {
+      credential = await SignInWithApple.getAppleIDCredential(
+        scopes: const [
+          AppleIDAuthorizationScopes.fullName,
+          AppleIDAuthorizationScopes.email,
+        ],
+      );
+    } on SignInWithAppleAuthorizationException catch (e) {
+      if (e.code == AuthorizationErrorCode.canceled) {
+        throw const SignInCancelled();
+      }
+      rethrow;
+    }
+
+    final token = credential.identityToken;
+    if (token == null || token.isEmpty) {
+      throw Exception('Apple returned no identity token.');
+    }
+    final name = [credential.givenName, credential.familyName]
+        .whereType<String>()
+        .map((p) => p.trim())
+        .where((p) => p.isNotEmpty)
+        .join(' ');
+    return (identityToken: token, displayName: name.isEmpty ? null : name);
+  }
+
   /// Clears both the Firebase session and the cached Google account so the next
-  /// sign-in re-shows the picker.
+  /// sign-in re-shows the picker. (Apple has no equivalent local session to
+  /// clear — Sign in with Apple is stateless from the app's side.)
   Future<void> signOut() async {
     await _auth.signOut();
     await _googleSignIn.signOut();

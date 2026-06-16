@@ -73,6 +73,13 @@ class ControlPlaneRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_user_by_email(self, email: str) -> Optional[UserRecord]:
+        """Resolve the single account with this (case-insensitive) email, or
+        None if there are zero **or more than one** — ambiguity returns None so
+        cross-provider login-time linking never attaches to the wrong account."""
+        raise NotImplementedError
+
+    @abstractmethod
     def save_user(self, user: UserRecord) -> None:
         raise NotImplementedError
 
@@ -591,6 +598,16 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         user_id = self._users_by_subject.get(apple_subject)
         return self._users.get(user_id) if user_id else None
 
+    def get_user_by_email(self, email: str) -> Optional[UserRecord]:
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            return None
+        matches = [
+            u for u in self._users.values()
+            if u.email and u.email.strip().lower() == normalized
+        ]
+        return matches[0] if len(matches) == 1 else None
+
     def get_user_by_identity(self, provider: str, subject: str) -> Optional[UserRecord]:
         user_id = self._users_by_identity.get((provider, subject))
         if user_id:
@@ -602,6 +619,18 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         return None
 
     def save_user(self, user: UserRecord) -> None:
+        # Drop any now-stale identity index entries from a prior version of this
+        # user (e.g. cross-provider linking overwrites the neutral pair), so a
+        # later lookup can't resolve through an outdated key. Firestore needs no
+        # equivalent — it queries the authoritative document fields directly.
+        old = self._users.get(user.id)
+        if old is not None:
+            if old.apple_subject and old.apple_subject != user.apple_subject:
+                self._users_by_subject.pop(old.apple_subject, None)
+            old_identity = (old.identity_provider, old.provider_subject)
+            if (old.identity_provider and old.provider_subject
+                    and old_identity != (user.identity_provider, user.provider_subject)):
+                self._users_by_identity.pop(old_identity, None)
         self._users[user.id] = user
         if user.apple_subject:
             self._users_by_subject[user.apple_subject] = user.id
@@ -1225,6 +1254,18 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
     def get_user_by_apple_subject(self, apple_subject: str) -> Optional[UserRecord]:
         docs = list(self._users.where("apple_subject", "==", apple_subject).limit(1).stream())
         if not docs:
+            return None
+        return UserRecord.model_validate(docs[0].to_dict())
+
+    def get_user_by_email(self, email: str) -> Optional[UserRecord]:
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            return None
+        # limit(2): we only need to know whether the match is unique. Relies on
+        # emails being stored normalized (lowercased on write in
+        # _create_default_user); Apple/Google addresses are already lowercase.
+        docs = list(self._users.where("email", "==", normalized).limit(2).stream())
+        if len(docs) != 1:
             return None
         return UserRecord.model_validate(docs[0].to_dict())
 

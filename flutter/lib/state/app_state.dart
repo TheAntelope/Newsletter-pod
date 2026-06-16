@@ -169,14 +169,60 @@ class AppState extends ChangeNotifier {
     final client = _apiClient;
     assert(client != null,
         'signInWithFirebaseToken requires an ApiClient (real-auth build only)');
-    final session =
-        await client!.signInWithFirebase(idToken, givenName: displayName);
+    final session = await client!.signInWithFirebase(idToken);
+    await _applySession(session, displayName: displayName);
+  }
+
+  /// Real sign-in via **Sign in with Apple**: exchange the Apple identity token
+  /// at [ApiClient.signInWithApple] (→ `/v1/auth/apple`, NOT Firebase) so an
+  /// existing iOS user resolves to their same backend account by Apple `sub`,
+  /// preserving subscription/sources/alias/history. Otherwise identical to the
+  /// Firebase path.
+  Future<void> signInWithAppleToken(
+    String identityToken, {
+    String? displayName,
+  }) async {
+    final client = _apiClient;
+    assert(client != null,
+        'signInWithAppleToken requires an ApiClient (real-auth build only)');
+    final session = await client!.signInWithApple(identityToken);
+    await _applySession(session, displayName: displayName);
+  }
+
+  /// Shared post-exchange wiring for both real sign-in providers: swap in the
+  /// live [ApiAppRepository], route new users into onboarding, load `me`, seed
+  /// the greeting name for brand-new accounts, and kick off push + purchases.
+  ///
+  /// Never forward the Google/Apple display name on the token exchange itself:
+  /// the app-entered value (onboarding / podcast settings) is authoritative, and
+  /// re-sending the account name on returning sign-ins is what made greetings
+  /// revert. The account name is only a one-time fallback for a brand-new
+  /// account that hasn't picked a name yet (seeded below).
+  Future<void> _applySession(
+    SessionEnvelope session, {
+    String? displayName,
+  }) async {
+    final client = _apiClient!;
     _repository = ApiAppRepository(client, session.sessionToken);
     _sessionToken = session.sessionToken;
     _signedIn = true;
     _onboardingComplete = !session.isNewUser;
     notifyListeners();
     await loadMe();
+    final seed = displayName?.trim() ?? '';
+    if (session.isNewUser &&
+        seed.isNotEmpty &&
+        !(_me?.user.hasFriendlyName ?? false)) {
+      try {
+        await _repository.updateProfile(
+          displayName: seed,
+          timezone: _me?.user.timezone ?? 'UTC',
+        );
+        await loadMe();
+      } catch (_) {
+        // Account-name seed is best-effort; ignore failures.
+      }
+    }
     // Best-effort: register this device for FCM push. Fire-and-forget so a
     // denied permission or messaging hiccup never blocks the signed-in UI.
     unawaited(_registerForPush());
@@ -205,10 +251,12 @@ class AppState extends ChangeNotifier {
     final client = _apiClient;
     final session = _sessionToken;
     if (client == null || session == null) return;
-    // Constructed here (not as a field) so the demo build / widget tests never
-    // touch FirebaseMessaging.instance — same reason the original was lazy.
-    final messaging = MessagingController();
     try {
+      // Constructed inside the try because the constructor itself touches
+      // FirebaseMessaging.instance, which throws when Firebase isn't
+      // initialized (demo build / unit tests) — messaging init must never
+      // surface into the sign-in flow.
+      final messaging = MessagingController();
       // Wire foreground display + tap handling once; a tap on a "pod ready"
       // push refreshes the signed-in snapshot so the new episode shows up.
       await messaging.configure(onOpened: _handlePushOpened);

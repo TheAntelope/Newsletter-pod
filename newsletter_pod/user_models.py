@@ -386,8 +386,13 @@ class AuthenticatedSession(BaseModel):
 class AppleIdentity(BaseModel):
     subject: str
     email: Optional[str] = None
+    # Whether the provider asserts the email is verified. Gates cross-provider
+    # account linking (we never link on an unverified email). Apple-issued
+    # tokens carry email_verified; treat absent as False (don't link).
+    email_verified: bool = False
 
 
 class FirebaseIdentity(BaseModel):
     subject: str
     email: Optional[str] = None
+    email_verified: bool = False

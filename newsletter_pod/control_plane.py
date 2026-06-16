@@ -63,6 +63,7 @@ from .shared_items import (
     extract_from_url,
 )
 from .source_persistence import SourceItemPersistenceService
+from .text_clean import normalize_card_text
 from .substack_discovery import (
     DiscoveredPublication,
     OpenAISubstackSuggester,
@@ -285,15 +286,26 @@ class ControlPlaneService:
         # Apple lookup kept untouched (rollback-safe); it also resolves rows
         # created before the neutral-identity fields existed.
         existing_user = self.repository.get_user_by_apple_subject(identity.subject)
-        is_new = existing_user is None
-        if existing_user is None:
-            user = self._create_default_user(
-                identity.subject, identity.email, given_name=given_name, provider="apple"
-            )
-            self._persist_default_records(user)
-        else:
+        if existing_user is not None:
             user = self._backfill_identity(existing_user, "apple", identity.subject)
-        return self._complete_sign_in(user, is_new)
+            return self._complete_sign_in(user, is_new=False)
+        # No Apple account yet — try to attach this Apple identity to an existing
+        # account with the same verified email (e.g. a Google/Firebase user who
+        # now signs in with Apple) before creating a duplicate. (R1b linking.)
+        linked = self._maybe_link_by_email(
+            provider="apple",
+            subject=identity.subject,
+            email=identity.email,
+            # Fail closed: an identity that doesn't assert verification never links.
+            email_verified=getattr(identity, "email_verified", False),
+        )
+        if linked is not None:
+            return self._complete_sign_in(linked, is_new=False)
+        user = self._create_default_user(
+            identity.subject, identity.email, given_name=given_name, provider="apple"
+        )
+        self._persist_default_records(user)
+        return self._complete_sign_in(user, is_new=True)
 
     def authenticate_with_firebase(
         self,
@@ -304,15 +316,25 @@ class ControlPlaneService:
             raise ControlPlaneError("Firebase auth is not configured")
         identity = self.firebase_identity_verifier.verify(id_token)
         existing_user = self.repository.get_user_by_identity("firebase", identity.subject)
-        is_new = existing_user is None
-        if existing_user is None:
-            user = self._create_default_user(
-                identity.subject, identity.email, given_name=given_name, provider="firebase"
-            )
-            self._persist_default_records(user)
-        else:
-            user = existing_user
-        return self._complete_sign_in(user, is_new)
+        if existing_user is not None:
+            return self._complete_sign_in(existing_user, is_new=False)
+        # No Firebase account yet — try to attach this Firebase identity to an
+        # existing account with the same verified email (e.g. an Apple user who
+        # taps "Continue with Google") before creating a duplicate. (R1b linking.)
+        linked = self._maybe_link_by_email(
+            provider="firebase",
+            subject=identity.subject,
+            email=identity.email,
+            # Fail closed: an identity that doesn't assert verification never links.
+            email_verified=getattr(identity, "email_verified", False),
+        )
+        if linked is not None:
+            return self._complete_sign_in(linked, is_new=False)
+        user = self._create_default_user(
+            identity.subject, identity.email, given_name=given_name, provider="firebase"
+        )
+        self._persist_default_records(user)
+        return self._complete_sign_in(user, is_new=True)
 
     def _complete_sign_in(self, user: UserRecord, is_new: bool) -> dict[str, Any]:
         ensure_user_inbound_alias(self.repository, user)
@@ -337,6 +359,90 @@ class ControlPlaneService:
             "updated_at": utc_now(),
         })
         self.repository.save_user(updated)
+        return updated
+
+    def _maybe_link_by_email(
+        self,
+        *,
+        provider: str,
+        subject: str,
+        email: Optional[str],
+        email_verified: bool,
+    ) -> Optional[UserRecord]:
+        """Cross-provider account linking at sign-in (R1b).
+
+        When a sign-in produces no existing account for its own identity, but a
+        **verified** email matches exactly one existing account that does NOT yet
+        carry an identity for this provider, attach this identity to that account
+        instead of creating a duplicate. Non-destructive: only the missing
+        identity field(s) are set — no data is moved and no account is deleted
+        (unlike the one-off bulk merge). Returns the linked account, or None when
+        linking is unsafe/inapplicable (caller then creates a fresh user).
+
+        Security model — why linking onto another provider's account is safe:
+        the key is a PROVIDER-VERIFIED email. Google and Apple only assert
+        `email_verified` for an address the user actually controls, so two logins
+        presenting the same verified email are the same person — there is no
+        takeover vector (an attacker cannot obtain a verified token for an email
+        they don't own). Hence linking Firebase onto an Apple account (and vice
+        versa) by verified email is correct and intended (R1b). Apple relay
+        addresses (@privaterelay.appleid.com) are excluded: they're per-app
+        pseudonyms, not a shared cross-provider identity key. Linking is also
+        gated to a SINGLE unambiguous email match and to accounts that don't
+        already hold an identity for the incoming provider.
+        """
+        if not email or not email_verified:
+            return None
+        normalized = email.strip().lower()
+        # Apple's "Hide My Email" relay is a per-app address that can never match
+        # another provider's real email — skip so we never link unrelated people.
+        if not normalized or normalized.endswith("@privaterelay.appleid.com"):
+            return None
+        # Best-effort and fail-safe: linking is an enhancement on the hot auth
+        # path, so a lookup/persist failure must degrade to normal account
+        # creation (a transient duplicate can be healed later) rather than 500
+        # the sign-in.
+        try:
+            candidate = self.repository.get_user_by_email(normalized)
+            if candidate is None:
+                return None  # zero or ambiguous (>1) match — never guess
+
+            if provider == "apple":
+                if candidate.apple_subject:
+                    return None  # already holds a (different) Apple identity
+                # Attach Apple via its dedicated field; leave the existing neutral
+                # pair (typically firebase) intact so BOTH providers keep resolving.
+                updated = candidate.model_copy(update={
+                    "apple_subject": subject,
+                    "updated_at": utc_now(),
+                })
+            elif provider == "firebase":
+                if candidate.identity_provider == "firebase" and candidate.provider_subject:
+                    return None  # already holds a (different) firebase identity
+                # Attach firebase to the neutral pair. Apple still resolves via the
+                # apple_subject field, so the account keeps both identities (the same
+                # dual-identity shape the one-off merge produces).
+                updated = candidate.model_copy(update={
+                    "identity_provider": "firebase",
+                    "provider_subject": subject,
+                    "updated_at": utc_now(),
+                })
+            else:
+                return None
+
+            self.repository.save_user(updated)
+        except Exception:
+            logger.exception(
+                "Cross-provider email-linking failed (%s); falling back to account creation",
+                provider,
+            )
+            return None
+
+        logger.info(
+            "Linked %s identity to existing account %s by verified email",
+            provider,
+            updated.id,
+        )
         return updated
 
     def get_authenticated_user(self, session_token: str) -> UserRecord:
@@ -1954,14 +2060,24 @@ class ControlPlaneService:
         self, product_id: Optional[str], entitlement_ids: list[str]
     ) -> Optional[str]:
         """Resolve tier from the RevenueCat product id, falling back to the
-        entitlement ids (configure RevenueCat entitlements named 'pro'/'max')."""
+        entitlement ids (configure RevenueCat entitlements named 'pro'/'max').
+
+        iOS purchases funnel through RevenueCat too (single-webhook model for the
+        Flutter cut-over), so the product_id may be an **App Store** SKU rather
+        than a Play one — recognise both. The entitlement-id fallback is the
+        store-agnostic primary mechanism; the product-id sets are defense-in-depth
+        for any event that arrives without entitlement_ids."""
         pro_ids = {
             self.settings.revenuecat_pro_monthly_product_id,
             self.settings.revenuecat_pro_annual_product_id,
+            self.settings.app_store_pro_monthly_product_id,
+            self.settings.app_store_pro_annual_product_id,
         }
         max_ids = {
             self.settings.revenuecat_max_monthly_product_id,
             self.settings.revenuecat_max_annual_product_id,
+            self.settings.app_store_max_monthly_product_id,
+            self.settings.app_store_max_annual_product_id,
         }
         if product_id in max_ids:
             return "max"
@@ -2795,7 +2911,7 @@ class ControlPlaneService:
             apple_subject=subject if provider == "apple" else None,
             identity_provider=provider,
             provider_subject=subject,
-            email=email,
+            email=email.strip().lower() if email else None,
             display_name=display_name,
             timezone="UTC",
             # New users start on the 7-day full-access (Max) trial. The legacy
@@ -3429,8 +3545,10 @@ def _swipe_card_payload(record: SourceItemRecord) -> dict[str, Any]:
     return {
         "source_item_dedupe_key": record.dedupe_key,
         "title": record.title,
-        "summary": record.summary,
-        "card_summary": record.card_summary,
+        # Normalize at serialization so the wire is clean even for already-stored
+        # cards and the defer_summaries first read (card_summary still null).
+        "summary": normalize_card_text(record.summary),
+        "card_summary": normalize_card_text(record.card_summary) or None,
         "source_id": record.source_id,
         "source_name": record.source_name,
         "link": record.link,

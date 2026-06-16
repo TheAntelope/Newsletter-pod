@@ -14,6 +14,17 @@ class AuthError(RuntimeError):
     pass
 
 
+def _coerce_email_verified(value: object) -> bool:
+    """Both providers send `email_verified`, but Apple as the string "true"
+    and Firebase as a JSON bool. Normalize to a Python bool; anything else
+    (absent/None/garbage) is treated as unverified."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return False
+
+
 class AppleIdentityVerifier:
     _APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
     _APPLE_ISSUER = "https://appleid.apple.com"
@@ -45,6 +56,7 @@ class AppleIdentityVerifier:
         return AppleIdentity(
             subject=subject,
             email=claims.get("email"),
+            email_verified=_coerce_email_verified(claims.get("email_verified")),
         )
 
 
@@ -88,6 +100,7 @@ class FirebaseIdentityVerifier:
         return FirebaseIdentity(
             subject=subject,
             email=claims.get("email"),
+            email_verified=_coerce_email_verified(claims.get("email_verified")),
         )
 
 
