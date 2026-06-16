@@ -341,6 +341,13 @@ workflows:
         APP_STORE_APPLE_ID: "6762568729"
         # Major version for the cut-over train (CFBundleShortVersionString).
         FLUTTER_MARKETING_VERSION: "2.0.0"
+        # Build-number FLOOR for the 2.0.0 train. ASC build-number lookups do NOT
+        # count Invalid builds, so after 2.0.0 (144) failed processing (ITMS-90683)
+        # the max(TestFlight,AppStore)+1 math kept recomputing 144 — a number Apple
+        # has permanently reserved, so each re-upload silently never appeared. Pin
+        # the floor above the burned number; it self-disengages once a valid build
+        # >= the floor exists (TestFlight then reports it and +1 takes over again).
+        MIN_IOS_BUILD_NUMBER: "145"
       xcode: latest
     scripts:
       - name: Build design tokens (refresh Dart copy + staleness guard)
@@ -412,8 +419,13 @@ workflows:
             echo "ERROR: ASC build-number lookup returned 0 — refusing to upload build 1." >&2
             exit 1
           fi
-          echo "BUILD_NUMBER=$((LATEST + 1))" >> "$CM_ENV"
-          echo "Build number: $((LATEST + 1)) (TestFlight=$TF AppStore=$AS)"
+          NEXT=$((LATEST + 1))
+          # Floor: skip build numbers permanently burned by an earlier Invalid
+          # upload (ASC lookups don't count Invalid builds, so NEXT can land on an
+          # already-reserved number). Self-disengages once a valid >= floor build exists.
+          if [ "$NEXT" -lt "$MIN_IOS_BUILD_NUMBER" ]; then NEXT=$MIN_IOS_BUILD_NUMBER; fi
+          echo "BUILD_NUMBER=$NEXT" >> "$CM_ENV"
+          echo "Build number: $NEXT (TestFlight=$TF AppStore=$AS floor=$MIN_IOS_BUILD_NUMBER)"
       - name: Build IPA for TestFlight
         script: |
           cd "$CM_BUILD_DIR/flutter"
