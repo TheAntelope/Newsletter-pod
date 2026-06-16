@@ -68,6 +68,22 @@
 	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>ClawCast uses your location to add local weather to your podcast. You can also type your city instead.</string>
+	<!-- Optional per Apple (geolocator references the "Always" location API even
+	     though ClawCast only requests when-in-use). Provided to satisfy the
+	     static-analysis warning; ClawCast never tracks location in the background. -->
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>ClawCast uses your location to add local weather to your podcast. You can also type your city instead.</string>
+	<!-- Dictation (speech_to_text): tapping the mic to speak your preferences,
+	     topics, or feedback instead of typing. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>ClawCast uses the microphone so you can dictate your preferences and feedback by voice instead of typing.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>ClawCast uses speech recognition to turn what you say into text when you dictate your preferences and feedback.</string>
+	<!-- Required because receive_sharing_intent references the photo library API
+	     for shared images/media, even though ClawCast primarily shares article
+	     links and text into the app. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>ClawCast can access your photo library when you share an image or media into the app.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
