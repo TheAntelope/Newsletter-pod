@@ -2,17 +2,20 @@ import Flutter
 import UIKit
 import receive_sharing_intent
 
+// Classic (pre-UIScene) Flutter lifecycle. We intentionally do NOT adopt the
+// UIScene lifecycle (no FlutterImplicitEngineDelegate / FlutterSceneDelegate),
+// because Flutter 3.44's UIScene template crashes at launch on iOS 26 in scene
+// state-restoration. Plugins are registered here in didFinishLaunchingWithOptions;
+// the window is created from Main.storyboard via UIMainStoryboardFile. See the
+// note in pubspec.yaml (enable-uiscene-migration: false) and flutter#183586.
 @main
-@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+@objc class AppDelegate: FlutterAppDelegate {
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    GeneratedPluginRegistrant.register(with: self)
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
-  }
-
-  func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
-    GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
   }
 
   // Route the share extension's `ShareMedia-<bundleid>` reopen URL to
