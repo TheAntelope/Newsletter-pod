@@ -16,7 +16,7 @@ voices:
   # ============================================================
   - id: suMMgpGbVcnihP1CcgFS
     name: Vinnie Chase
-    gender: male
+    gender: female
     description: Confident and clear; default anchor.
     preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/suMMgpGbVcnihP1CcgFS.mp3
     enabled: true
@@ -24,7 +24,7 @@ voices:
 
   - id: RKCbSROXui75bk1SVpy8
     name: Demi Dreams
-    gender: female
+    gender: male
     description: Warm and conversational; default commentator.
     preview_url: https://storage.googleapis.com/newsletter-pod-audio-newsletter-pod/static/voice-samples/RKCbSROXui75bk1SVpy8.mp3
     enabled: true
