@@ -250,12 +250,12 @@ class Settings(BaseSettings):
     # Duration ranges. 5-min episode ceiling is firm across all tiers — see
     # billing_model_2026_05.md.
     free_min_duration_minutes: int = Field(default=3, alias="FREE_MIN_DURATION_MINUTES")
-    free_max_duration_minutes: int = Field(default=5, alias="FREE_MAX_DURATION_MINUTES")
-    free_default_duration_minutes: int = Field(default=3, alias="FREE_DEFAULT_DURATION_MINUTES")
+    free_max_duration_minutes: int = Field(default=7, alias="FREE_MAX_DURATION_MINUTES")
+    free_default_duration_minutes: int = Field(default=5, alias="FREE_DEFAULT_DURATION_MINUTES")
     pro_min_duration_minutes: int = Field(default=3, alias="PRO_MIN_DURATION_MINUTES")
-    pro_max_duration_minutes: int = Field(default=5, alias="PRO_MAX_DURATION_MINUTES")
+    pro_max_duration_minutes: int = Field(default=7, alias="PRO_MAX_DURATION_MINUTES")
     max_min_duration_minutes: int = Field(default=3, alias="MAX_MIN_DURATION_MINUTES")
-    max_max_duration_minutes: int = Field(default=5, alias="MAX_MAX_DURATION_MINUTES")
+    max_max_duration_minutes: int = Field(default=7, alias="MAX_MAX_DURATION_MINUTES")
     free_max_items_per_episode: int = Field(default=25, alias="FREE_MAX_ITEMS_PER_EPISODE")
     pro_max_items_per_episode: int = Field(default=75, alias="PRO_MAX_ITEMS_PER_EPISODE")
     max_max_items_per_episode: int = Field(default=75, alias="MAX_MAX_ITEMS_PER_EPISODE")

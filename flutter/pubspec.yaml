@@ -93,18 +93,22 @@ dev_dependencies:
   #   dart run flutter_launcher_icons
   flutter_launcher_icons: ^0.14.1
 
-# Launcher-icon generation. Sources are derived from the iOS app icon
-# (ios/.../AppIcon.appiconset/icon-1024.png), which has a baked-in black rounded
-# frame. Two cleaned variants live under assets/brand/:
+# Launcher-icon generation. Run after changing the icon:  dart run flutter_launcher_icons
+# Android (legacy mipmaps + adaptive) is generated from the cleaned brand variants:
 #   - app-icon.png:            black corners masked to transparent (legacy mipmaps)
 #   - app-icon-foreground.png: zoomed past the frame, cream-filled (adaptive layer)
 # The generator insets the adaptive foreground 16%, so the zoomed variant lands in
 # the safe zone with the frame cropped off and its cream edge blending into the
-# cream background. iOS icons stay managed by Xcode, so only Android is generated.
+# cream background.
+# iOS is generated from app-icon-ios.png — a verbatim copy of the native app's
+# shipped icon (ios/NewsletterPodApp/.../icon-1024.png): opaque RGB 1024 with the
+# baked black rounded frame, so upgrading iOS users keep the exact same home-screen
+# icon. (Was `ios: false` while the native app owned the icon; now Flutter owns it.)
 flutter_launcher_icons:
   android: true
-  ios: false
+  ios: true
   image_path: "assets/brand/app-icon.png"
+  image_path_ios: "assets/brand/app-icon-ios.png"
   adaptive_icon_background: "#FBF2E6"
   adaptive_icon_foreground: "assets/brand/app-icon-foreground.png"
   min_sdk_android: 21

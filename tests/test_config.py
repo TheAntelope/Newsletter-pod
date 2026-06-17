@@ -27,17 +27,18 @@ def test_default_tier_caps_align_with_paywall_copy(monkeypatch):
     settings = Settings()
     assert settings.max_sources_safety_cap == 100
     # Launch tier model (2026-05-16): all tiers deliver 7 days; episode length
-    # is uniform 3-5 min across tiers — differentiation is voice tier, not
-    # duration or cadence.
+    # is uniform 3-7 min across tiers (default 5) — differentiation is voice
+    # tier, not duration or cadence. (Max raised 5->7, default 3->5 on 2026-06-17.)
     assert settings.free_max_delivery_days == 7
     assert settings.pro_max_delivery_days == 7
     assert settings.max_max_delivery_days == 7
     assert settings.free_min_duration_minutes == 3
-    assert settings.free_max_duration_minutes == 5
+    assert settings.free_max_duration_minutes == 7
+    assert settings.free_default_duration_minutes == 5
     assert settings.pro_min_duration_minutes == 3
-    assert settings.pro_max_duration_minutes == 5
+    assert settings.pro_max_duration_minutes == 7
     assert settings.max_min_duration_minutes == 3
-    assert settings.max_max_duration_minutes == 5
+    assert settings.max_max_duration_minutes == 7
     # Per-week premium/default voice budgets per tier.
     assert settings.trial_premium_pods_total == 5
     assert settings.pro_premium_pods_per_week == 3
