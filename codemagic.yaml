@@ -5,21 +5,14 @@ workflows:
     instance_type: mac_mini_m2
     integrations:
       app_store_connect: codemagic
-    triggering:
-      events:
-        - push
-      branch_patterns:
-        - pattern: main
-          include: true
-          source: true
-    # Don't rebuild iOS for Flutter-only commits (the Android workflow owns
-    # those). `when` is a sibling of `triggering`. A build is skipped only when
-    # EVERY changed file matches an exclude, so mixed iOS+Flutter commits still
-    # build iOS.
-    when:
-      changeset:
-        excludes:
-          - 'flutter/**'
+    # MANUAL-ONLY (no `triggering` block): this is the DEPRECATED native iOS app,
+    # superseded by the Flutter `ios-flutter-testflight` workflow during the
+    # cut-over. Kept only as a rollback path — trigger it by hand from the
+    # Codemagic UI/API if the native app is ever needed again. It previously
+    # auto-built on every `main` push and FAILED (closed marketing-version
+    # train), red-flagging the dashboard on unrelated merges. Re-add a
+    # `triggering` (+ `when: changeset: excludes: ['flutter/**']`) block only if
+    # the native app is revived.
     environment:
       ios_signing:
         # ios_signing handles the main app's cert + profile install into
