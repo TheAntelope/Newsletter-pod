@@ -619,7 +619,7 @@ class FakeAppRepository implements AppRepository {
         tier: 'free',
         maxDeliveryDays: 7,
         minDurationMinutes: 3,
-        maxDurationMinutes: 5,
+        maxDurationMinutes: 7,
         maxItemsPerEpisode: 25,
         premiumPodsPerWeek: 1,
         isInTrial: true,

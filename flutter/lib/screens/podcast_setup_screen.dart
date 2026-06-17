@@ -6,6 +6,7 @@ import '../state/app_state.dart';
 import '../widgets/day_toggle.dart';
 import '../widgets/editorial.dart';
 import '../widgets/voice_choice_card.dart';
+import '../widgets/weather_location_field.dart';
 
 const _weekdayOptions = [
   ('mon', 'M'), ('tue', 'T'), ('wed', 'W'), ('thu', 'T'), //
@@ -134,6 +135,8 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
   String _formatPreset = 'two_hosts';
   int _durationMinutes = 5;
   String? _voiceId;
+  // Co-host voice, only used (and editable) when the format is 'two_hosts'.
+  String? _secondaryVoiceId;
   String _tone = 'playful';
   String _humor = 'dad_jokes';
   int _keyFindings = 3;
@@ -185,6 +188,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
         _formatPreset = p.formatPreset;
         _durationMinutes = p.desiredDurationMinutes;
         _voiceId = p.voiceId;
+        _secondaryVoiceId = p.secondaryVoiceId;
         _tone = p.tone ?? 'playful';
         _humor = p.humorStyle ?? 'dad_jokes';
         _keyFindings = p.keyFindingsCount ?? 3;
@@ -275,7 +279,11 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
       guestNames: loaded.guestNames,
       desiredDurationMinutes: _durationMinutes,
       voiceId: _voiceId,
-      secondaryVoiceId: loaded.secondaryVoiceId,
+      // Only persist the co-host voice for two-host shows; otherwise leave the
+      // stored value untouched (solo / rotating-guest use a single voice).
+      secondaryVoiceId: _formatPreset == 'two_hosts'
+          ? (_secondaryVoiceId ?? loaded.secondaryVoiceId)
+          : loaded.secondaryVoiceId,
       tone: _tone,
       keyFindingsCount: _keyFindings,
       humorStyle: _humor,
@@ -332,7 +340,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
   Widget _buildForm() {
     final ent = _entitlements;
     final minM = ent?.minDurationMinutes ?? 3;
-    final maxM = ent?.maxDurationMinutes ?? 5;
+    final maxM = ent?.maxDurationMinutes ?? 7;
 
     return ListView(
       padding: const EdgeInsets.all(DesignTokens.spacingL),
@@ -370,6 +378,31 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
             ],
           ],
         ),
+        _section('Voice'),
+        EditorialCard(
+          children: [
+            if (_formatPreset == 'two_hosts') ...[
+              _voicePicker(
+                label: 'Host 1 (anchor)',
+                selectedId: _voiceId,
+                onChanged: (id) => setState(() => _voiceId = id),
+              ),
+              const EditorialDivider(),
+              _voicePicker(
+                label: 'Host 2 (co-host)',
+                selectedId: _secondaryVoiceId,
+                onChanged: (id) => setState(() => _secondaryVoiceId = id),
+              ),
+            ] else
+              _voicePicker(
+                label: _formatPreset == 'rotating_guest'
+                    ? 'Anchor voice'
+                    : 'Host voice',
+                selectedId: _voiceId,
+                onChanged: (id) => setState(() => _voiceId = id),
+              ),
+          ],
+        ),
         _section('Length'),
         EditorialCard(
           children: [
@@ -405,16 +438,6 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
             ),
           ],
         ),
-        _section('Voice'),
-        for (final v in _voices) ...[
-          VoiceChoiceCard(
-            voice: v,
-            selected: _voiceId == v.id,
-            onSelect: () => setState(() => _voiceId = v.id),
-            previewSource: v.previewUrl,
-          ),
-          const SizedBox(height: DesignTokens.spacingM),
-        ],
         _section('Style'),
         EditorialCard(
           children: [
@@ -500,13 +523,7 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
               onChanged: (v) => setState(() => _includeWeather = v),
             ),
             if (_includeWeather)
-              TextField(
-                controller: _weatherController,
-                decoration: const InputDecoration(
-                  labelText: 'City',
-                  hintText: 'e.g. Copenhagen',
-                ),
-              ),
+              WeatherLocationField(controller: _weatherController),
           ],
         ),
         _section('Schedule', key: _scheduleKey),
@@ -555,6 +572,54 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
           loading: _saving,
           onPressed: _saving ? null : _save,
         ),
+      ],
+    );
+  }
+
+  /// A labelled voice dropdown + "Hear a sample" affordance. Used once per host
+  /// (two for a two-host show, one otherwise) so each speaker gets its own voice.
+  Widget _voicePicker({
+    required String label,
+    required String? selectedId,
+    required ValueChanged<String?> onChanged,
+  }) {
+    // DropdownButtonFormField asserts its value is either null or matches exactly
+    // one item, so resolve the currently-selected voice (null if it's not in the
+    // catalog) rather than passing a dangling id.
+    CatalogVoiceDto? selected;
+    for (final v in _voices) {
+      if (v.id == selectedId) {
+        selected = v;
+        break;
+      }
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _FieldLabel(label),
+        DropdownButtonFormField<String>(
+          initialValue: selected?.id,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            hintText: 'Choose a voice',
+            border: OutlineInputBorder(),
+          ),
+          items: [
+            for (final v in _voices)
+              DropdownMenuItem(
+                value: v.id,
+                child: Text(
+                  v.gender.isEmpty ? v.name : '${v.name} · ${v.gender}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+          onChanged: onChanged,
+        ),
+        if (selected?.previewUrl != null) ...[
+          const SizedBox(height: DesignTokens.spacingS),
+          VoiceSampleButton(id: selected!.id, source: selected.previewUrl!),
+        ],
       ],
     );
   }

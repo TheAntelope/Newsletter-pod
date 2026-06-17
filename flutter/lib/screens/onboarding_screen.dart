@@ -5,13 +5,13 @@ import '../api/api_client.dart' show SourcePayload;
 import '../api/models.dart';
 import '../design_tokens.dart';
 import '../services/link_launcher.dart';
-import '../services/location_service.dart';
 import '../state/app_state.dart';
 import '../widgets/day_toggle.dart';
 import '../widgets/editorial.dart';
 import '../widgets/onboarding_progress_dots.dart';
 import '../widgets/topic_icon.dart';
 import '../widgets/voice_choice_card.dart';
+import '../widgets/weather_location_field.dart';
 import 'swipe_deck_screen.dart';
 
 /// Onboarding wizard (welcome → voice → style+weather → name → topics → swipe →
@@ -108,11 +108,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _greeting = true;
   bool _topTakeaways = true;
   bool _includeWeather = false;
-  // "Use my current location" flow for the weather city. Mirrors the iOS
-  // LocationResolver states (idle / requesting / denied / error / resolved).
-  bool _locating = false;
-  bool _locationDenied = false;
-  String? _locationError;
   final Set<String> _selectedDays = {'mon', 'tue', 'wed', 'thu', 'fri'};
   TimeOfDay _deliveryTime = const TimeOfDay(hour: 7, minute: 0);
 
@@ -709,89 +704,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         ),
         if (_includeWeather) ...[
           const EditorialDivider(),
-          TextField(
-            controller: _weatherController,
-            decoration: const InputDecoration(
-              labelText: 'City',
-              hintText: 'e.g. Copenhagen',
-            ),
-          ),
-          const SizedBox(height: DesignTokens.spacingS),
-          _locationRow(),
+          WeatherLocationField(controller: _weatherController),
         ],
       ],
     );
-  }
-
-  /// "Use my current location" affordance under the city field. Detects the
-  /// user's city (with permission) and fills the field, or surfaces a denial /
-  /// error inline. Typing stays available for anyone who declines.
-  Widget _locationRow() {
-    if (_locating) {
-      return Row(
-        children: const [
-          SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          SizedBox(width: DesignTokens.spacingS),
-          Text('Detecting your location…'),
-        ],
-      );
-    }
-    final hasCity = _weatherController.text.trim().isNotEmpty;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton.icon(
-            onPressed: _resolveLocation,
-            style: TextButton.styleFrom(
-              foregroundColor: DesignTokens.colorAmberDeep,
-              padding: EdgeInsets.zero,
-            ),
-            icon: const Icon(Icons.my_location, size: 18),
-            label: Text(hasCity ? 'Update from my location' : 'Use my current location'),
-          ),
-        ),
-        if (_locationDenied)
-          Text(
-            'Location access denied. Enable it in your settings, or type your '
-            'city above.',
-            style: DesignTokens.typographyCallout
-                .copyWith(color: DesignTokens.colorMuted),
-          )
-        else if (_locationError != null)
-          Text(
-            "Couldn't fetch location: $_locationError",
-            style: DesignTokens.typographyCallout
-                .copyWith(color: DesignTokens.colorMuted),
-          ),
-      ],
-    );
-  }
-
-  Future<void> _resolveLocation() async {
-    setState(() {
-      _locating = true;
-      _locationDenied = false;
-      _locationError = null;
-    });
-    final outcome = await LocationService.resolveCurrentPlace();
-    if (!mounted) return;
-    setState(() {
-      _locating = false;
-      switch (outcome.kind) {
-        case LocationOutcomeKind.resolved:
-          _weatherController.text = outcome.placeName!;
-        case LocationOutcomeKind.denied:
-          _locationDenied = true;
-        case LocationOutcomeKind.error:
-          _locationError = outcome.message;
-      }
-    });
   }
 
   String _formatTime(TimeOfDay t) =>

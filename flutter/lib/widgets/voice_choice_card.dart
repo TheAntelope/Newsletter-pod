@@ -55,7 +55,7 @@ class VoiceChoiceCard extends StatelessWidget {
                   ],
                   if (previewSource != null) ...[
                     const SizedBox(height: DesignTokens.spacingS),
-                    _SampleButton(id: voice.id, source: previewSource!),
+                    VoiceSampleButton(id: voice.id, source: previewSource!),
                   ],
                 ],
               ),
@@ -74,8 +74,8 @@ class VoiceChoiceCard extends StatelessWidget {
   }
 }
 
-class _SampleButton extends StatelessWidget {
-  const _SampleButton({required this.id, required this.source});
+class VoiceSampleButton extends StatelessWidget {
+  const VoiceSampleButton({super.key, required this.id, required this.source});
 
   final String id;
   final String source;
