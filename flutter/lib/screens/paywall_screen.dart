@@ -44,7 +44,7 @@ class PaywallScreen extends StatefulWidget {
       tier: 'max',
       name: 'Max',
       monthlyPrice: r'$7.49/mo',
-      annualPrice: r'$67.49/yr',
+      annualPrice: r'$66.99/yr',
       recommended: false,
       features: [
         '7 premium-voice pods per week',
