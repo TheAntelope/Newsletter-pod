@@ -118,6 +118,10 @@ WEEKDAY_NAMES = [
     "sunday",
 ]
 
+# Clients (iOS/Flutter) represent weekdays as 3-letter codes; map them to the
+# canonical full names we store and schedule against so either form is accepted.
+WEEKDAY_ABBREVIATIONS = {name[:3]: name for name in WEEKDAY_NAMES}
+
 
 class ControlPlaneError(RuntimeError):
     pass
@@ -3486,6 +3490,7 @@ def _swipe_card_payload(record: SourceItemRecord) -> dict[str, Any]:
 
 def _normalize_weekday(value: str) -> str:
     normalized = value.strip().lower()
+    normalized = WEEKDAY_ABBREVIATIONS.get(normalized, normalized)
     if normalized not in WEEKDAY_NAMES:
         raise ControlPlaneError(f"Invalid weekday: {value}")
     return normalized
