@@ -55,10 +55,12 @@ Usage
   python scripts/set_prices.py --apply --existing-subscribers migrate
 
 Notes / known edges (see the team summary for context):
-- Apple prices are set for the base territory (USA) -- the storefront the apps'
-  `displayPrice` shows for US testers. Other territories are NOT auto-set by the
-  API; set them with `--all-territories` (loops the matched point's per-territory
-  equalizations) or accept Apple's dashboard auto-equalize prompt.
+- Apple: by DEFAULT only the base territory (USA) is changed -- the API does NOT
+  auto-equalize the other 174 territories (unlike Google, which always converts
+  worldwide). Pass `--all-territories` to also set every other territory to the
+  equalized price of the US base price point (via the price point's
+  /equalizations relationship -- the same mapping ASC's dashboard auto-equalize
+  prompt applies). customerPrice per territory is in local currency.
 - Apple has a fixed ladder of price points. If a USD value has no exact point
   the script refuses that product and prints the nearest available points rather
   than silently picking one.
@@ -161,15 +163,22 @@ class AppStoreConnect:
         return r.json()
 
     def _post(self, path: str, body: dict) -> dict:
-        r = requests.post(
-            f"{ASC_BASE}{path}",
-            headers={"Authorization": f"Bearer {self._jwt()}", "Content-Type": "application/json"},
-            json=body,
-            timeout=30,
-        )
-        if r.status_code >= 300:
-            raise RuntimeError(f"ASC POST {path} -> {r.status_code}: {r.text}")
-        return r.json()
+        # Setting prices across all 175 territories is ~700 POSTs per run, so be
+        # resilient to Apple's rate limiter: back off and retry on 429.
+        for attempt in range(4):
+            r = requests.post(
+                f"{ASC_BASE}{path}",
+                headers={"Authorization": f"Bearer {self._jwt()}", "Content-Type": "application/json"},
+                json=body,
+                timeout=30,
+            )
+            if r.status_code == 429 and attempt < 3:
+                time.sleep(2 * (attempt + 1))
+                continue
+            if r.status_code >= 300:
+                raise RuntimeError(f"ASC POST {path} -> {r.status_code}: {r.text}")
+            return r.json()
+        raise RuntimeError(f"ASC POST {path} -> repeated 429 (rate limited)")
 
     def _paged(self, path: str, params: Optional[dict] = None) -> list[dict]:
         out: list[dict] = []
@@ -231,8 +240,33 @@ class AppStoreConnect:
         nearest = sorted(set(available), key=lambda s: abs(float(s) - float(usd)))[:8]
         return match, nearest
 
+    def equalized_price_points(self, base_price_point_id: str) -> list[tuple[str, str, str]]:
+        """Apple's standard per-territory equalization of a base (USA) price point.
+
+        Returns `(territory_id, price_point_id, customer_price)` for every OTHER
+        territory (the base territory itself is excluded). `customer_price` is in
+        that territory's local currency (e.g. ARE -> 19.99 AED ~= $5.44). This is
+        the same mapping the App Store Connect dashboard applies when you accept
+        its "auto-equalize" prompt. Cursor-paginated (~174 rows)."""
+        # `include=territory` is required: without it the response omits the
+        # relationships.territory.data linkage and we can't tell which territory
+        # each equalized price point belongs to.
+        rows = self._paged(
+            f"/v1/subscriptionPricePoints/{base_price_point_id}/equalizations",
+            {"include": "territory", "limit": 200},
+        )
+        out: list[tuple[str, str, str]] = []
+        for row in rows:
+            terr = (
+                row.get("relationships", {}).get("territory", {}).get("data", {}).get("id")
+            )
+            if terr:
+                out.append((terr, row["id"], row.get("attributes", {}).get("customerPrice")))
+        return out
+
     def set_price(
-        self, subscription_id: str, price_point_id: str, preserve_existing: bool, start_date: str
+        self, subscription_id: str, price_point_id: str, preserve_existing: bool, start_date: str,
+        territory: str = BASE_TERRITORY,
     ) -> None:
         # `startDate` is required on an approved subscription: without it ASC treats
         # the POST as defining the (immutable) initial price and returns 409 STATE_ERROR.
@@ -250,7 +284,7 @@ class AppStoreConnect:
                         "subscriptionPricePoint": {
                             "data": {"type": "subscriptionPricePoints", "id": price_point_id}
                         },
-                        "territory": {"data": {"type": "territories", "id": BASE_TERRITORY}},
+                        "territory": {"data": {"type": "territories", "id": territory}},
                     },
                 }
             },
@@ -270,7 +304,8 @@ def run_apple(table: list[Product], args) -> int:
             pem = fh.read()
 
     asc = AppStoreConnect(key_id, issuer, pem)
-    print(f"=== App Store Connect ({BASE_TERRITORY} storefront) ===")
+    scope = "ALL territories" if args.all_territories else f"{BASE_TERRITORY} storefront only"
+    print(f"=== App Store Connect ({scope}) ===")
     try:
         ids = asc.resolve_subscription_ids(args.bundle_id)
     except Exception as e:  # noqa: BLE001 -- surface auth/lookup failures plainly
@@ -299,14 +334,40 @@ def run_apple(table: list[Product], args) -> int:
             failures += 1
             continue
         arrow = "(no change)" if current == prod.usd else f"-> ${prod.usd}"
-        print(f"  {prod.key}: ${current} {arrow}")
+        print(f"  {prod.key}: USA ${current} {arrow}")
         if args.apply and current != prod.usd:
             try:
                 asc.set_price(sub_id, match, preserve_existing=preserve, start_date=start_date)
-                print(f"    applied ({'grandfathered' if preserve else 'migrated'} existing subs)")
+                print(f"    USA applied ({'grandfathered' if preserve else 'migrated'} existing subs)")
             except Exception as e:  # noqa: BLE001
-                print(f"    ERROR applying: {e}")
+                print(f"    USA ERROR applying: {e}")
                 failures += 1
+
+        # The Apple API does NOT auto-equalize: setting USA leaves the other 174
+        # territories at their old price. --all-territories closes that gap by
+        # POSTing each territory's equalized price point off the USA base point.
+        if args.all_territories:
+            try:
+                eqs = asc.equalized_price_points(match)
+            except Exception as e:  # noqa: BLE001
+                print(f"    ERROR fetching equalizations: {e}")
+                failures += 1
+                continue
+            sample = ", ".join(f"{t} {cp}" for t, _, cp in eqs[:6])
+            print(f"    + {len(eqs)} other territories via equalization (sample: {sample} ...)")
+            if args.apply:
+                ok = 0
+                for terr, pp_id, _cp in eqs:
+                    try:
+                        asc.set_price(
+                            sub_id, pp_id, preserve_existing=preserve,
+                            start_date=start_date, territory=terr,
+                        )
+                        ok += 1
+                    except Exception as e:  # noqa: BLE001
+                        print(f"      {terr}: ERROR {e}")
+                        failures += 1
+                print(f"    equalized {ok}/{len(eqs)} territories applied")
     return 1 if failures else 0
 
 
@@ -484,6 +545,14 @@ def main() -> int:
         default="preserve",
         help="preserve = grandfather current subscribers at their old price (safe default); "
         "migrate = move them to the new price (Apple only; Play decreases apply to new buyers).",
+    )
+    ap.add_argument(
+        "--all-territories",
+        action="store_true",
+        help="Apple: also set every non-US territory to the equalized price of the US base "
+        "price point (Apple's standard equalization -- the same thing the dashboard's "
+        "auto-equalize prompt does). Without this only the US storefront changes. "
+        "No effect on Google, which always converts worldwide.",
     )
     ap.add_argument("--bundle-id", default="com.newsletterpod.app", help="App Store bundle id.")
     ap.add_argument("--package-name", default="com.newsletterpod.app", help="Play package name.")
