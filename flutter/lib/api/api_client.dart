@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import '../config.dart';
 import 'models.dart';
 import 'responses.dart';
+import 'weekday.dart';
 
 /// Thrown for non-2xx responses and transport/shape errors. `message` is the
 /// backend `detail` when present.
@@ -113,18 +114,19 @@ class ApiClient {
   // Account / profile
   // -------------------------------------------------------------------------
 
-  Future<MeEnvelope> fetchMe(String token) async =>
-      MeEnvelope.fromJson(await _send('/v1/me', method: 'GET', token: token));
+  Future<MeEnvelope> fetchMe(String token) async => MeEnvelope.fromJson(
+      _decodeWeekdays(await _send('/v1/me', method: 'GET', token: token)));
 
   Future<MeEnvelope> updateProfile(
     String token, {
     required String displayName,
     required String timezone,
   }) async =>
-      MeEnvelope.fromJson(await _send('/v1/me', method: 'PATCH', token: token, body: {
+      MeEnvelope.fromJson(_decodeWeekdays(
+          await _send('/v1/me', method: 'PATCH', token: token, body: {
         'display_name': displayName,
         'timezone': timezone,
-      }));
+      })));
 
   Future<AccountDeletionAck> deleteAccount(String token) async =>
       AccountDeletionAck.fromJson(
@@ -219,8 +221,8 @@ class ApiClient {
   // -------------------------------------------------------------------------
 
   Future<ScheduleEnvelope> fetchSchedule(String token) async =>
-      ScheduleEnvelope.fromJson(
-          await _send('/v1/me/schedule', method: 'GET', token: token));
+      ScheduleEnvelope.fromJson(_decodeWeekdays(
+          await _send('/v1/me/schedule', method: 'GET', token: token)));
 
   Future<ScheduleEnvelope> updateSchedule(
     String token, {
@@ -228,12 +230,24 @@ class ApiClient {
     required List<String> weekdays,
     String? localTime,
   }) async =>
-      ScheduleEnvelope.fromJson(
+      ScheduleEnvelope.fromJson(_decodeWeekdays(
           await _send('/v1/me/schedule', method: 'PATCH', token: token, body: {
         'timezone': timezone,
-        'weekdays': weekdays,
+        'weekdays': weekdaysToApi(weekdays),
         if (localTime != null) 'local_time': localTime,
-      }));
+      })));
+
+  /// Rewrite a `schedule.weekdays` array in a decoded response from the
+  /// backend's full names to the 3-letter codes the app uses, before the DTOs
+  /// parse it. Both `/v1/me` and `/v1/me/schedule` nest the schedule this way.
+  Map<String, dynamic> _decodeWeekdays(Map<String, dynamic> json) {
+    final schedule = json['schedule'];
+    if (schedule is Map && schedule['weekdays'] is List) {
+      schedule['weekdays'] =
+          weekdaysFromApi((schedule['weekdays'] as List).cast<String>());
+    }
+    return json;
+  }
 
   // -------------------------------------------------------------------------
   // Feed / episodes / runs

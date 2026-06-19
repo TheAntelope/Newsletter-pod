@@ -86,6 +86,47 @@ void main() {
       expect(me.entitlements.maxDeliveryDays, 7);
     });
 
+    test('updateSchedule sends full weekday names and decodes back to codes',
+        () async {
+      late http.Request captured;
+      final mock = MockClient((req) async {
+        captured = req;
+        return http.Response(
+          jsonEncode({
+            'schedule': {
+              'timezone': 'UTC',
+              // Backend echoes canonical full names.
+              'weekdays': ['tuesday', 'thursday'],
+              'local_time': '07:00',
+              'cutoff_time': '11:00',
+            },
+            'entitlements': {
+              'tier': 'free',
+              'max_delivery_days': 7,
+              'min_duration_minutes': 3,
+              'max_duration_minutes': 5,
+              'max_items_per_episode': 25,
+            },
+          }),
+          200,
+        );
+      });
+      final api = ApiClient(baseUrl: 'https://api.test', client: mock);
+
+      final env = await api.updateSchedule(
+        'tok',
+        timezone: 'UTC',
+        weekdays: ['tue', 'thu'],
+        localTime: '07:00',
+      );
+
+      // Outgoing body carries the full names the backend requires.
+      final body = jsonDecode(captured.body) as Map<String, dynamic>;
+      expect(body['weekdays'], ['tuesday', 'thursday']);
+      // Response is mapped back to the app's 3-letter codes.
+      expect(env.schedule.weekdays, ['tue', 'thu']);
+    });
+
     test('encodes query parameters (probeSubstack)', () async {
       late http.Request captured;
       final mock = MockClient((req) async {

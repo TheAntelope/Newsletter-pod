@@ -137,6 +137,25 @@ def test_schedule_patch_accepts_local_time():
     assert bad2.status_code == 400
 
 
+def test_schedule_patch_accepts_abbreviated_weekdays():
+    """Clients send 3-letter weekday codes (e.g. "tue"); the API must accept
+    them and normalize to the canonical full names it stores and schedules on."""
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("abbrev-user", "abbrev@example.com"))
+
+    resp = client.patch(
+        "/v1/me/schedule",
+        json={"timezone": "America/Chicago", "weekdays": ["tue"], "local_time": "06:30"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["schedule"]["weekdays"] == ["tuesday"]
+
+    # An unknown code is still rejected.
+    bad = client.patch("/v1/me/schedule", json={"weekdays": ["xyz"]}, headers=headers)
+    assert bad.status_code == 400
+
+
 def test_schedule_patch_allows_empty_weekdays_for_on_demand():
     """Clearing all delivery days opts out of automatic generation: the patch
     succeeds with an empty weekday set and the user is never picked up by the
