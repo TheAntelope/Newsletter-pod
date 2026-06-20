@@ -9,6 +9,7 @@ const _topicIcons = <String, IconData>{
   'Politics': Icons.account_balance_outlined,
   'Business': Icons.trending_up,
   'Tech': Icons.memory,
+  'Cybersecurity': Icons.shield_outlined,
   'Strategy': Icons.lightbulb_outline,
   'Personal Finance': Icons.savings_outlined,
   'Science': Icons.science_outlined,
@@ -18,6 +19,7 @@ const _topicIcons = <String, IconData>{
   'Fitness': Icons.fitness_center,
   'Family Life': Icons.family_restroom_outlined,
   'Food & Travel': Icons.restaurant_outlined,
+  'Food & Beverage': Icons.local_bar_outlined,
   'Romantasy': Icons.auto_stories_outlined,
   'Podcasts': Icons.podcasts,
 };
