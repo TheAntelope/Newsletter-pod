@@ -1,8 +1,12 @@
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../api/models.dart';
 import '../design_tokens.dart';
+import '../services/apple_podcasts.dart';
 import '../services/podcast_addict.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
@@ -49,6 +53,7 @@ class _FeedAccessScreenState extends State<FeedAccessScreen> {
               return Center(child: Text('${snapshot.error}'));
             }
             final feed = snapshot.data!;
+            final isIOS = !kIsWeb && Platform.isIOS;
             return ListView(
               padding: const EdgeInsets.all(DesignTokens.spacingL),
               children: [
@@ -56,22 +61,31 @@ class _FeedAccessScreenState extends State<FeedAccessScreen> {
                   children: [
                     const MetaLabel('Step 1'),
                     Text(
-                      'Open in Podcast Addict',
+                      isIOS
+                          ? 'Open in Apple Podcasts'
+                          : 'Open in Podcast Addict',
                       style: DesignTokens.typographyTitle
                           .copyWith(color: DesignTokens.colorInk),
                     ),
                     Text(
-                      'Your briefings are delivered as a private podcast feed. '
-                      'Tap below to add it to Podcast Addict — we’ll install the '
-                      'app for you if you don’t have it yet.',
+                      isIOS
+                          ? 'Your briefings are delivered as a private podcast '
+                              'feed. Tap below to add it to Apple Podcasts.'
+                          : 'Your briefings are delivered as a private podcast '
+                              'feed. Tap below to add it to Podcast Addict — '
+                              'we’ll install the app for you if you don’t have '
+                              'it yet.',
                       style: DesignTokens.typographyBody
                           .copyWith(color: DesignTokens.colorInkSoft),
                     ),
                     AmberButton.filled(
-                      label: 'Open in Podcast Addict',
-                      icon: Icons.podcasts,
-                      onPressed: () =>
-                          PodcastAddict.subscribe(context, feed.feedUrl),
+                      label: isIOS
+                          ? 'Open in Apple Podcasts'
+                          : 'Open in Podcast Addict',
+                      icon: isIOS ? Icons.play_arrow : Icons.podcasts,
+                      onPressed: () => isIOS
+                          ? ApplePodcasts.open(context, feed.feedUrl)
+                          : PodcastAddict.subscribe(context, feed.feedUrl),
                     ),
                   ],
                 ),
