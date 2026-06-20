@@ -22,16 +22,39 @@ class _FakeProposer:
         return self.returns
 
 
-def _loop(seed_topics=None, persona="indie founders") -> BroadcastLoopRecord:
+def _loop(seed_topics=None, persona="indie founders", desired_minutes=None) -> BroadcastLoopRecord:
     return BroadcastLoopRecord(
         loop_id="us-morning",
         region="US",
         timezone="America/Los_Angeles",
         audience_persona=persona,
         seed_topics=seed_topics or [],
+        desired_minutes=desired_minutes,
         created_at=datetime(2026, 5, 30, tzinfo=timezone.utc),
         updated_at=datetime(2026, 5, 30, tzinfo=timezone.utc),
     )
+
+
+def test_pick_defaults_to_one_minute_when_loop_has_no_length():
+    repo = InMemoryBroadcastRepository()
+    proposer = _FakeProposer(returns="A topic")
+    picker = BroadcastTopicPicker(proposer=proposer, repository=repo)
+
+    _topic, brief = picker.pick(_loop())
+
+    # Default short-clip length preserved for X loops (2-min video cap).
+    assert brief.desired_minutes == 1
+
+
+def test_pick_honours_per_loop_desired_minutes():
+    repo = InMemoryBroadcastRepository()
+    proposer = _FakeProposer(returns="A topic")
+    picker = BroadcastTopicPicker(proposer=proposer, repository=repo)
+
+    _topic, brief = picker.pick(_loop(desired_minutes=5))
+
+    # A feed-only loop (e.g. the website daily show) can run longer.
+    assert brief.desired_minutes == 5
 
 
 def _episode_with_feedback(repo, *, loop_id, summary, episode_id="aaaaaaaaaaaaaaaa", run_date=date(2026, 5, 30)):

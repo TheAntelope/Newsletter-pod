@@ -84,9 +84,13 @@ def build_broadcast_prompt(brief: BroadcastBrief) -> str:
     sections += [
         "",
         "Structure guidance:",
-        "- Open with the hook before introducing the hosts.",
+        "- Open with the hook, then take a beat to set up the episode: in a sentence "
+        "or two, tell the listener what it's about and why it matters before diving "
+        "into the detail, so they know where you're headed.",
         "- One central thesis the hosts develop together — not a list of bullet points.",
         "- The secondary host pushes back at least once; this isn't a fluff piece.",
+        "- Don't rush or cram: favor clear, complete thoughts over packing in every "
+        "detail, and give the listener room to follow the argument.",
         "- Close with a single forward-looking question or call-to-action the audience "
         "can reply to.",
     ]

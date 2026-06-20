@@ -274,13 +274,15 @@ class BroadcastTopicPicker:
             topic=topic,
             audience_hint=loop.audience_persona,
             prior_feedback_summary=prior_feedback,
-            # 1-minute episodes: the eu-morning X account is on a tier
+            # Default 1-minute episodes: the eu-morning X account is on a tier
             # that caps video uploads at 2 minutes (HTTP 403 above), and
             # an LLM asked for "2 minutes" routinely produces 2:10-2:30.
             # Asking for 1 minute pushes realized length to ~1:00-1:30,
             # comfortably under the cap. video.py also enforces a 110s
-            # hard ceiling at encode time as a safety net.
-            desired_minutes=1,
+            # hard ceiling at encode time as a safety net. A feed-only loop
+            # (no X post, e.g. the website daily show) can override via
+            # loop.desired_minutes for a fuller episode.
+            desired_minutes=loop.desired_minutes or 1,
             source_items=grounding_items,
         )
         return topic, brief
