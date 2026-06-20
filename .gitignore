@@ -22,6 +22,11 @@ weekly_changes.json
 build/
 DerivedData/
 *.xcworkspace
+# The Flutter iOS app is a pure-SPM project (no CocoaPods Podfile to regenerate
+# the workspace), so its Xcode workspace must be committed — otherwise CI clones
+# have no workspace and `flutter build ipa` fails SPM integration with
+# "Xcode workspace not found". Exempt it from the blanket *.xcworkspace ignore.
+!flutter/ios/Runner.xcworkspace/
 *.xcodeproj/xcuserdata/
 *.xcuserstate
 ios/build/
