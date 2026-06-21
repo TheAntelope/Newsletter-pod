@@ -1499,6 +1499,9 @@ class ControlPlaneService:
         include_top_takeaways: Optional[bool] = None,
         include_weather: Optional[bool] = None,
         weather_location: Optional[str] = None,
+        weather_lat: Optional[float] = None,
+        weather_lon: Optional[float] = None,
+        weather_country_code: Optional[str] = None,
         custom_guidance: Optional[str] = None,
         custom_guidance_preset_id: Optional[str] = None,
     ) -> dict[str, Any]:
@@ -1550,7 +1553,20 @@ class ControlPlaneService:
             profile.include_weather = bool(include_weather)
         if weather_location is not None:
             trimmed = weather_location.strip()[:_WEATHER_LOCATION_MAX_LEN]
-            profile.weather_location = trimmed or None
+            new_location = trimmed or None
+            # Changing the city text invalidates any previously-paired
+            # coordinates; the same request re-sets them just below when the
+            # client sent a fresh pick. (Legacy/free-text edits leave them None.)
+            if new_location != profile.weather_location:
+                profile.weather_lat = None
+                profile.weather_lon = None
+                profile.weather_country_code = None
+            profile.weather_location = new_location
+        if weather_lat is not None and weather_lon is not None:
+            profile.weather_lat = float(weather_lat)
+            profile.weather_lon = float(weather_lon)
+            code = (weather_country_code or "").strip().upper()[:2]
+            profile.weather_country_code = code or None
         if custom_guidance is not None:
             profile.custom_guidance = _sanitize_custom_guidance(custom_guidance)
         if custom_guidance_preset_id is not None:
@@ -2529,7 +2545,11 @@ class ControlPlaneService:
         if profile.include_weather and profile.weather_location:
             try:
                 weather_summary = fetch_weather_summary(
-                    profile.weather_location, today=local_date
+                    profile.weather_location,
+                    lat=profile.weather_lat,
+                    lon=profile.weather_lon,
+                    country_code=profile.weather_country_code,
+                    today=local_date,
                 )
             except Exception:  # pragma: no cover — weather is best-effort
                 logger.warning(

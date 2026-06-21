@@ -102,6 +102,13 @@ class PodcastProfileRecord(BaseModel):
     include_top_takeaways: bool = True
     include_weather: bool = False
     weather_location: Optional[str] = None
+    # Coordinates resolved by the client at pick-time (from the Open-Meteo
+    # geocoder) so the generation path can forecast the exact city the user chose
+    # instead of re-geocoding the ambiguous display string. country_code drives
+    # the °F/°C choice. All None for legacy / string-only (older iOS) values.
+    weather_lat: Optional[float] = None
+    weather_lon: Optional[float] = None
+    weather_country_code: Optional[str] = None
     custom_guidance: Optional[str] = None
     custom_guidance_preset_id: Optional[str] = None
     created_at: datetime
