@@ -95,7 +95,7 @@ from .user_models import (
 from .user_repository import ControlPlaneRepository
 
 logger = logging.getLogger(__name__)
-from .utils import link_hash, normalize_email, utc_now
+from .utils import ensure_utc, link_hash, normalize_email, utc_now
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -108,6 +108,11 @@ WELCOME_EPISODE_DESCRIPTION = (
 )
 
 COMPLETED_RUN_STATUSES = {PublishStatus.PUBLISHED.value, PublishStatus.NO_CONTENT.value}
+# Upper bound on how many stale in_progress runs a single reap sweep finalizes,
+# so one tick does a bounded Firestore read/write even if a finalization bug
+# lets the in_progress set balloon. The reaper is idempotent and runs on a short
+# cadence, so a backlog larger than this drains across successive ticks.
+STALE_RUN_REAP_BATCH = 500
 WEEKDAY_NAMES = [
     "monday",
     "tuesday",
@@ -2738,10 +2743,63 @@ class ControlPlaneService:
             "user": user.model_dump(mode="json"),
         }
 
+    def _is_run_stale(self, run: UserRunRecord, now_utc: datetime) -> bool:
+        """A run still `in_progress` past the stale timeout was almost certainly
+        abandoned mid-generation — the in-process background task's Cloud Run
+        instance was recycled / OOM-killed / timed out before it could finalize
+        the run. Key off started_at: completed_at is pre-stamped to started_at at
+        creation and is meaningless for an in-flight row."""
+        timeout = timedelta(minutes=self.settings.stale_run_timeout_minutes)
+        return now_utc - ensure_utc(run.started_at) > timeout
+
+    def _fail_stale_run(self, run: UserRunRecord, now_utc: datetime) -> bool:
+        """Finalize an abandoned in_progress run as failed. The repository flip is
+        conditional (only touches a row that is still in_progress) so it can never
+        clobber a run that finished between detection and write. Mirrors the
+        failure bookkeeping in run_user_generation_in_background."""
+        minutes = self.settings.stale_run_timeout_minutes
+        flipped = self.repository.fail_run_if_in_progress(
+            run.id,
+            message=f"Generation timed out (no progress for over {minutes} minutes).",
+            now=now_utc,
+        )
+        if flipped:
+            log_event(
+                EventName.EPISODE_FAILED,
+                run.user_id,
+                run_id=run.id,
+                error_class="StaleRunReaped",
+            )
+        return flipped
+
+    def reap_stale_runs(self, now_utc: Optional[datetime] = None) -> dict[str, Any]:
+        """Sweep abandoned in_progress runs across all users and mark them failed.
+        Backstops start_user_generation's per-user staleness guard so a stuck run
+        is cleared even if that user never taps Generate again — the client poll
+        then terminates on `failed` and the feed/queue stop showing a phantom
+        in-flight episode. Idempotent: the repository flip is conditional on the
+        row still being in_progress, so re-runs and overlapping invocations are
+        safe."""
+        now_utc = now_utc or utc_now()
+        threshold = now_utc - timedelta(minutes=self.settings.stale_run_timeout_minutes)
+        stale = self.repository.list_in_progress_user_runs_older_than(
+            threshold, limit=STALE_RUN_REAP_BATCH
+        )
+        reaped = [run.id for run in stale if self._fail_stale_run(run, now_utc)]
+        if len(stale) >= STALE_RUN_REAP_BATCH:
+            # Hit the per-sweep cap — there may be more; the next tick continues.
+            logger.warning(
+                "reap_stale_runs hit batch cap (%s); backlog draining across ticks",
+                STALE_RUN_REAP_BATCH,
+            )
+        return {"status": "ok", "reaped": len(reaped), "run_ids": reaped}
+
     def start_user_generation(self, user_id: str, force: bool = False) -> dict[str, Any]:
         self._require_user(user_id)
+        now_utc = utc_now()
         existing = self.repository.find_in_progress_user_run(user_id)
-        if existing is not None:
+        if existing is not None and not self._is_run_stale(existing, now_utc):
+            # A genuinely in-flight run — don't kick off a second generation.
             log_event(
                 EventName.EPISODE_REQUESTED,
                 user_id,
@@ -2750,9 +2808,12 @@ class ControlPlaneService:
                 started=False,
             )
             return {"run": existing.model_dump(mode="json"), "started": False}
+        if existing is not None:
+            # Stale/abandoned in_progress run wedging this user — finalize it as
+            # failed so it stops blocking, then fall through to start fresh.
+            self._fail_stale_run(existing, now_utc)
 
         schedule = self._get_schedule(user_id)
-        now_utc = utc_now()
         local_date = now_utc.astimezone(ZoneInfo(schedule.timezone)).date()
         run = UserRunRecord(
             id=uuid4().hex,

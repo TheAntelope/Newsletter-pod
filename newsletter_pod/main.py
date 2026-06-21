@@ -490,6 +490,21 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         assert container.control_plane is not None
         return container.control_plane.poll_sources()
 
+    @app.post("/jobs/reap-stale-runs")
+    def reap_stale_runs(
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Frequent Cloud Scheduler target. Marks user podcast runs stuck
+        `in_progress` past STALE_RUN_TIMEOUT_MINUTES as failed — they were
+        orphaned when the in-process generation task's instance was
+        recycled/OOM-killed/timed out before it could finalize the run. Clears
+        the wedge so the user's next "Generate" works and the client poll
+        terminates. Idempotent; returns {status, reaped, run_ids}."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.control_plane is not None
+        return container.control_plane.reap_stale_runs()
+
     @app.post("/jobs/broadcast/generate-once")
     def broadcast_generate_once(
         request_payload: BroadcastGenerateOnceRequest,
