@@ -187,6 +187,10 @@ class _Dashboard extends StatelessWidget {
           const SizedBox(height: DesignTokens.spacingL),
           _NextEpisodeQueueCard(pinnedCount: pinnedCount),
         ],
+        if (me.entitlements.trialGiftPending && !app.trialGiftDismissed) ...[
+          const SizedBox(height: DesignTokens.spacingL),
+          _TrialGiftCard(onAcknowledge: app.acknowledgeTrialGift),
+        ],
         const SizedBox(height: DesignTokens.spacingL),
         _PlanCard(
           subscription: me.subscription,
@@ -461,8 +465,17 @@ String _openInPodcastAppLabel() {
 
 /// "2 of 3 premium voice pods left this week" — the weekly premium-voice quota
 /// shown under the Generate action. Trial users see their trial allowance.
+/// Whole days remaining in the 7-day full-access trial, rounded up so a
+/// partial final day still reads as "1 day left".
+int _trialDaysLeft(DateTime trialEnd) {
+  final secondsLeft = trialEnd.difference(DateTime.now()).inSeconds;
+  return (secondsLeft / 86400).ceil().clamp(1, 365);
+}
+
 String _premiumRemainingLabel(EntitlementsDto ent) {
-  if (ent.isInTrial) {
+  // 7-day full-access trial: premium pods are tracked against the weekly Max
+  // budget (not the legacy pod counter), so show the weekly remaining count.
+  if (ent.trialEndsAt == null && ent.isInTrial) {
     final n = ent.trialPremiumPodsRemaining;
     return 'Trial: $n premium voice pod${n == 1 ? '' : 's'} left';
   }
@@ -746,10 +759,14 @@ class _PlanCard extends StatelessWidget {
           style: DesignTokens.typographyTitle.copyWith(color: DesignTokens.colorInk),
         ),
         Text(
-          entitlements.isInTrial
-              ? 'Trial: ${entitlements.trialPremiumPodsRemaining} premium pods left'
-              : '${entitlements.premiumPodsRemainingThisWeek} of '
-                  '${entitlements.premiumPodsPerWeek} premium pods left this week',
+          entitlements.trialEndsAt != null
+              ? '${_trialDaysLeft(entitlements.trialEndsAt!)} '
+                  '${_trialDaysLeft(entitlements.trialEndsAt!) == 1 ? 'day' : 'days'} '
+                  'left in your free trial'
+              : entitlements.isInTrial
+                  ? 'Trial: ${entitlements.trialPremiumPodsRemaining} premium pods left'
+                  : '${entitlements.premiumPodsRemainingThisWeek} of '
+                      '${entitlements.premiumPodsPerWeek} premium pods left this week',
           style: DesignTokens.typographyBody.copyWith(color: DesignTokens.colorInkSoft),
         ),
         Row(
@@ -843,6 +860,55 @@ class _NextEpisodeQueueCard extends StatelessWidget {
           'Preview & pin the stories',
           style: DesignTokens.typographyCallout
               .copyWith(color: DesignTokens.colorInkSoft),
+        ),
+      ],
+    );
+  }
+}
+
+/// One-time courtesy card announcing the early-adopter trial-gift reset. Shown
+/// while the backend reports `entitlements.trialGiftPending` and the user hasn't
+/// tapped "Got it" yet (see [AppState.trialGiftDismissed] /
+/// [AppState.acknowledgeTrialGift]). Styled with the shared [EditorialCard]
+/// idiom; the copy is the cross-stack shared contract — keep it byte-for-byte
+/// in sync with the iOS card and the push body.
+class _TrialGiftCard extends StatelessWidget {
+  const _TrialGiftCard({required this.onAcknowledge});
+
+  final VoidCallback onAcknowledge;
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        const MetaLabel('Gift'),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '🎁 A gift from theclawcast',
+              style: DesignTokens.typographySubtitle
+                  .copyWith(color: DesignTokens.colorInk),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Your 7-day free trial has been reset as a thank-you for '
+              'being one of the first 100 users. Full access to every '
+              'premium voice, longer episodes, and daily delivery — '
+              'enjoy.',
+              style: DesignTokens.typographyCallout
+                  .copyWith(color: DesignTokens.colorInkSoft),
+            ),
+          ],
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: AmberButton.filled(
+            label: 'Got it',
+            expand: false,
+            onPressed: onAcknowledge,
+          ),
         ),
       ],
     );

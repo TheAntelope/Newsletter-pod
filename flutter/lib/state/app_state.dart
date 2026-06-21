@@ -59,6 +59,34 @@ class AppState extends ChangeNotifier {
   bool _generating = false;
   bool get isGenerating => _generating;
 
+  /// Whether the early-adopter trial-gift card has been acknowledged this
+  /// session. The card shows while `entitlements.trialGiftPending` is true and
+  /// this flag is false; tapping "Got it" flips it optimistically so the card
+  /// disappears immediately, ahead of the backend ack landing. Per-session (not
+  /// persisted) — the durable state is the backend `trial_gift_acknowledged_at`,
+  /// which clears `trialGiftPending` on the next `loadMe`. Reset on sign-out.
+  bool _trialGiftDismissed = false;
+  bool get trialGiftDismissed => _trialGiftDismissed;
+
+  /// Acknowledges the trial gift: hides the card immediately, then fires the
+  /// backend ack in the background. No-ops without a live ApiClient/session
+  /// (demo build / widget tests), exactly like [_registerForPush]. The ack is
+  /// idempotent server-side, so an unobserved failure just leaves the card to
+  /// reappear on the next launch — acceptable for a one-time courtesy card.
+  void acknowledgeTrialGift() {
+    if (_trialGiftDismissed) return;
+    _trialGiftDismissed = true;
+    notifyListeners();
+    final client = _apiClient;
+    final session = _sessionToken;
+    if (client == null || session == null) return;
+    unawaited(
+      client.acknowledgeTrialGift(session).catchError((_) {
+        // Best-effort; the card stays hidden this session regardless.
+      }),
+    );
+  }
+
   /// Stubbed/demo sign-in (flag off): flips signed-in and loads `me` from the
   /// injected fake repository, then runs the onboarding wizard. The real path
   /// goes through [applySession] instead.
@@ -171,6 +199,10 @@ class AppState extends ChangeNotifier {
   void _handlePushOpened(Map<String, dynamic> data) {
     if (data['type'] == 'pod_ready') {
       unawaited(loadMe());
+    } else if (data['type'] == 'trial_gift') {
+      // Refresh so `trial_gift_pending` is fresh and the gift card surfaces on
+      // the home screen.
+      unawaited(loadMe());
     }
   }
 
@@ -231,6 +263,9 @@ class AppState extends ChangeNotifier {
     _sessionToken = null;
     _lastRunMessage = null;
     _generating = false;
+    // Per-user, per-session: the next signed-in user must see their own gift
+    // card if the backend still reports it pending.
+    _trialGiftDismissed = false;
     _error = null;
     notifyListeners();
   }

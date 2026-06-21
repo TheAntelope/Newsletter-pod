@@ -147,6 +147,14 @@ class ApiClient {
       AccountResetAck.fromJson(
           await _send('/v1/me/reset', method: 'POST', token: token));
 
+  /// Acknowledges the early-adopter trial gift (the "Got it" tap on the home
+  /// card). Idempotent on the backend — it stamps `trial_gift_acknowledged_at`
+  /// once and no-ops thereafter, so a retry is harmless. Returns nothing; the
+  /// caller refreshes `me` to clear `trial_gift_pending`.
+  Future<void> acknowledgeTrialGift(String token) async {
+    await _send('/v1/me/trial-gift/ack', method: 'POST', token: token);
+  }
+
   // -------------------------------------------------------------------------
   // Catalogs
   // -------------------------------------------------------------------------

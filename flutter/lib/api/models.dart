@@ -214,6 +214,15 @@ class EntitlementsDto {
   @JsonKey(defaultValue: false)
   final bool isInFirstMonth;
   final DateTime? firstMonthEndsAt;
+  // Set while the 7-day full-access trial window is open; null otherwise.
+  // Drives the "X days left" countdown on the paywall trial card.
+  final DateTime? trialEndsAt;
+  // True when the user has been granted the early-adopter trial gift but hasn't
+  // acknowledged it yet (granted_at set, acknowledged_at still null on the
+  // backend). Drives the one-time "gift from theclawcast" home card. Defaults to
+  // false so an older backend that omits the field still decodes.
+  @JsonKey(defaultValue: false)
+  final bool trialGiftPending;
 
   EntitlementsDto({
     required this.tier,
@@ -229,6 +238,8 @@ class EntitlementsDto {
     this.trialPremiumPodsRemaining = 0,
     this.isInFirstMonth = false,
     this.firstMonthEndsAt,
+    this.trialEndsAt,
+    this.trialGiftPending = false,
   });
 
   factory EntitlementsDto.fromJson(Map<String, dynamic> json) =>

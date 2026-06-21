@@ -196,6 +196,10 @@ EntitlementsDto _$EntitlementsDtoFromJson(Map<String, dynamic> json) =>
       firstMonthEndsAt: json['first_month_ends_at'] == null
           ? null
           : DateTime.parse(json['first_month_ends_at'] as String),
+      trialEndsAt: json['trial_ends_at'] == null
+          ? null
+          : DateTime.parse(json['trial_ends_at'] as String),
+      trialGiftPending: json['trial_gift_pending'] as bool? ?? false,
     );
 
 Map<String, dynamic> _$EntitlementsDtoToJson(EntitlementsDto instance) =>
@@ -213,6 +217,8 @@ Map<String, dynamic> _$EntitlementsDtoToJson(EntitlementsDto instance) =>
       'trial_premium_pods_remaining': instance.trialPremiumPodsRemaining,
       'is_in_first_month': instance.isInFirstMonth,
       'first_month_ends_at': instance.firstMonthEndsAt?.toIso8601String(),
+      'trial_ends_at': instance.trialEndsAt?.toIso8601String(),
+      'trial_gift_pending': instance.trialGiftPending,
     };
 
 CatalogSourceDto _$CatalogSourceDtoFromJson(Map<String, dynamic> json) =>
