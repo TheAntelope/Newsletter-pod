@@ -92,7 +92,7 @@ class PodcastProfileRecord(BaseModel):
     host_primary_name: str = "Vinnie"
     host_secondary_name: Optional[str] = "Demi"
     guest_names: list[str] = Field(default_factory=list)
-    desired_duration_minutes: int = 3
+    desired_duration_minutes: int = 5
     voice_id: Optional[str] = None
     secondary_voice_id: Optional[str] = None
     tone: str = "calm_analyst"
