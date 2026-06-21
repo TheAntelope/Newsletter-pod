@@ -234,6 +234,24 @@ class Settings(BaseSettings):
     rapid_retry_minutes: int = Field(default=5, alias="RAPID_RETRY_MINUTES")
     periodic_retry_minutes: int = Field(default=30, alias="PERIODIC_RETRY_MINUTES")
 
+    # A user podcast run is created `in_progress` and finalized by an in-process
+    # background task. If the Cloud Run instance is recycled / OOM-killed / times
+    # out before that task finishes, the run is orphaned in `in_progress` and the
+    # interactive "Generate now" stays wedged (find_in_progress_user_run keeps
+    # handing back the zombie). Any in_progress run older than this is treated as
+    # abandoned: the next generate attempt finalizes it as failed and starts
+    # fresh, and the reap-stale-runs job sweeps it server-side.
+    #
+    # LOAD-BEARING: this must exceed WORST-CASE (P99) generation latency, not just
+    # the typical few minutes — there is no progress heartbeat, so the window is
+    # measured from when generation started. Reaping a run that is in fact still
+    # working is benign (its eventual publish overwrites the reaped `failed` row
+    # and the user still gets the episode) but emits a spurious EPISODE_FAILED and
+    # can briefly show the user a failure notice, so keep the margin generous. 15
+    # sits well above normal generation (~minutes) and the 6-min client poll
+    # window; raise STALE_RUN_TIMEOUT_MINUTES if real runs ever approach it.
+    stale_run_timeout_minutes: int = Field(default=15, alias="STALE_RUN_TIMEOUT_MINUTES")
+
     max_feed_episodes: int = Field(default=30, alias="MAX_FEED_EPISODES")
     weekly_target_local: str = Field(default="07:00", alias="WEEKLY_TARGET_LOCAL")
     weekly_cutoff_local: str = Field(default="11:00", alias="WEEKLY_CUTOFF_LOCAL")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -13,8 +14,10 @@ from newsletter_pod.user_models import (
     InboundEmailItem,
     SwipeRecord,
     UserEpisodeRecord,
+    UserRunRecord,
     UserSubstackIntent,
 )
+from newsletter_pod.utils import utc_now
 
 
 class FakeAppleVerifier:
@@ -3217,3 +3220,123 @@ def test_catalog_exposes_podcast_kind_and_attach_snapshots_it():
     attached = [s for s in mine if s["source_id"] == pod["source_id"]]
     assert attached, "the podcast source should be attached"
     assert attached[0]["kind"] == "podcast"
+
+
+def _auth_user(client: TestClient, subject: str, email: str) -> tuple[str, dict[str, str]]:
+    """Authenticate and return (user_id, auth headers). Unlike _auth_headers,
+    also surfaces the backend user id (needed to seed runs for that user)."""
+    client.app.state.container.control_plane.apple_identity_verifier = FakeAppleVerifier(
+        subject, email
+    )
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    assert auth.status_code == 200
+    body = auth.json()
+    return body["user"]["id"], {"Authorization": f"Bearer {body['session_token']}"}
+
+
+def _seed_run(container, user_id: str, *, status: str, age_minutes: float) -> UserRunRecord:
+    """Persist a run for `user_id` with started_at `age_minutes` in the past."""
+    started = utc_now() - timedelta(minutes=age_minutes)
+    run = UserRunRecord(
+        id=uuid4().hex,
+        user_id=user_id,
+        local_run_date=started.date(),
+        started_at=started,
+        completed_at=started,
+        status=status,
+        message="Generation in progress" if status == "in_progress" else "seed",
+    )
+    container.control_repository.save_user_run(run)
+    return run
+
+
+def test_stale_in_progress_run_does_not_block_new_generation():
+    # A run abandoned mid-generation (instance recycle / OOM / timeout) leaves an
+    # in_progress row that used to wedge the user forever. Past the staleness
+    # window, the next generate attempt must fail the zombie and start fresh.
+    container, client = _build_app()
+    user_id, _ = _auth_user(client, "stale-block-user", "stale-block@example.com")
+    timeout = container.settings.stale_run_timeout_minutes
+    zombie = _seed_run(container, user_id, status="in_progress", age_minutes=timeout + 5)
+
+    result = container.control_plane.start_user_generation(user_id, force=True)
+
+    assert result["started"] is True
+    assert result["run"]["id"] != zombie.id
+    assert result["run"]["status"] == "in_progress"
+    # The old zombie was finalized so it no longer blocks.
+    assert container.control_repository.get_user_run(zombie.id).status == "failed"
+
+
+def test_fresh_in_progress_run_still_blocks_new_generation():
+    # A genuinely in-flight run (within the window) must still block, so we never
+    # kick off a second generation while the first is legitimately working.
+    container, client = _build_app()
+    user_id, _ = _auth_user(client, "fresh-block-user", "fresh-block@example.com")
+    active = _seed_run(container, user_id, status="in_progress", age_minutes=1)
+
+    result = container.control_plane.start_user_generation(user_id, force=True)
+
+    assert result["started"] is False
+    assert result["run"]["id"] == active.id
+    assert container.control_repository.get_user_run(active.id).status == "in_progress"
+
+
+def test_reap_stale_runs_fails_only_stale_in_progress_runs():
+    container, client = _build_app()
+    user_id, _ = _auth_user(client, "reap-user", "reap@example.com")
+    timeout = container.settings.stale_run_timeout_minutes
+    stale = _seed_run(container, user_id, status="in_progress", age_minutes=timeout + 30)
+    fresh = _seed_run(container, user_id, status="in_progress", age_minutes=1)
+    # An old terminal run must never be resurrected/clobbered regardless of age.
+    done = _seed_run(container, user_id, status="published", age_minutes=timeout + 30)
+
+    result = container.control_plane.reap_stale_runs()
+
+    assert result["status"] == "ok"
+    assert result["reaped"] == 1
+    assert result["run_ids"] == [stale.id]
+    assert container.control_repository.get_user_run(stale.id).status == "failed"
+    assert container.control_repository.get_user_run(fresh.id).status == "in_progress"
+    assert container.control_repository.get_user_run(done.id).status == "published"
+
+
+def test_fail_run_if_in_progress_never_clobbers_a_terminal_run():
+    # Locks the conditional-flip contract the reaper relies on: it must only
+    # finalize a row that is STILL in_progress, never a run that already
+    # published (or any other terminal status) — otherwise a reaper racing a
+    # finishing background task could overwrite a published episode.
+    container, client = _build_app()
+    user_id, _ = _auth_user(client, "flip-contract-user", "flip@example.com")
+    repo = container.control_repository
+
+    published = _seed_run(container, user_id, status="published", age_minutes=120)
+    assert repo.fail_run_if_in_progress(published.id, message="nope", now=utc_now()) is False
+    assert repo.get_user_run(published.id).status == "published"
+
+    # A missing run is a clean no-op, not an error.
+    assert repo.fail_run_if_in_progress("does-not-exist", message="nope", now=utc_now()) is False
+
+    # And it DOES flip a still-in_progress run.
+    active = _seed_run(container, user_id, status="in_progress", age_minutes=120)
+    assert repo.fail_run_if_in_progress(active.id, message="reaped", now=utc_now()) is True
+    flipped = repo.get_user_run(active.id)
+    assert flipped.status == "failed"
+    assert flipped.message == "reaped"
+
+
+def test_reap_stale_runs_endpoint_is_idempotent():
+    container, client = _build_app()  # _build_app sets job_trigger_token=None (auth open)
+    user_id, _ = _auth_user(client, "reap-endpoint-user", "reap-endpoint@example.com")
+    timeout = container.settings.stale_run_timeout_minutes
+    stale = _seed_run(container, user_id, status="in_progress", age_minutes=timeout + 5)
+
+    first = client.post("/jobs/reap-stale-runs")
+    assert first.status_code == 200
+    assert first.json()["reaped"] == 1
+    assert container.control_repository.get_user_run(stale.id).status == "failed"
+
+    # Re-running finds nothing still in_progress — the flip is conditional.
+    second = client.post("/jobs/reap-stale-runs")
+    assert second.status_code == 200
+    assert second.json()["reaped"] == 0
