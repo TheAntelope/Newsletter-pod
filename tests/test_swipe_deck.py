@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from newsletter_pod.models import SourceItemRecord
-from newsletter_pod.swipe_deck import COLD_START_DECK_ID, SwipeDeckService
+from newsletter_pod.swipe_deck import (
+    COLD_START_DECK_ID,
+    SwipeDeckService,
+    topic_deck_id,
+)
 from newsletter_pod.user_models import SwipeRecord
 from newsletter_pod.user_repository import InMemoryControlPlaneRepository
 from newsletter_pod.utils import utc_now
@@ -23,6 +27,7 @@ class _Config:
     cold_start_deck_size: int = 5
     cold_start_deck_ttl_hours: int = 168
     cold_start_corpus_limit: int = 5000
+    topic_deck_ttl_hours: int = 24
     recent_deck_size: int = 5
     recent_deck_lookback_days: int = 14
     recent_deck_exploration_ratio: float = 0.0
@@ -253,6 +258,155 @@ def test_topic_seeded_deck_empty_topics_falls_back_to_cold_start():
     seeded = service.get_topic_seeded_deck("u1", source_ids=[])
     cold = service.get_cold_start_deck("u1")
     assert [r.dedupe_key for r in seeded] == [r.dedupe_key for r in cold]
+
+
+def test_refresh_topic_decks_writes_records_and_returns_baked_union():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [_record(f"tech-{i}", embedding=[1.0], source_id="techcrunch") for i in range(3)]
+        + [_record(f"sport-{i}", embedding=[1.0], source_id="espn") for i in range(2)]
+    )
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=4, recent_deck_lookback_days=3650),
+    )
+    baked = service.refresh_topic_decks({"Tech": ["techcrunch"], "Sports": ["espn"]})
+    assert repo.get_swipe_deck(topic_deck_id("Tech")) is not None
+    assert repo.get_swipe_deck(topic_deck_id("Sports")) is not None
+    assert {record.dedupe_key for record in baked} == {
+        "tech-0", "tech-1", "tech-2", "sport-0", "sport-1",
+    }
+
+
+def test_refresh_topic_decks_skips_topic_with_no_recent_items():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items([_record("tech-0", embedding=[1.0], source_id="techcrunch")])
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=4, recent_deck_lookback_days=3650),
+    )
+    service.refresh_topic_decks({"Tech": ["techcrunch"], "Empty": ["no-such-source"]})
+    assert repo.get_swipe_deck(topic_deck_id("Empty")) is None
+
+
+def test_cached_topic_deck_serves_baked_keys_not_live_corpus():
+    # Proves the request path reads the cached deck rather than re-scanning the
+    # live corpus: an item ingested AFTER the bake must not appear.
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [
+            _record(f"tech-{i}", embedding=[1.0], source_id="techcrunch",
+                    last_seen_offset_minutes=i)
+            for i in range(6)
+        ]
+    )
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=4, recent_deck_lookback_days=3650),
+    )
+    service.refresh_topic_decks({"Tech": ["techcrunch"]})
+    repo.upsert_source_items(
+        [_record("tech-new", embedding=[1.0], source_id="techcrunch",
+                 last_seen_offset_minutes=100)]
+    )
+    deck = service.get_topic_seeded_deck_cached("u1", [("Tech", ["techcrunch"])])
+    assert len(deck) == 4
+    assert "tech-new" not in {record.dedupe_key for record in deck}
+
+
+def test_cached_topic_deck_falls_back_to_live_when_deck_missing():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [_record(f"tech-{i}", embedding=[1.0], source_id="techcrunch") for i in range(4)]
+    )
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=4, recent_deck_lookback_days=3650),
+    )
+    # No refresh_topic_decks() call → no cached deck → bounded live fallback.
+    deck = service.get_topic_seeded_deck_cached("u1", [("Tech", ["techcrunch"])])
+    assert len(deck) == 4
+    assert {record.source_id for record in deck} == {"techcrunch"}
+
+
+def test_cached_topic_deck_falls_back_when_stale():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [
+            _record(f"tech-{i}", embedding=[1.0], source_id="techcrunch",
+                    last_seen_offset_minutes=i)
+            for i in range(4)
+        ]
+    )
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(
+            cold_start_deck_size=4,
+            recent_deck_lookback_days=3650,
+            topic_deck_ttl_hours=0,  # any baked deck is immediately stale
+        ),
+    )
+    service.refresh_topic_decks({"Tech": ["techcrunch"]})
+    repo.upsert_source_items(
+        [_record("tech-new", embedding=[1.0], source_id="techcrunch",
+                 last_seen_offset_minutes=100)]
+    )
+    deck = service.get_topic_seeded_deck_cached("u1", [("Tech", ["techcrunch"])])
+    assert "tech-new" in {record.dedupe_key for record in deck}
+
+
+def test_cached_topic_deck_round_robins_across_topics():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [
+            _record(f"tech-{i}", embedding=[1.0], source_id="techcrunch",
+                    last_seen_offset_minutes=10 + i)
+            for i in range(6)
+        ]
+        + [
+            _record(f"sport-{i}", embedding=[1.0], source_id="espn",
+                    last_seen_offset_minutes=i)
+            for i in range(2)
+        ]
+    )
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=4, recent_deck_lookback_days=3650),
+    )
+    service.refresh_topic_decks({"Tech": ["techcrunch"], "Sports": ["espn"]})
+    deck = service.get_topic_seeded_deck_cached(
+        "u1", [("Tech", ["techcrunch"]), ("Sports", ["espn"])]
+    )
+    sources = {record.source_id for record in deck}
+    assert "espn" in sources
+    assert "techcrunch" in sources
+
+
+def test_cached_topic_deck_filters_swiped_items():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items(
+        [_record(f"tech-{i}", embedding=[1.0], source_id="techcrunch") for i in range(5)]
+    )
+    repo.save_swipe(_swipe("u1", "tech-2"))
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=10, recent_deck_lookback_days=3650),
+    )
+    service.refresh_topic_decks({"Tech": ["techcrunch"]})
+    deck = service.get_topic_seeded_deck_cached("u1", [("Tech", ["techcrunch"])])
+    assert "tech-2" not in {record.dedupe_key for record in deck}
+
+
+def test_cached_topic_deck_empty_groups_falls_back_to_cold_start():
+    repo = InMemoryControlPlaneRepository()
+    repo.upsert_source_items([_record(f"k{i}", embedding=[float(i), 0.0]) for i in range(6)])
+    service = SwipeDeckService(
+        repository=repo,
+        config=_Config(cold_start_deck_size=3, recent_deck_lookback_days=3650),
+    )
+    cached = service.get_topic_seeded_deck_cached("u1", [])
+    cold = service.get_cold_start_deck("u1")
+    assert [r.dedupe_key for r in cached] == [r.dedupe_key for r in cold]
 
 
 def test_recent_deck_returns_only_items_from_user_sources():

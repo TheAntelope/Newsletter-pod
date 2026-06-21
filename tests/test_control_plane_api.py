@@ -1046,6 +1046,77 @@ def test_cold_start_swipe_deck_biases_toward_user_region():
     assert all(item["source_id"] == "news-last-week-denmark" for item in items)
 
 
+def _stub_card_summaries(container) -> None:
+    """Swap in a deterministic summarizer so the refresh job's pre-warm pass
+    doesn't reach out to OpenAI."""
+    from newsletter_pod.card_summary import CardSummaryService
+
+    class _StubSummarizer:
+        model = "stub"
+
+        def summarize(self, items):
+            return [f"brief: {title}" for title, _body in items]
+
+    container.control_plane.card_summarizer = _StubSummarizer()
+    container.control_plane._card_summary_service = CardSummaryService(
+        repository=container.control_repository,
+        summarizer=_StubSummarizer(),
+    )
+
+
+def test_refresh_job_bakes_per_topic_decks_and_prewarms_summaries():
+    from newsletter_pod.swipe_deck import topic_deck_id
+
+    container, client = _build_app()
+    _stub_card_summaries(container)
+    # techcrunch is a catalog source tagged "Tech".
+    for i in range(3):
+        _seed_source_item_with_source(
+            container, f"tech-{i}", source_id="techcrunch", embedding=[1.0, 0.0]
+        )
+    container.control_plane.settings.cold_start_deck_size = 4
+    container.control_plane.settings.recent_deck_lookback_days = 3650
+
+    resp = client.post("/jobs/refresh-cold-start-deck")
+    assert resp.status_code == 200
+    assert resp.json()["topic_deck_items"] >= 3
+
+    # A per-topic deck was persisted, and its items were summarized in-band.
+    assert container.control_repository.get_swipe_deck(topic_deck_id("Tech")) is not None
+    summarized = container.control_repository.get_source_item("tech-0")
+    assert summarized is not None
+    assert (summarized.card_summary or "").startswith("brief: ")
+
+
+def test_cold_start_endpoint_serves_from_baked_topic_deck():
+    container, client = _build_app()
+    _stub_card_summaries(container)
+    _, headers = _auth_headers(
+        client, FakeAppleVerifier("cached-deck-user", "cd@example.com")
+    )
+    for i in range(5):
+        _seed_source_item_with_source(
+            container, f"tech-{i}", source_id="techcrunch", embedding=[1.0, 0.0]
+        )
+    container.control_plane.settings.cold_start_deck_size = 4
+    container.control_plane.settings.recent_deck_lookback_days = 3650
+
+    # Bake the per-topic decks.
+    assert client.post("/jobs/refresh-cold-start-deck").status_code == 200
+
+    # An item ingested AFTER the bake must NOT appear — proving the request path
+    # serves the cached deck instead of re-running an unbounded live scan.
+    _seed_source_item_with_source(
+        container, "tech-late", source_id="techcrunch", embedding=[1.0, 0.0]
+    )
+    resp = client.get("/v1/me/swipe-deck/cold-start?topics=Tech", headers=headers)
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 4
+    assert all(item["source_id"] == "techcrunch" for item in items)
+    assert "tech-late" not in {item["source_item_dedupe_key"] for item in items}
+
+
 def _seed_source_item_with_source(container, dedupe_key: str, *, source_id: str, embedding) -> None:
     from datetime import datetime, timezone
 
