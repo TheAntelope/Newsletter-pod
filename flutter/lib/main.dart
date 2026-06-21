@@ -8,6 +8,7 @@ import 'data/fake_app_repository.dart';
 import 'screens/root_view.dart';
 import 'services/messaging_controller.dart';
 import 'services/share_intake_controller.dart';
+import 'services/share_tip_store.dart';
 import 'state/app_state.dart';
 import 'theme.dart';
 
@@ -26,7 +27,13 @@ Future<void> main() async {
     // that wakes the app from terminated has a handler. Foreground display +
     // tap routing are wired later by AppState after sign-in.
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-    appState = AppState(FakeAppRepository(), apiClient: ApiClient());
+    appState = AppState(
+      FakeAppRepository(),
+      apiClient: ApiClient(),
+      // Persists the dashboard share-tip dismissal across launches. Real build
+      // only — getInstance() touches a platform channel the demo/tests avoid.
+      shareTipStore: await PrefsShareTipStore.load(),
+    );
     // "Share to ClawCast": start listening to the OS share sheet. Real build
     // only — start() touches a platform channel, so the demo build + widget
     // tests never construct this.

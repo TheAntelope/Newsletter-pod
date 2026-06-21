@@ -10,14 +10,21 @@ import '../data/app_repository.dart';
 import '../services/auth_controller.dart';
 import '../services/messaging_controller.dart';
 import '../services/purchases_controller.dart';
+import '../services/share_tip_store.dart';
 
 /// Single observable app-state store (the Flutter analogue of iOS AppViewModel).
 /// Holds session + the `/v1/me` snapshot and drives the screens via [AppScope].
 class AppState extends ChangeNotifier {
-  // A private field can't be a named initializing formal (`this._apiClient`),
-  // so it's assigned in the initializer list instead.
-  // ignore: prefer_initializing_formals
-  AppState(this._repository, {ApiClient? apiClient}) : _apiClient = apiClient;
+  // `_apiClient` is assigned from a differently-named param in the initializer
+  // list, so it can't be an initializing formal.
+  AppState(
+    this._repository, {
+    ApiClient? apiClient,
+    ShareTipStore? shareTipStore,
+  })  : _apiClient = apiClient, // ignore: prefer_initializing_formals
+        _shareTipStore = shareTipStore ?? InMemoryShareTipStore() {
+    _shareTipDismissed = _shareTipStore.dismissed;
+  }
 
   /// Swapped from the demo [FakeAppRepository] to a live [ApiAppRepository] by
   /// [applySession] once a real sign-in returns a session token.
@@ -85,6 +92,25 @@ class AppState extends ChangeNotifier {
         // Best-effort; the card stays hidden this session regardless.
       }),
     );
+  }
+
+  /// Persists the share-tip dismissal across launches on the real-auth build
+  /// (the demo build / tests use an in-memory stub — see [ShareTipStore]).
+  final ShareTipStore _shareTipStore;
+
+  /// Whether the dashboard's "share from anywhere" teach card has been
+  /// dismissed. The share feature is invisible (it lives in the OS share sheet,
+  /// not an in-app button), so the card educates users it exists. Seeded from
+  /// [_shareTipStore] at construction and written back through it on dismiss, so
+  /// once a user dismisses it on the real build it stays gone across launches.
+  bool _shareTipDismissed = false;
+  bool get shareTipDismissed => _shareTipDismissed;
+
+  void dismissShareTip() {
+    if (_shareTipDismissed) return;
+    _shareTipDismissed = true;
+    unawaited(_shareTipStore.setDismissed(true));
+    notifyListeners();
   }
 
   /// Stubbed/demo sign-in (flag off): flips signed-in and loads `me` from the
@@ -266,6 +292,9 @@ class AppState extends ChangeNotifier {
     // Per-user, per-session: the next signed-in user must see their own gift
     // card if the backend still reports it pending.
     _trialGiftDismissed = false;
+    // The tip is per-device education, not per-user state — keep whatever the
+    // store persisted rather than forcing it back on for the next sign-in.
+    _shareTipDismissed = _shareTipStore.dismissed;
     _error = null;
     notifyListeners();
   }

@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -8,15 +12,16 @@ import '../services/link_launcher.dart';
 import '../state/app_state.dart';
 import '../widgets/day_toggle.dart';
 import '../widgets/editorial.dart';
+import '../widgets/inbound_address_card.dart';
 import '../widgets/onboarding_progress_dots.dart';
 import '../widgets/topic_icon.dart';
 import '../widgets/voice_choice_card.dart';
 import '../widgets/weather_location_field.dart';
 import 'swipe_deck_screen.dart';
 
-/// Onboarding wizard (welcome → voice → style+weather → name → topics → swipe →
-/// Substack → format → co-host → schedule → done). Editorial rebuild on the
-/// shared step-shell pattern from iOS: serif display title, body subtitle, a
+/// Onboarding wizard (welcome → voice → style+weather → format → co-host → name
+/// → topics → swipe → Substack → share → schedule → done). Editorial rebuild on
+/// the shared step-shell pattern from iOS: serif display title, body subtitle, a
 /// scrollable content well, and a bottom amber primary / outlined-back button
 /// pair, with the progress dots up top. On finish the picks are written through
 /// to the podcast profile + schedule (best-effort) before completeOnboarding
@@ -36,17 +41,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   ///     on the style step;
   ///   - the second-voice / co-host step (8) only for a two-host show — solo and
   ///     rotating-guest shows use the single host voice picked up front.
-  /// The format step (7) is placed right after the style step (2).
+  /// The format step (7) is placed right after the style step (2), and the
+  /// co-host step (8) directly follows the format step when two hosts is picked.
   List<int> get _activeSteps => [
         0, // welcome
         1, // pick your voice (host)
         2, // style your show
         7, // choose a format
+        if (_isTwoHost) 8, // add a co-host (second voice)
         if (_greeting) 3, // what should we call you?
         4, // pick your topics
         5, // tune your pod (swipe deck)
         6, // add your Substacks
-        if (_isTwoHost) 8, // add a co-host (second voice)
+        11, // add from anywhere (OS share sheet)
         9, // set your schedule
         10, // you're all set
       ];
@@ -116,6 +123,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool get _isTwoHost => _showPreset == 'two_hosts';
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Warm the source catalog the moment onboarding opens so the "Pick your
+    // topics" step (several taps in) paints instantly instead of waiting on a
+    // live round-trip — the catalog endpoint is in-memory server-side, so a
+    // slow load is almost always a Cloud Run cold start. `??=` keeps this a
+    // one-shot; the topics step's own lazy init is the fallback, and the retry
+    // path resets `_catalog` to force a refetch.
+    _catalog ??= AppScope.of(context).repository.fetchCatalog();
+  }
+
+  @override
   void dispose() {
     _nameController.dispose();
     _weatherController.dispose();
@@ -152,6 +171,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       );
     }
     if (!mounted) return;
+    // Auto-kick the user's first episode as they leave onboarding — parity with
+    // iOS, which fires generateNow() on the final onboarding step. Not awaited:
+    // generateNow() flips isGenerating synchronously, so the dashboard greets the
+    // user with the generation banner + progress bar the moment we hand off.
+    // Runs after the profile/source/schedule writes above so the backend
+    // generates against the picks just saved.
+    unawaited(app.generateNow());
     app.completeOnboarding();
   }
 
@@ -212,6 +238,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         weekdays: _selectedDays.toList(),
         localTime: _formatTime(_deliveryTime),
       );
+
+      // Persist the greeting name so the app-entered value — not the account
+      // name pulled from Google/Apple at sign-in — becomes the display name.
+      // Mirrors podcast_setup_screen._save(); only writes when the greeting is
+      // on and a name was typed, so users who skip it keep the account default.
+      final name = _nameController.text.trim();
+      if (_greeting && name.isNotEmpty && name != app.me?.user.displayName) {
+        await app.repository.updateProfile(
+          displayName: name,
+          timezone: schedule.schedule.timezone,
+        );
+        await app.loadMe();
+      }
       return true;
     } catch (_) {
       return false;
@@ -379,6 +418,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               'at 07:00.',
           children: [_scheduleEditor()],
         );
+      case 11:
+        return _shell(
+          title: 'Add from anywhere',
+          subtitle:
+              'One more thing worth knowing: outside the app — reading in your '
+              'browser, Mail, or Substack — you can send anything straight to '
+              'ClawCast and we’ll work it into your next pod. No copy-paste.',
+          children: const [_ShareFromAnywhereStep()],
+        );
       default:
         return _shell(
           title: "You're all set",
@@ -439,6 +487,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             child: Center(child: CircularProgressIndicator()),
           );
         }
+        if (snapshot.hasError) {
+          return _topicsError();
+        }
         final topics = _topicsFrom(snapshot.data);
         return EditorialCard(
           children: [
@@ -466,6 +517,35 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ],
         );
       },
+    );
+  }
+
+  /// Shown when the catalog fetch fails or times out on the topics step.
+  /// Without this the FutureBuilder falls through to an empty card (zero chips,
+  /// no explanation) with the failed future still cached, so the user can never
+  /// recover. The retry resets `_catalog` to a fresh fetch and rebuilds.
+  Widget _topicsError() {
+    return EditorialCard(
+      children: [
+        const MetaLabel('Topics'),
+        Text(
+          "We couldn't load topics. Check your connection and try again.",
+          style: DesignTokens.typographyCallout
+              .copyWith(color: DesignTokens.colorMuted),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(
+            onPressed: () => setState(() {
+              _catalog = AppScope.of(context).repository.fetchCatalog();
+            }),
+            style: TextButton.styleFrom(
+              foregroundColor: DesignTokens.colorAmberDeep,
+            ),
+            child: const Text('Try again'),
+          ),
+        ),
+      ],
     );
   }
 
@@ -900,6 +980,174 @@ class _WelcomePoints extends StatelessWidget {
   }
 }
 
+/// Onboarding teach step for the OS share sheet. ClawCast ingests whatever the
+/// user reads elsewhere, but that flow lives entirely in the system share sheet
+/// (there's no in-app button), so onboarding surfaces it once — a mock of the
+/// share sheet plus a three-step how-to. The dashboard's `_ShareTipCard` is the
+/// recurring reminder; this is the first introduction.
+class _ShareFromAnywhereStep extends StatelessWidget {
+  const _ShareFromAnywhereStep();
+
+  @override
+  Widget build(BuildContext context) {
+    // Match the platform's name for the affordance: "Share" on Android, "the
+    // Share button" on iOS — so the instruction matches what the user sees.
+    final shareVerb =
+        (!kIsWeb && Platform.isIOS) ? 'the Share button' : 'Share';
+    final steps = [
+      'Reading something good? Tap $shareVerb in your browser, Mail, or Substack.',
+      'Pick ClawCast from the share sheet.',
+      'We work it into your next pod — automatically.',
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _ShareSheetMock(),
+        const SizedBox(height: DesignTokens.spacingL),
+        EditorialCard(
+          spacing: DesignTokens.spacingM,
+          children: [
+            for (var i = 0; i < steps.length; i++)
+              _NumberedRow(index: i, text: steps[i]),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// A numbered "agenda" row: amber badge with the 1-based index, then the label.
+class _NumberedRow extends StatelessWidget {
+  const _NumberedRow({required this.index, required this.text});
+
+  final int index;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 26,
+          height: 26,
+          alignment: Alignment.center,
+          decoration: const BoxDecoration(
+            color: DesignTokens.colorAmber,
+            shape: BoxShape.circle,
+          ),
+          child: Text(
+            '${index + 1}',
+            style: DesignTokens.typographyCalloutStrong
+                .copyWith(color: Colors.white),
+          ),
+        ),
+        const SizedBox(width: DesignTokens.spacingM),
+        Expanded(
+          child: Text(
+            text,
+            style:
+                DesignTokens.typographyBody.copyWith(color: DesignTokens.colorInk),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A stylised mock of the OS share sheet with the ClawCast row highlighted, so
+/// users recognise the target when they open the real sheet. Purely decorative.
+class _ShareSheetMock extends StatelessWidget {
+  const _ShareSheetMock();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(DesignTokens.spacingM),
+      decoration: BoxDecoration(
+        color: DesignTokens.colorCream,
+        borderRadius: BorderRadius.circular(DesignTokens.radiusCard),
+        border: Border.all(color: DesignTokens.colorRule),
+      ),
+      child: Column(
+        children: [
+          // Grabber handle, like a bottom sheet.
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: DesignTokens.colorRule,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          const SizedBox(height: DesignTokens.spacingM),
+          Row(
+            children: [
+              const Icon(Icons.ios_share,
+                  size: 16, color: DesignTokens.colorMuted),
+              const SizedBox(width: 6),
+              Text(
+                'Share',
+                style: DesignTokens.typographyCalloutStrong
+                    .copyWith(color: DesignTokens.colorMuted),
+              ),
+            ],
+          ),
+          const SizedBox(height: DesignTokens.spacingM),
+          // The highlighted ClawCast destination.
+          Container(
+            padding: const EdgeInsets.all(DesignTokens.spacingS),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(DesignTokens.radiusCard),
+              border: Border.all(color: DesignTokens.colorAmber, width: 1.5),
+            ),
+            child: Row(
+              children: [
+                const ClawcastLogo(size: 36),
+                const SizedBox(width: DesignTokens.spacingM),
+                Expanded(
+                  child: Text(
+                    'ClawCast',
+                    style: DesignTokens.typographyBodyStrong
+                        .copyWith(color: DesignTokens.colorInk),
+                  ),
+                ),
+                const Icon(Icons.check_circle,
+                    size: 20, color: DesignTokens.colorAmberDeep),
+              ],
+            ),
+          ),
+          const SizedBox(height: DesignTokens.spacingS),
+          // Dimmed sibling rows so it reads as one option among many.
+          for (final sib in const ['Messages', 'Mail', 'Notes'])
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: DesignTokens.colorRule,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  const SizedBox(width: DesignTokens.spacingM),
+                  Text(
+                    sib,
+                    style: DesignTokens.typographyBody
+                        .copyWith(color: DesignTokens.colorMuted),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 /// A selectable topic pill. Amber fill when selected; cream/outline when not.
 class _TopicChip extends StatelessWidget {
   const _TopicChip({
@@ -1296,7 +1544,10 @@ class _OnboardingSubstackStepState extends State<_OnboardingSubstackStep> {
         const SizedBox(height: DesignTokens.spacingL),
         const MetaLabel('Already subscribe to newsletters?'),
         const SizedBox(height: DesignTokens.spacingM),
-        const _InboundAddressCard(),
+        InboundAddressCard(
+          address: AppScope.of(context).me?.user.inboundAddress ??
+              'you@theclawcast.com',
+        ),
       ],
     );
   }
@@ -1489,57 +1740,3 @@ class _PaidTag extends StatelessWidget {
   }
 }
 
-class _InboundAddressCard extends StatefulWidget {
-  const _InboundAddressCard();
-
-  @override
-  State<_InboundAddressCard> createState() => _InboundAddressCardState();
-}
-
-class _InboundAddressCardState extends State<_InboundAddressCard> {
-  bool _copied = false;
-
-  Future<void> _copy(String address) async {
-    final messenger = ScaffoldMessenger.of(context);
-    await Clipboard.setData(ClipboardData(text: address));
-    if (!mounted) return;
-    setState(() => _copied = true);
-    messenger.showSnackBar(
-      const SnackBar(content: Text('Email address copied')),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final address =
-        AppScope.of(context).me?.user.inboundAddress ?? 'you@theclawcast.com';
-    return EditorialCard(
-      spacing: DesignTokens.spacingS,
-      children: [
-        const MetaLabel('Your private inbound address'),
-        // Selectable so the address can be long-pressed/copied manually too,
-        // alongside the explicit Copy button below.
-        SelectableText(
-          address,
-          style: DesignTokens.typographyTitle
-              .copyWith(color: DesignTokens.colorAmberDeep),
-        ),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: AmberButton.filled(
-            label: _copied ? 'Copied' : 'Copy email address',
-            icon: _copied ? Icons.check : Icons.copy,
-            expand: false,
-            onPressed: () => _copy(address),
-          ),
-        ),
-        Text(
-          'Forward newsletters here, or use this address when you subscribe to '
-          'new ones. The next episode picks them up automatically.',
-          style: DesignTokens.typographyCallout
-              .copyWith(color: DesignTokens.colorInkSoft),
-        ),
-      ],
-    );
-  }
-}

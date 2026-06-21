@@ -191,6 +191,10 @@ class _Dashboard extends StatelessWidget {
           const SizedBox(height: DesignTokens.spacingL),
           _TrialGiftCard(onAcknowledge: app.acknowledgeTrialGift),
         ],
+        if (!app.shareTipDismissed) ...[
+          const SizedBox(height: DesignTokens.spacingL),
+          _ShareTipCard(onDismiss: app.dismissShareTip),
+        ],
         const SizedBox(height: DesignTokens.spacingL),
         _PlanCard(
           subscription: me.subscription,
@@ -914,6 +918,69 @@ class _TrialGiftCard extends StatelessWidget {
     );
   }
 }
+
+/// One-time teach card for the OS share-sheet integration. ClawCast can ingest
+/// anything the user reads elsewhere (an article in the browser, a newsletter in
+/// Mail, a Substack post), but that flow lives entirely in the system share
+/// sheet — there's no in-app button — so users never discover it on their own.
+/// Dismissible; the dismissal persists across launches on the real build (see
+/// [AppState.shareTipDismissed] / [ShareTipStore]).
+class _ShareTipCard extends StatelessWidget {
+  const _ShareTipCard({required this.onDismiss});
+
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        Row(
+          children: [
+            const Expanded(child: MetaLabel('Tip')),
+            InkWell(
+              onTap: onDismiss,
+              child: const Icon(Icons.close,
+                  size: 18, color: DesignTokens.colorMuted),
+            ),
+          ],
+        ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.ios_share,
+                size: 22, color: DesignTokens.colorAmberDeep),
+            const SizedBox(width: DesignTokens.spacingM),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Add anything you read',
+                    style: DesignTokens.typographySubtitle
+                        .copyWith(color: DesignTokens.colorInk),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Found a great article or newsletter in your browser, Mail, '
+                    'or Substack? Tap $_shareVerb → ClawCast and we’ll work it '
+                    'into your next pod.',
+                    style: DesignTokens.typographyCallout
+                        .copyWith(color: DesignTokens.colorInkSoft),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// The platform's name for the share affordance: "Share" on Android, "the Share
+/// button" on iOS. Keeps the tip's instruction matching what the user sees.
+String get _shareVerb => Platform.isIOS ? 'the Share button' : 'Share';
 
 class _SetupChecklistCard extends StatelessWidget {
   const _SetupChecklistCard({
