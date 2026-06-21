@@ -1,9 +1,11 @@
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
 import '../design_tokens.dart';
+import '../services/apple_podcasts.dart';
 import '../services/dictation_controller.dart';
 import '../state/app_state.dart';
 import '../widgets/editorial.dart';
@@ -111,7 +113,17 @@ class _HomeScreenState extends State<HomeScreen> {
       body: SafeArea(
         child: switch ((app.loading, me)) {
           (true, null) => const Center(child: CircularProgressIndicator()),
-          (_, null) => Center(child: Text(app.error ?? 'Something went wrong')),
+          (_, null) => Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: DesignTokens.spacingXl,
+                ),
+                child: Text(
+                  app.error ?? 'Something went wrong',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
           (_, final MeEnvelope loaded) => _Dashboard(
               me: loaded,
               app: app,
@@ -302,6 +314,34 @@ class _HeroEpisodeCard extends StatefulWidget {
 class _HeroEpisodeCardState extends State<_HeroEpisodeCard> {
   bool _descExpanded = false;
   bool _transcriptExpanded = false;
+  bool _openingFeed = false;
+
+  /// The "open in podcast app" action. On iOS, fetch the private feed and hand
+  /// it straight to Apple Podcasts (matching the button's "Open in Apple
+  /// Podcasts" label — no intermediate screen). Everywhere else, route to the
+  /// feed-access screen, which carries the platform's player flow (Podcast
+  /// Addict on Android) plus the copy-link fallback for any other app.
+  Future<void> _openInPodcastApp() async {
+    if (kIsWeb || !Platform.isIOS) {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const FeedAccessScreen()),
+      );
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _openingFeed = true);
+    try {
+      final feed = await widget.app.repository.fetchFeed();
+      if (!mounted) return;
+      await ApplePodcasts.open(context, feed.feedUrl);
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text("Couldn't load your feed. Try again.")),
+      );
+    } finally {
+      if (mounted) setState(() => _openingFeed = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -386,11 +426,10 @@ class _HeroEpisodeCardState extends State<_HeroEpisodeCard> {
         AmberButton.filled(
           label: _openInPodcastAppLabel(),
           icon: Icons.play_arrow,
-          onPressed: ep == null
+          loading: _openingFeed,
+          onPressed: ep == null || _openingFeed
               ? null
-              : () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const FeedAccessScreen()),
-                  ),
+              : () => _openInPodcastApp(),
         ),
         const SizedBox(height: DesignTokens.spacingM),
         AmberButton.filled(

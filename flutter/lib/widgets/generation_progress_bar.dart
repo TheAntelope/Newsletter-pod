@@ -13,10 +13,17 @@ class GenerationProgressBar extends StatefulWidget {
   const GenerationProgressBar({
     super.key,
     required this.isGenerating,
+    this.startedAt,
     this.expectedDuration = const Duration(seconds: 240),
   });
 
   final bool isGenerating;
+
+  /// When the current run began. Supplied by the parent (from AppState) so the
+  /// bar's progress survives being recycled out of a scrolling ListView. Falls
+  /// back to a locally-captured start time when omitted (demo build / tests).
+  final DateTime? startedAt;
+
   final Duration expectedDuration;
 
   @override
@@ -26,9 +33,13 @@ class GenerationProgressBar extends StatefulWidget {
 class _GenerationProgressBarState extends State<GenerationProgressBar> {
   static const double _cap = 0.95;
 
-  DateTime? _startedAt;
+  // Used only when the parent doesn't supply [widget.startedAt]; the live app
+  // passes a persistent start time so this stays null there.
+  DateTime? _fallbackStartedAt;
   bool _didComplete = false;
   Timer? _timer;
+
+  DateTime? get _startedAt => widget.startedAt ?? _fallbackStartedAt;
 
   @override
   void initState() {
@@ -52,17 +63,15 @@ class _GenerationProgressBarState extends State<GenerationProgressBar> {
 
   void _sync(bool active) {
     if (active) {
-      if (_startedAt == null) {
-        _startedAt = DateTime.now();
-        _didComplete = false;
-        _timer ??= Timer.periodic(const Duration(milliseconds: 500), (_) {
-          if (mounted) setState(() {});
-        });
-      }
+      _fallbackStartedAt ??= DateTime.now();
+      _didComplete = false;
+      _timer ??= Timer.periodic(const Duration(milliseconds: 500), (_) {
+        if (mounted) setState(() {});
+      });
     } else if (_startedAt != null) {
       setState(() {
         _didComplete = true;
-        _startedAt = null;
+        _fallbackStartedAt = null;
       });
       _timer?.cancel();
       _timer = null;

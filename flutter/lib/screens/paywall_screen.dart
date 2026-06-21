@@ -22,7 +22,6 @@ class PaywallScreen extends StatefulWidget {
     _Plan(
       tier: 'free',
       name: 'Free',
-      price: 'Free',
       recommended: false,
       features: [
         '1 default-voice pod per week',
@@ -32,7 +31,8 @@ class PaywallScreen extends StatefulWidget {
     _Plan(
       tier: 'pro',
       name: 'Pro',
-      price: r'$19.99/mo · $179.99/yr',
+      monthlyPrice: r'$19.99/mo',
+      annualPrice: r'$179.99/yr',
       recommended: true,
       features: [
         '3 premium-voice pods per week',
@@ -43,7 +43,8 @@ class PaywallScreen extends StatefulWidget {
     _Plan(
       tier: 'max',
       name: 'Max',
-      price: r'$29.99/mo · $269.99/yr',
+      monthlyPrice: r'$29.99/mo',
+      annualPrice: r'$269.99/yr',
       recommended: false,
       features: [
         '7 premium-voice pods per week',
@@ -59,6 +60,10 @@ class _PaywallScreenState extends State<PaywallScreen> {
   String? _busyTier;
   bool _restoring = false;
 
+  /// Selected billing period for the paid plans. Drives both the price shown on
+  /// each card and the `annual:` flag passed to the purchase.
+  bool _annual = false;
+
   Future<void> _choose(AppState app, String tier) async {
     final messenger = ScaffoldMessenger.of(context);
     if (!FeatureFlags.purchasesRevenueCat) {
@@ -71,7 +76,7 @@ class _PaywallScreenState extends State<PaywallScreen> {
     }
     setState(() => _busyTier = tier);
     try {
-      final ok = await PurchasesController.purchase(tier);
+      final ok = await PurchasesController.purchase(tier, annual: _annual);
       if (ok) {
         await app.loadMe(); // backend reconciles the plan from the webhook
         messenger.showSnackBar(
@@ -145,9 +150,23 @@ class _PaywallScreenState extends State<PaywallScreen> {
               _TrialStatusCard(entitlements: entitlements),
               const SizedBox(height: DesignTokens.spacingL),
             ],
+            Center(
+              child: SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: false, label: Text('Monthly')),
+                  ButtonSegment(value: true, label: Text('Yearly · save ~25%')),
+                ],
+                selected: {_annual},
+                showSelectedIcon: false,
+                onSelectionChanged: (selection) =>
+                    setState(() => _annual = selection.first),
+              ),
+            ),
+            const SizedBox(height: DesignTokens.spacingL),
             for (final plan in PaywallScreen._plans) ...[
               _PlanCard(
                 plan: plan,
+                annual: _annual,
                 current: plan.tier == currentTier,
                 busy: _busyTier == plan.tier,
                 onChoose: () => _choose(app, plan.tier),
@@ -180,16 +199,28 @@ class _Plan {
   const _Plan({
     required this.tier,
     required this.name,
-    required this.price,
     required this.recommended,
     required this.features,
+    this.monthlyPrice,
+    this.annualPrice,
   });
 
   final String tier;
   final String name;
-  final String price;
   final bool recommended;
   final List<String> features;
+
+  /// Null for the Free plan (no purchasable period).
+  final String? monthlyPrice;
+  final String? annualPrice;
+
+  bool get isPaid => monthlyPrice != null;
+
+  /// Price label for the selected period; 'Free' for the non-paid plan.
+  String priceLabel({required bool annual}) {
+    if (!isPaid) return 'Free';
+    return (annual ? annualPrice : monthlyPrice)!;
+  }
 }
 
 class _TrialStatusCard extends StatelessWidget {
@@ -246,12 +277,14 @@ class _TrialStatusCard extends StatelessWidget {
 class _PlanCard extends StatelessWidget {
   const _PlanCard({
     required this.plan,
+    required this.annual,
     required this.current,
     required this.busy,
     required this.onChoose,
   });
 
   final _Plan plan;
+  final bool annual;
   final bool current;
   final bool busy;
   final VoidCallback onChoose;
@@ -287,7 +320,7 @@ class _PlanCard extends StatelessWidget {
             ],
             const Spacer(),
             Text(
-              plan.price,
+              plan.priceLabel(annual: annual),
               style: DesignTokens.typographyCallout
                   .copyWith(color: DesignTokens.colorMuted),
             ),
