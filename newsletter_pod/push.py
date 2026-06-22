@@ -211,6 +211,7 @@ class FcmSender:
         notification: dict,
         data: Optional[dict] = None,
         collapse_key: Optional[str] = None,
+        apns_expiration_seconds: Optional[int] = None,
     ) -> "PushResult":
         url = _FCM_SEND_URL.format(project_id=self.project_id)
         message: dict = {
@@ -219,9 +220,26 @@ class FcmSender:
             # FCM data values must be strings.
             "data": {k: str(v) for k, v in (data or {}).items()},
             "android": {"priority": "high"},
+            # iOS rides this same FCM token through FCM→APNs. Without explicit
+            # APNs headers the push goes out at default priority with no stored
+            # expiry, so an iPhone that's offline at send time can silently drop
+            # it instead of receiving it on reconnect. Set alert push-type and
+            # high priority for every visible push.
+            "apns": {"headers": {"apns-push-type": "alert", "apns-priority": "10"}},
         }
         if collapse_key:
             message["android"]["collapse_key"] = collapse_key
+            # Same collapse id on the APNs leg so an offline device that comes
+            # back online gets only the freshest alert, never a stack of stale
+            # ones.
+            message["apns"]["headers"]["apns-collapse-id"] = collapse_key
+        if apns_expiration_seconds is not None:
+            # APNs wants an absolute UNIX expiry. Until that moment APNs stores
+            # the notification and retries delivery to an offline device; after
+            # it, the push is dropped (a stale "ready" alert isn't worth showing).
+            message["apns"]["headers"]["apns-expiration"] = str(
+                int(time.time()) + apns_expiration_seconds
+            )
         headers = {
             "Authorization": f"Bearer {self._access_token()}",
             "Content-Type": "application/json",
@@ -304,6 +322,7 @@ def _dispatch_to_user_devices(
     collapse_id: str,
     log_label: str,
     apns_priority: int = 10,
+    fcm_apns_expiration_seconds: Optional[int] = None,
 ) -> dict:
     """Fan a single notification out to every active device a user has,
     routing iOS tokens through APNs ([sender]) and Android tokens through FCM
@@ -353,6 +372,7 @@ def _dispatch_to_user_devices(
                 notification=fcm_notification,
                 data=fcm_data,
                 collapse_key=collapse_id,
+                apns_expiration_seconds=fcm_apns_expiration_seconds,
             )
         else:
             if sender is None:
@@ -437,6 +457,12 @@ def send_substack_verification_push(
     )
 
 
+# A briefing is a daily artifact, so a "ready" push is worth delivering to an
+# iPhone that's been offline for up to a day, but not beyond — after that the
+# next briefing supersedes it. Drives the APNs store-and-retry window.
+_POD_READY_APNS_EXPIRATION_SECONDS = 24 * 60 * 60
+
+
 def build_pod_ready_payload(*, episode_title: str, feed_url: Optional[str] = None,
                             episode_id: Optional[str] = None) -> dict:
     """Construct the APNs JSON body for a "your pod is ready" push.
@@ -505,6 +531,8 @@ def send_pod_ready_push(
         fcm_data=fcm_data,
         collapse_id=f"pod-ready-{user_id[:8]}",
         log_label="pod-ready push",
+        # Store-and-retry to an iPhone that was offline when the pod published.
+        fcm_apns_expiration_seconds=_POD_READY_APNS_EXPIRATION_SECONDS,
     )
 
 

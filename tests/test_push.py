@@ -1,6 +1,7 @@
 """Tests for newsletter_pod.push — APNs sender + Substack verification push."""
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -343,6 +344,29 @@ def test_fcm_sender_send_200_targets_v1_endpoint_with_bearer():
     assert message["data"]["code"] == "812807"  # values stringified
     assert message["android"]["priority"] == "high"
     assert message["android"]["collapse_key"] == "substack-verify-abcdef12"
+    # iOS (FCM→APNs) gets explicit headers so an offline iPhone receives it on
+    # reconnect; the collapse id rides the APNs leg too.
+    apns_headers = message["apns"]["headers"]
+    assert apns_headers["apns-push-type"] == "alert"
+    assert apns_headers["apns-priority"] == "10"
+    assert apns_headers["apns-collapse-id"] == "substack-verify-abcdef12"
+    # No expiration requested → APNs uses its default (header absent).
+    assert "apns-expiration" not in apns_headers
+
+
+def test_fcm_sender_send_sets_apns_expiration_window():
+    client = _StubClient([_StubResponse(200, {"name": "projects/x/messages/1"})])
+    sender = _make_fcm_sender(client)
+    before = int(time.time())
+    sender.send(
+        device_token="d" * 64,
+        notification={"title": "t", "body": "b"},
+        apns_expiration_seconds=24 * 60 * 60,
+    )
+    after = int(time.time())
+    expiration = int(client.calls[0]["json"]["message"]["apns"]["headers"]["apns-expiration"])
+    # Absolute UNIX expiry ≈ now + 24h, bounded by the wall-clock either side.
+    assert before + 24 * 60 * 60 <= expiration <= after + 24 * 60 * 60
 
 
 def test_fcm_sender_send_404_unregistered_marks_invalid():
@@ -510,6 +534,11 @@ def test_send_pod_ready_push_routes_android_to_fcm_and_ios_to_apns():
     assert fcm_message["data"]["episode_id"] == "abc-2026-06-04-deadbeef"
     # Collapse id is user-keyed so a newer episode replaces a stale alert.
     assert apns_client.calls[0]["headers"]["apns-collapse-id"] == "pod-ready-u1"
+    # The FCM→APNs leg carries a 24h store-and-retry window so an iPhone that
+    # was offline when the pod published still gets the briefing on reconnect.
+    fcm_apns = fcm_message["apns"]["headers"]
+    assert fcm_apns["apns-collapse-id"] == "pod-ready-u1"
+    assert int(fcm_apns["apns-expiration"]) >= int(time.time()) + 24 * 60 * 60 - 5
 
 
 def test_pod_ready_ios_fcm_token_routes_to_fcm_not_apns():
