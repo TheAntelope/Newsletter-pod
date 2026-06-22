@@ -40,14 +40,35 @@ class _HomeScreenState extends State<HomeScreen> {
   int _enabledSourceCount = 0;
   bool _loadedSources = false;
 
+  bool _wasGenerating = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (!_initialized) {
       _initialized = true;
       _app = AppScope.of(context);
+      _wasGenerating = _app.isGenerating;
+      _app.addListener(_onAppStateChanged);
       _loadExtras();
     }
+  }
+
+  /// When a generation run finishes (isGenerating true -> false), refetch the
+  /// latest episode + queue/sources so a freshly-published pod surfaces in the
+  /// hero card without a manual reload.
+  void _onAppStateChanged() {
+    final nowGenerating = _app.isGenerating;
+    if (_wasGenerating && !nowGenerating) {
+      _loadExtras();
+    }
+    _wasGenerating = nowGenerating;
+  }
+
+  @override
+  void dispose() {
+    if (_initialized) _app.removeListener(_onAppStateChanged);
+    super.dispose();
   }
 
   Future<void> _loadExtras() async {
@@ -174,6 +195,13 @@ class _Dashboard extends StatelessWidget {
           _GenerationBanner(
             hasEpisode: latestEpisode != null,
             message: app.lastRunMessage,
+            startedAt: app.generationStartedAt,
+          ),
+          const SizedBox(height: DesignTokens.spacingL),
+        ] else if (app.runNotice != null) ...[
+          _RunNoticeBanner(
+            message: app.runNotice!,
+            onDismiss: app.clearRunNotice,
           ),
           const SizedBox(height: DesignTokens.spacingL),
         ],
@@ -255,10 +283,15 @@ class _GreetingHeader extends StatelessWidget {
 }
 
 class _GenerationBanner extends StatelessWidget {
-  const _GenerationBanner({required this.hasEpisode, required this.message});
+  const _GenerationBanner({
+    required this.hasEpisode,
+    required this.message,
+    required this.startedAt,
+  });
 
   final bool hasEpisode;
   final String? message;
+  final DateTime? startedAt;
 
   @override
   Widget build(BuildContext context) {
@@ -296,7 +329,57 @@ class _GenerationBanner extends StatelessWidget {
             ),
           ],
         ),
-        const GenerationProgressBar(isGenerating: true),
+        GenerationProgressBar(isGenerating: true, startedAt: startedAt),
+      ],
+    );
+  }
+}
+
+/// Shown after a run finishes without producing an episode (quota reached, no
+/// sources, no fresh content, or a failure) — replaces the silent hang at 95%.
+class _RunNoticeBanner extends StatelessWidget {
+  const _RunNoticeBanner({required this.message, required this.onDismiss});
+
+  final String message;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.info_outline,
+                size: 22, color: DesignTokens.colorAmberDeep),
+            const SizedBox(width: DesignTokens.spacingM),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'No episode this time',
+                    style: DesignTokens.typographySubtitle
+                        .copyWith(color: DesignTokens.colorInk),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    message,
+                    style: DesignTokens.typographyCallout
+                        .copyWith(color: DesignTokens.colorInkSoft),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Dismiss',
+              onPressed: onDismiss,
+              icon: const Icon(Icons.close, size: 18),
+              color: DesignTokens.colorInkSoft,
+            ),
+          ],
+        ),
       ],
     );
   }
