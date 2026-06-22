@@ -298,6 +298,9 @@ PodcastProfileDto _$PodcastProfileDtoFromJson(Map<String, dynamic> json) =>
       includeTopTakeaways: json['include_top_takeaways'] as bool?,
       includeWeather: json['include_weather'] as bool?,
       weatherLocation: json['weather_location'] as String?,
+      weatherLat: (json['weather_lat'] as num?)?.toDouble(),
+      weatherLon: (json['weather_lon'] as num?)?.toDouble(),
+      weatherCountryCode: json['weather_country_code'] as String?,
       customGuidance: json['custom_guidance'] as String?,
       customGuidancePresetId: json['custom_guidance_preset_id'] as String?,
     );
@@ -319,6 +322,9 @@ Map<String, dynamic> _$PodcastProfileDtoToJson(PodcastProfileDto instance) =>
       'include_top_takeaways': instance.includeTopTakeaways,
       'include_weather': instance.includeWeather,
       'weather_location': instance.weatherLocation,
+      'weather_lat': instance.weatherLat,
+      'weather_lon': instance.weatherLon,
+      'weather_country_code': instance.weatherCountryCode,
       'custom_guidance': instance.customGuidance,
       'custom_guidance_preset_id': instance.customGuidancePresetId,
     };
