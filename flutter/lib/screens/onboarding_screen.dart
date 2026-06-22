@@ -100,7 +100,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   int _step = 0;
   final _nameController = TextEditingController();
-  final _weatherController = TextEditingController();
   String _showPreset = 'two_hosts';
   // Topic categories the user picks on the sources step. These both enable the
   // matching catalog sources (pod tuning) on finish and seed the swipe deck.
@@ -115,6 +114,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _greeting = true;
   bool _topTakeaways = true;
   bool _includeWeather = false;
+  // The weather city, owned by [WeatherLocationField]: the saved label plus the
+  // coordinates of the picked place (null until confirmed via the dropdown/GPS).
+  String? _weatherLabel;
+  double? _weatherLat;
+  double? _weatherLon;
+  String? _weatherCountryCode;
   final Set<String> _selectedDays = {'mon', 'tue', 'wed', 'thu', 'fri'};
   TimeOfDay _deliveryTime = const TimeOfDay(hour: 7, minute: 0);
 
@@ -137,7 +142,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   void dispose() {
     _nameController.dispose();
-    _weatherController.dispose();
     super.dispose();
   }
 
@@ -207,7 +211,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     try {
       final config = await app.repository.fetchPodcastConfig();
       final loaded = config.profile;
-      final weather = _weatherController.text.trim();
       final updated = PodcastProfileDto(
         title: loaded.title,
         formatPreset: _showPreset,
@@ -225,7 +228,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         personalizedGreeting: _greeting,
         includeTopTakeaways: _topTakeaways,
         includeWeather: _includeWeather,
-        weatherLocation: weather.isEmpty ? null : weather,
+        weatherLocation: _weatherLabel,
+        weatherLat: _weatherLat,
+        weatherLon: _weatherLon,
+        weatherCountryCode: _weatherCountryCode,
         customGuidance: loaded.customGuidance,
         customGuidancePresetId: loaded.customGuidancePresetId,
       );
@@ -784,7 +790,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         ),
         if (_includeWeather) ...[
           const EditorialDivider(),
-          WeatherLocationField(controller: _weatherController),
+          WeatherLocationField(
+            initialLabel: _weatherLabel,
+            initialLatitude: _weatherLat,
+            initialLongitude: _weatherLon,
+            onChanged: (label, lat, lon, countryCode) {
+              _weatherLabel = label;
+              _weatherLat = lat;
+              _weatherLon = lon;
+              _weatherCountryCode = countryCode;
+            },
+          ),
         ],
       ],
     );

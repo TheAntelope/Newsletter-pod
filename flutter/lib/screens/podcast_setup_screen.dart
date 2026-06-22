@@ -126,7 +126,6 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
   final _titleController = TextEditingController();
   final _hostPrimaryController = TextEditingController();
   final _hostSecondaryController = TextEditingController();
-  final _weatherController = TextEditingController();
   final _guidanceController = TextEditingController();
   // The listener's name, used only when "Greet me by name" is on (account-level
   // displayName, not a profile field).
@@ -143,6 +142,12 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
   bool _greeting = true;
   bool _topTakeaways = true;
   bool _includeWeather = false;
+  // The weather city, owned by [WeatherLocationField]: saved label + the picked
+  // place's coordinates (null until confirmed via the dropdown/GPS).
+  String? _weatherLabel;
+  double? _weatherLat;
+  double? _weatherLon;
+  String? _weatherCountryCode;
   String? _presetId;
 
   final Set<String> _weekdays = {};
@@ -183,7 +188,10 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
         _nameController.text = _app.me?.user.displayName ?? '';
         _hostPrimaryController.text = p.hostPrimaryName;
         _hostSecondaryController.text = p.hostSecondaryName ?? '';
-        _weatherController.text = p.weatherLocation ?? '';
+        _weatherLabel = p.weatherLocation;
+        _weatherLat = p.weatherLat;
+        _weatherLon = p.weatherLon;
+        _weatherCountryCode = p.weatherCountryCode;
         _guidanceController.text = p.customGuidance ?? '';
         _formatPreset = p.formatPreset;
         _durationMinutes = p.desiredDurationMinutes;
@@ -230,7 +238,6 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
     _titleController.dispose();
     _hostPrimaryController.dispose();
     _hostSecondaryController.dispose();
-    _weatherController.dispose();
     _guidanceController.dispose();
     _nameController.dispose();
     super.dispose();
@@ -269,7 +276,6 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
     final title = _titleController.text.trim();
     final hostPrimary = _hostPrimaryController.text.trim();
     final hostSecondary = _hostSecondaryController.text.trim();
-    final weather = _weatherController.text.trim();
     final guidance = _guidanceController.text.trim();
     final updated = PodcastProfileDto(
       title: title.isEmpty ? loaded.title : title,
@@ -290,7 +296,10 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
       personalizedGreeting: _greeting,
       includeTopTakeaways: _topTakeaways,
       includeWeather: _includeWeather,
-      weatherLocation: weather.isEmpty ? null : weather,
+      weatherLocation: _weatherLabel,
+      weatherLat: _weatherLat,
+      weatherLon: _weatherLon,
+      weatherCountryCode: _weatherCountryCode,
       customGuidance: guidance.isEmpty ? null : guidance,
       customGuidancePresetId: _presetId,
     );
@@ -523,7 +532,17 @@ class _PodcastSetupScreenState extends State<PodcastSetupScreen> {
               onChanged: (v) => setState(() => _includeWeather = v),
             ),
             if (_includeWeather)
-              WeatherLocationField(controller: _weatherController),
+              WeatherLocationField(
+                initialLabel: _weatherLabel,
+                initialLatitude: _weatherLat,
+                initialLongitude: _weatherLon,
+                onChanged: (label, lat, lon, countryCode) {
+                  _weatherLabel = label;
+                  _weatherLat = lat;
+                  _weatherLon = lon;
+                  _weatherCountryCode = countryCode;
+                },
+              ),
           ],
         ),
         _section('Schedule', key: _scheduleKey),

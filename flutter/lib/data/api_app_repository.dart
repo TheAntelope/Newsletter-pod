@@ -92,6 +92,9 @@ class ApiAppRepository implements AppRepository {
         includeTopTakeaways: p.includeTopTakeaways,
         includeWeather: p.includeWeather,
         weatherLocation: p.weatherLocation,
+        weatherLat: p.weatherLat,
+        weatherLon: p.weatherLon,
+        weatherCountryCode: p.weatherCountryCode,
         customGuidance: p.customGuidance,
         customGuidancePresetId: p.customGuidancePresetId,
       );
