@@ -24,6 +24,10 @@ abstract interface class AppRepository {
 
   Future<RunStartEnvelope> generateNow();
 
+  /// Poll a single generation run's status (`GET /v1/me/runs/{runId}`). Used to
+  /// turn the "generating…" UI into a real outcome (published / skipped / …).
+  Future<RunStatusEnvelope> fetchRun(String runId);
+
   /// The private RSS feed URL/token + latest episode/run (`GET /v1/me/feed`).
   Future<FeedEnvelope> fetchFeed();
 

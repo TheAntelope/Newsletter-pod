@@ -16,11 +16,13 @@ import '../services/share_tip_store.dart';
 /// Holds session + the `/v1/me` snapshot and drives the screens via [AppScope].
 class AppState extends ChangeNotifier {
   // `_apiClient` is assigned from a differently-named param in the initializer
-  // list, so it can't be an initializing formal.
+  // list, so it can't be an initializing formal like the poll-timing fields.
   AppState(
     this._repository, {
     ApiClient? apiClient,
     ShareTipStore? shareTipStore,
+    this._pollInterval = const Duration(seconds: 3),
+    this._pollMaxAttempts = 120,
   })  : _apiClient = apiClient, // ignore: prefer_initializing_formals
         _shareTipStore = shareTipStore ?? InMemoryShareTipStore() {
     _shareTipDismissed = _shareTipStore.dismissed;
@@ -59,12 +61,27 @@ class AppState extends ChangeNotifier {
   String? _lastRunMessage;
   String? get lastRunMessage => _lastRunMessage;
 
-  /// True from the moment a generation run is kicked off. There's no run-status
-  /// polling in this build, so it stays true (the progress bar caps at 95% and
-  /// shows "you can leave the app") until sign-out — matching the iOS copy that
-  /// the episode lands in the feed asynchronously.
+  /// True from the moment a generation run is kicked off until the run reaches a
+  /// terminal status (polled via [_repository.fetchRun]) or the poll times out.
+  /// The progress bar caps at 95% while this is true and the run's real outcome
+  /// is surfaced through [runNotice] (non-published) or a refreshed episode list.
   bool _generating = false;
   bool get isGenerating => _generating;
+
+  /// Wall-clock moment the current run was kicked off, used by the self-pacing
+  /// [GenerationProgressBar] to compute elapsed progress. Lives here (not in the
+  /// bar's State) so the progress survives the bar being recycled out of the
+  /// home ListView while scrolling — otherwise the bar restarts at 0% and the
+  /// run appears to reset. Null whenever no run is in flight.
+  DateTime? _generationStartedAt;
+  DateTime? get generationStartedAt => _generationStartedAt;
+
+  /// A user-facing message for a finished run that produced no episode (quota
+  /// reached, no sources, no fresh content, or a failure). Null while a run is
+  /// in flight or after a successful publish. Cleared on [clearRunNotice], the
+  /// next [generateNow], and sign-out.
+  String? _runNotice;
+  String? get runNotice => _runNotice;
 
   /// Whether the early-adopter trial-gift card has been acknowledged this
   /// session. The card shows while `entitlements.trialGiftPending` is true and
@@ -112,6 +129,23 @@ class AppState extends ChangeNotifier {
     unawaited(_shareTipStore.setDismissed(true));
     notifyListeners();
   }
+
+  /// Run-status polling cadence + ceiling. Defaults suit production; widget
+  /// tests dispose the store before a tick fires, so they keep the defaults.
+  final Duration _pollInterval;
+  final int _pollMaxAttempts;
+
+  Timer? _pollTimer;
+  String? _pollRunId;
+  int _pollAttempts = 0;
+
+  static const _terminalRunStatuses = {
+    'published',
+    'skipped',
+    'no_content',
+    'pre_access',
+    'failed',
+  };
 
   /// Stubbed/demo sign-in (flag off): flips signed-in and loads `me` from the
   /// injected fake repository, then runs the onboarding wizard. The real path
@@ -260,15 +294,144 @@ class AppState extends ChangeNotifier {
 
   Future<void> generateNow() async {
     _error = null;
+    _runNotice = null;
     _generating = true;
+    _generationStartedAt = DateTime.now();
     notifyListeners();
+    final UserRunDto run;
     try {
       final result = await _repository.generateNow();
-      _lastRunMessage = result.run.message;
+      run = result.run;
+      _lastRunMessage = run.message;
     } catch (e) {
       _error = e.toString();
       _generating = false;
+      _generationStartedAt = null;
+      notifyListeners();
+      return;
     }
+    // A run can come back already terminal (e.g. an immediate quota skip); only
+    // poll while it's still in flight, and only if we got an id to poll on.
+    if (_terminalRunStatuses.contains(run.status)) {
+      await _finishRun(run, null);
+    } else if (run.id != null) {
+      notifyListeners();
+      _startPolling(run.id!);
+    } else {
+      notifyListeners();
+    }
+  }
+
+  /// Called when the app returns to the foreground. If a generation run is still
+  /// in flight, force an immediate status re-check (and restart the poll loop if
+  /// its timer was lost while the isolate was suspended) so a run that finished —
+  /// or was reaped server-side after stalling — while we were backgrounded
+  /// surfaces right away instead of waiting for the next periodic tick. No-op
+  /// when no run is in flight, so it's safe to call on every resume.
+  ///
+  /// The server-side stale-run reaper guarantees an orphaned run eventually
+  /// reaches a terminal `failed` status, so this never leaves the UI stuck even
+  /// if a long-backgrounded run keeps restarting the local poll loop.
+  void resumePollingIfNeeded() {
+    if (!_generating || _pollRunId == null) return;
+    if (_pollTimer == null) {
+      // The timer was cancelled/lost while suspended — restart it. This also
+      // resets the attempt ceiling, intentionally extending the polling window
+      // for a run that was backgrounded for a long time.
+      _startPolling(_pollRunId!);
+    }
+    // Fire one tick now rather than waiting up to _pollInterval for the result.
+    unawaited(_pollTick());
+  }
+
+  /// Test-only: simulate the OS killing the periodic poll timer while the
+  /// isolate was suspended in the background — cancels the timer but leaves the
+  /// in-flight run state intact, so [resumePollingIfNeeded] must restart it.
+  @visibleForTesting
+  void debugDropPollTimer() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
+
+  void _startPolling(String runId) {
+    _pollTimer?.cancel();
+    _pollRunId = runId;
+    _pollAttempts = 0;
+    _pollTimer = Timer.periodic(_pollInterval, (_) => _pollTick());
+  }
+
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _pollRunId = null;
+  }
+
+  Future<void> _pollTick() async {
+    final runId = _pollRunId;
+    if (runId == null || !_generating) {
+      _stopPolling();
+      return;
+    }
+    _pollAttempts++;
+    RunStatusEnvelope env;
+    try {
+      env = await _repository.fetchRun(runId);
+    } catch (_) {
+      // Transient network error — keep polling until the attempt ceiling.
+      if (_pollAttempts >= _pollMaxAttempts) _timeoutPolling();
+      return;
+    }
+    // Bail if this tick was superseded (cancelled, signed out, or a newer run)
+    // while fetchRun was in flight.
+    if (_pollTimer == null || _pollRunId != runId) return;
+    if (_terminalRunStatuses.contains(env.run.status)) {
+      _stopPolling();
+      await _finishRun(env.run, env.episode);
+    } else if (_pollAttempts >= _pollMaxAttempts) {
+      _timeoutPolling();
+    }
+  }
+
+  void _timeoutPolling() {
+    _stopPolling();
+    _generating = false;
+    _generationStartedAt = null;
+    // The run may still finish server-side and arrive via push / next refresh.
+    _runNotice = "Still working on your episode — it'll appear here and in your "
+        'feed shortly.';
+    notifyListeners();
+  }
+
+  /// Apply a terminal run outcome: drop the generating flag, surface a notice
+  /// for non-published outcomes, and refresh `me` so episode + entitlement
+  /// counts reflect the run.
+  Future<void> _finishRun(UserRunDto run, UserEpisodeDto? episode) async {
+    _generating = false;
+    _generationStartedAt = null;
+    _runNotice = run.status == 'published' ? null : _friendlyRunOutcome(run);
+    notifyListeners();
+    // Refresh entitlements (pods-left) and, on success, the latest episode.
+    await loadMe();
+  }
+
+  String _friendlyRunOutcome(UserRunDto run) {
+    switch (run.status) {
+      case 'failed':
+        return 'Something went wrong generating this episode. Please try again.';
+      case 'no_content':
+        return run.message.isNotEmpty
+            ? run.message
+            : "There wasn't enough fresh material for an episode yet.";
+      default: // skipped, pre_access — backend messages here are user-facing.
+        return run.message.isNotEmpty
+            ? run.message
+            : "Your episode wasn't generated.";
+    }
+  }
+
+  void clearRunNotice() {
+    if (_runNotice == null) return;
+    _runNotice = null;
     notifyListeners();
   }
 
@@ -283,12 +446,15 @@ class AppState extends ChangeNotifier {
     }
     // No-ops unless the purchases flag + key are set.
     unawaited(PurchasesController.logOut());
+    _stopPolling();
     _signedIn = false;
     _onboardingComplete = false;
     _me = null;
     _sessionToken = null;
     _lastRunMessage = null;
     _generating = false;
+    _generationStartedAt = null;
+    _runNotice = null;
     // Per-user, per-session: the next signed-in user must see their own gift
     // card if the backend still reports it pending.
     _trialGiftDismissed = false;
@@ -297,6 +463,12 @@ class AppState extends ChangeNotifier {
     _shareTipDismissed = _shareTipStore.dismissed;
     _error = null;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
   }
 }
 
@@ -312,5 +484,14 @@ class AppScope extends InheritedNotifier<AppState> {
     final scope = context.dependOnInheritedWidgetOfExactType<AppScope>();
     assert(scope != null, 'No AppScope found in the widget tree');
     return scope!.notifier!;
+  }
+
+  /// Non-subscribing lookup for use OUTSIDE build — e.g. lifecycle callbacks and
+  /// event handlers. Unlike [of] it uses [BuildContext.getInheritedWidgetOfExactType],
+  /// which does NOT register the caller as a dependent of [AppScope], so reading
+  /// it from a widget that doesn't depend on AppScope in build() won't silently
+  /// subscribe it to rebuild on every notify. Returns null if no AppScope exists.
+  static AppState? maybeOf(BuildContext context) {
+    return context.getInheritedWidgetOfExactType<AppScope>()?.notifier;
   }
 }

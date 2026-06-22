@@ -59,8 +59,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400)); // fake run resolves
     expect(find.textContaining('being generated'), findsOneWidget);
 
-    // Tear the tree down so the progress bar's periodic timer is cancelled.
+    // Tear the tree down so the progress bar's periodic timer is cancelled,
+    // then dispose the store so the run-status poll timer is cancelled too.
     await tester.pumpWidget(const SizedBox());
+    appState.dispose();
   });
 
   testWidgets('dashboard tabs load sources and library', (tester) async {
@@ -272,8 +274,10 @@ void main() {
     expect(appState.isGenerating, isTrue);
     expect(find.textContaining('being generated'), findsOneWidget);
 
-    // Tear the tree down so the progress bar's periodic timer is cancelled.
+    // Tear the tree down so the progress-bar + run-status poll timers are
+    // cancelled, then dispose the store.
     await tester.pumpWidget(const SizedBox());
+    appState.dispose();
   });
 
   testWidgets('onboarding teaches the share sheet with the ClawCast target',
