@@ -32,6 +32,7 @@ from .models import (
 )
 from .ranker import rank_items
 from .source_persistence import SourceItemPersistenceService
+from .text_clean import normalize_card_text
 from .user_repository import ControlPlaneRepository
 from .utils import utc_now
 
@@ -420,7 +421,7 @@ class CandidateQueueService:
             "source_id": record.source_id,
             "source_name": record.source_name,
             "title": record.title,
-            "summary": record.summary,
+            "summary": normalize_card_text(record.summary),
             "link": record.link,
             "published_at": record.published_at.isoformat(),
             "pinned": pinned,
@@ -459,7 +460,9 @@ class CandidateQueueService:
             dedupe_key = f"inbound:{item.id}"
             if dedupe_key in excluded_keys:
                 continue
-            summary = item.body_text or item.subject or ""
+            # Inbound bodies can be raw HTML (no text part) — normalize before
+            # truncating so the queue never shows tags/entities.
+            summary = normalize_card_text(item.body_text or item.subject or "")
             payloads.append({
                 "dedupe_key": dedupe_key,
                 "source_id": f"inbound:{item.sender_domain or item.id}",

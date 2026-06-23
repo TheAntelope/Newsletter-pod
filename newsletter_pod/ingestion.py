@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import html
 import logging
-import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Protocol
@@ -12,6 +10,7 @@ import feedparser
 import requests
 
 from .models import SourceDefinition, SourceItem
+from .text_clean import normalize_card_text
 from .utils import guid_or_link_hash, parse_datetime, utc_now
 
 logger = logging.getLogger(__name__)
@@ -21,7 +20,6 @@ class CursorRepository(Protocol):
     def get_source_cursor(self, source_id: str) -> Optional[datetime]:
         ...
 
-HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 RSS_USER_AGENT = (
     "Mozilla/5.0 (compatible; NewsletterPod/1.0; +https://newsletter-pod.app)"
 )
@@ -242,7 +240,6 @@ class RSSIngestionService:
 
 
 def _clean_summary(value: str) -> str:
-    stripped = HTML_TAG_PATTERN.sub(" ", value)
-    unescaped = html.unescape(stripped)
-    squashed = re.sub(r"\s+", " ", unescaped).strip()
-    return squashed[:1200]
+    # Delegate to the shared card-text normalizer so RSS ingest and every other
+    # card pipeline strip the same markup; keep the historical 1200-char cap.
+    return normalize_card_text(value)[:1200]

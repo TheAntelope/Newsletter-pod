@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Optional, Protocol
 
 import requests
 
 from .models import SourceItemRecord
+from .text_clean import normalize_card_text
 from .utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -27,8 +27,6 @@ _OPENAI_CHAT_ENDPOINT = "https://api.openai.com/v1/chat/completions"
 _DEFAULT_TIMEOUT_SECONDS = 30
 _MAX_INPUT_CHARS_PER_ITEM = 1200
 _MAX_BATCH_SIZE = 12
-_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
-_WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
 class CardSummarizer(Protocol):
@@ -51,8 +49,7 @@ class _CardSummaryRepository(Protocol):
 
 def _clean_input(raw: str) -> str:
     """Best-effort sanitize a raw RSS summary before showing it to the LLM."""
-    without_tags = _HTML_TAG_PATTERN.sub(" ", raw or "")
-    collapsed = _WHITESPACE_PATTERN.sub(" ", without_tags).strip()
+    collapsed = normalize_card_text(raw)
     if len(collapsed) > _MAX_INPUT_CHARS_PER_ITEM:
         collapsed = collapsed[:_MAX_INPUT_CHARS_PER_ITEM].rsplit(" ", 1)[0]
     return collapsed
@@ -98,7 +95,9 @@ class CardSummaryService:
             now = utc_now()
             written_now: list[SourceItemRecord] = []
             for record, summary in zip(batch, summaries):
-                cleaned = (summary or "").strip()
+                # Normalize even the LLM output: despite the "no markdown" prompt,
+                # models leak markdown/LaTeX/entities (esp. from science feeds).
+                cleaned = normalize_card_text(summary)
                 if not cleaned:
                     continue
                 record.card_summary = cleaned
@@ -233,7 +232,7 @@ def _coerce_summaries(payload: dict, *, expected: int) -> list[Optional[str]]:
             continue
         if not isinstance(text, str):
             continue
-        cleaned = text.strip()
+        cleaned = normalize_card_text(text)
         if not cleaned:
             continue
         if len(cleaned) > 260:
