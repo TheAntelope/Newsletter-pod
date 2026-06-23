@@ -37,6 +37,11 @@ class BroadcastLoopRecord(BaseModel):
     # topic alone (Phase 0 behavior). Lookback window and per-source
     # item caps are applied at fetch time, not stored here.
     source_ids: list[str] = Field(default_factory=list)
+    # Target episode length in minutes. None keeps the default short-clip
+    # length (~1 min) used by X loops, which are capped at a 2-minute video
+    # upload. A feed-only loop (e.g. the website daily show, no X post) can set
+    # this higher for a fuller episode. Read in topic_picker.pick().
+    desired_minutes: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 

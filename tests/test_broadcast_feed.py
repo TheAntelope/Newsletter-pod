@@ -120,6 +120,40 @@ def test_feed_rejects_malformed_loop_id_as_404():
     assert resp.status_code == 404
 
 
+def test_broadcast_audio_supports_range_requests():
+    # The website player needs HTTP Range support to let listeners scrub/seek;
+    # a bare 200 with Accept-Ranges: none leaves the scrubber unusable.
+    client, repo, storage = _build_client()
+    _save_episode(repo, storage, episode_id="aaaaaaaaaaaaaaaa", run_date=datetime(2026, 6, 1))
+
+    full = client.get("/broadcast/aaaaaaaaaaaaaaaa.mp3")
+    assert full.status_code == 200
+    assert full.headers["accept-ranges"] == "bytes"
+    assert full.content == b"x" * 16000
+    assert "etag" in full.headers
+
+    partial = client.get(
+        "/broadcast/aaaaaaaaaaaaaaaa.mp3", headers={"Range": "bytes=0-99"}
+    )
+    assert partial.status_code == 206
+    assert partial.headers["content-range"] == "bytes 0-99/16000"
+    assert partial.headers["accept-ranges"] == "bytes"
+    assert partial.content == b"x" * 100
+
+    # Public marketing asset — shared caches may keep it.
+    assert "public" in full.headers["cache-control"]
+
+
+def test_broadcast_audio_missing_object_is_404():
+    client, repo, storage = _build_client()
+    _save_episode(
+        repo, storage, episode_id="eeeeeeeeeeeeeeee", run_date=datetime(2026, 6, 1), with_audio=False
+    )
+
+    resp = client.get("/broadcast/eeeeeeeeeeeeeeee.mp3")
+    assert resp.status_code == 404
+
+
 def test_feed_is_public_no_auth_required():
     # The job-trigger token is set, but the feed must remain reachable without
     # it — podcast players can't send the header.
