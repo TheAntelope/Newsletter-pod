@@ -9,8 +9,7 @@ from typing import Optional
 GREETING = "Hello, Clawcast listeners!"
 INTRO = (
     "Welcome to The Claw Cast — your daily briefing, made from the writers "
-    "and newsletters you actually follow, read to you by AI voices in about "
-    "five minutes."
+    "and newsletters you actually follow, read to you by AI voices."
 )
 # Spoken App-Store CTA. Slots between the intro and the topic body so the
 # pitch lands before listeners get absorbed in the deep dive. Mirrors the
@@ -25,6 +24,11 @@ FEEDBACK = (
     "Enjoying the show? We'd love to hear from you — leave a comment to tell "
     "us what you think and what you'd like us to cover next."
 )
+# Short spoken hand-off between the intro/CTA and the episode body. Without it
+# the deep dive starts cold right after the App-Store pitch, which a listener
+# flagged as an abrupt jump. It's its own segment, so there's a natural beat
+# before the content begins.
+BRIDGE = "Alright — let's get into it."
 OUTRO = "That's all for today. Thanks for listening — see you tomorrow."
 
 
@@ -58,6 +62,6 @@ def build_framing(*, topic: str, feedback_text: Optional[str] = None) -> Episode
         feedback_line = feedback_text.strip()
 
     return EpisodeFraming(
-        lead=[GREETING, intro, APP_CTA],
+        lead=[GREETING, intro, APP_CTA, BRIDGE],
         tail=[feedback_line, OUTRO],
     )

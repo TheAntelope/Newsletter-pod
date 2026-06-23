@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from newsletter_pod.broadcast.framing import (
     APP_CTA,
+    BRIDGE,
     FEEDBACK,
     GREETING,
+    INTRO,
     OUTRO,
     build_framing,
 )
@@ -19,7 +21,18 @@ def test_build_framing_default_feedback_and_topic_announcement():
     # App-Store CTA spoken right after the intro, before the body kicks
     # in — keeps the install pitch from getting buried at the end.
     assert framing.lead[2] == APP_CTA
+    # A spoken bridge hands off from the CTA into the body so the deep dive
+    # doesn't start cold (listener-reported abrupt transition).
+    assert framing.lead[3] == BRIDGE
     assert framing.tail == [FEEDBACK, OUTRO]
+
+
+def test_intro_makes_no_specific_duration_promise():
+    # The intro used to claim "about five minutes", which under-delivered on the
+    # ~1-min X clip and would mismatch a longer website episode. Keep it
+    # duration-agnostic so it's honest at any loop length.
+    assert "five minutes" not in INTRO
+    assert "minutes" not in INTRO
 
 
 def test_app_cta_mentions_personalization_and_app_store():

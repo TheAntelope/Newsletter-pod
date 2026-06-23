@@ -274,6 +274,9 @@ class BroadcastLoopUpsertRequest(BaseModel):
     active: bool = True
     feedback_prompt_text: Optional[str] = None
     source_ids: list[str] = []
+    # Optional per-loop target length in minutes; None falls back to the default
+    # ~1-min short clip (see BroadcastLoopRecord.desired_minutes).
+    desired_minutes: Optional[int] = None
 
 
 class BroadcastScheduledRunRequest(BaseModel):
@@ -796,6 +799,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             active=request_payload.active,
             feedback_prompt_text=request_payload.feedback_prompt_text,
             source_ids=deduped_source_ids,
+            desired_minutes=request_payload.desired_minutes,
             created_at=(existing.created_at if existing else now),
             updated_at=now,
         )
@@ -2487,10 +2491,22 @@ def _serve_broadcast_object(
         data = container.storage.get_object(object_name)
     except FileNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    headers = {"Content-Length": str(len(data)), "Accept-Ranges": "none"}
-    if request.method == "HEAD":
-        return Response(content=b"", media_type=media_type, headers=headers)
-    return Response(content=data, media_type=media_type, headers=headers)
+    # Serve with HTTP Range support so browsers and podcast players can seek
+    # (scrub) the episode — a bare 200 with Accept-Ranges: none leaves the
+    # website player unable to skip around. These are immutable public marketing
+    # assets, so allow shared caches to keep them. Conditional headers are read
+    # off the request rather than threaded through the route signature.
+    return _build_media_response(
+        audio_bytes=data,
+        media_type=media_type,
+        request=request,
+        range_header=request.headers.get("range"),
+        if_range_header=request.headers.get("if-range"),
+        if_none_match_header=request.headers.get("if-none-match"),
+        if_modified_since_header=request.headers.get("if-modified-since"),
+        etag=_episode_etag(episode_id, len(data)),
+        cache_control="public, max-age=31536000, immutable",
+    )
 
 
 def _validate_job_auth(
@@ -2646,6 +2662,7 @@ def _build_media_response(
     if_modified_since_header: str | None = None,
     etag: str | None = None,
     last_modified: datetime | None = None,
+    cache_control: str | None = None,
 ) -> Response:
     total_length = len(audio_bytes)
     headers: dict[str, str] = {"Accept-Ranges": "bytes"}
@@ -2654,8 +2671,9 @@ def _build_media_response(
     if last_modified is not None:
         headers["Last-Modified"] = _http_date(last_modified)
     # Episode bytes are immutable once published — let clients cache aggressively
-    # so resumes after interruption don't have to re-download.
-    headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    # so resumes after interruption don't have to re-download. Per-user media is
+    # private; public marketing assets pass a `public` directive instead.
+    headers["Cache-Control"] = cache_control or "private, max-age=31536000, immutable"
 
     if etag is not None and _if_none_match_matches(if_none_match_header, etag):
         return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
