@@ -19,6 +19,12 @@
             "command": "input=$(cat); if echo \"$input\" | grep -q '\"file_path\":\"[^\"]*design-tokens[^\"]*tokens\\.json'; then cd design-tokens && npm run build && cp dist/DesignTokens.swift ../ios/NewsletterPodApp/DesignTokens.swift; fi",
             "timeout": 60,
             "statusMessage": "Rebuilding design tokens..."
+          },
+          {
+            "type": "command",
+            "command": "input=$(cat); if echo \"$input\" | grep -qE '\\.dart\"'; then out=$(cd flutter && flutter analyze --no-pub 2>&1 | grep -E '•' | head -25); if [ -n \"$out\" ]; then echo \"⚠ flutter analyze found issues (fix before commit):\"; echo \"$out\"; fi; fi",
+            "timeout": 120,
+            "statusMessage": "Running flutter analyze..."
           }
         ]
       }
