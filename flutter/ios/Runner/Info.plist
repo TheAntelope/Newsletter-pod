@@ -101,5 +101,11 @@
 			</array>
 		</dict>
 	</array>
+	<!-- Export compliance: app uses only standard/exempt encryption (HTTPS). This
+	     auto-answers the App Store Connect compliance question so each uploaded
+	     build is immediately TestFlight-available instead of stalling on
+	     MISSING_EXPORT_COMPLIANCE. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>
