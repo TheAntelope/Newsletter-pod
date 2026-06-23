@@ -1007,6 +1007,15 @@ sources:
     ingest_mode: excerpt
     jurisdiction_sensitive: false
 
+  - id: pod-meidastouch
+    name: The MeidasTouch Podcast
+    region: US
+    rss_url: https://feeds.megaphone.fm/PDR2572281095
+    topic: Podcasts
+    kind: podcast
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
 
   # =====================================================================
   # Cybersecurity

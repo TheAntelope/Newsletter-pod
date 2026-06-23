@@ -57,6 +57,7 @@ CANDIDATES: list[tuple[str, str, str, str | None]] = [
     ("pod-huberman-lab", "Huberman Lab", "https://feeds.megaphone.fm/hubermanlab", None),
     # Politics
     ("pod-pod-save-america", "Pod Save America", "https://feeds.simplecast.com/dxZsm5kX", "US"),
+    ("pod-meidastouch", "The MeidasTouch Podcast", "https://feeds.megaphone.fm/PDR2572281095", "US"),
 ]
 
 RECENT_DAYS = 45
