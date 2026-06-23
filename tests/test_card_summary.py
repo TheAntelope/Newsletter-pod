@@ -79,6 +79,31 @@ def test_coerce_summaries_drops_bad_entries_and_truncates_long():
     assert out[2] is None
 
 
+def test_coerce_summaries_normalizes_leaked_markup():
+    """The LLM is told 'no markdown' but leaks it anyway — _coerce_summaries
+    must strip markdown/LaTeX/entities, not just trim."""
+    payload = {
+        "summaries": [
+            {"id": 0, "summary": "**Big news** for AT&amp;T &#39;customers&#39;."},
+            {"id": 1, "summary": r"The proof uses $E=mc^2$ and \(x^2\)."},
+        ]
+    }
+    out = _coerce_summaries(payload, expected=2)
+    assert out[0] == "Big news for AT&T 'customers'."
+    assert out[1] == "The proof uses and ."
+
+
+def test_ensure_summaries_normalizes_llm_output():
+    repo = _CapturingRepository()
+    summarizer = _StubSummarizer(response_map={"Title a": "## Heading &amp; **bold**"})
+    service = CardSummaryService(repository=repo, summarizer=summarizer)
+
+    records = [_record("a")]
+    service.ensure_summaries(records)
+
+    assert records[0].card_summary == "Heading & bold"
+
+
 def test_ensure_summaries_skips_items_that_already_have_one():
     repo = _CapturingRepository()
     summarizer = _StubSummarizer(response_map={"Title b": "new b"})
