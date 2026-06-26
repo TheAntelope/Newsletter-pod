@@ -1183,3 +1183,82 @@ sources:
     ingest_mode: full
     jurisdiction_sensitive: false
 
+  # =====================================================================
+  # Climate
+  # Dedicated climate / environment newsrooms (global, no strong region
+  # bias — climate is not jurisdiction-specific). Candidate URLs collected
+  # via scripts/validate_candidate_sources_climate.py; end-to-end RSS
+  # validation could NOT run inside the web sandbox (network policy 403s all
+  # CONNECTs to news hosts) — run that script from an unrestricted
+  # environment to confirm before relying on any of these in production.
+  # =====================================================================
+  - id: climate-carbon-brief
+    name: Carbon Brief
+    rss_url: https://www.carbonbrief.org/feed/
+    topic: Climate
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: climate-inside-climate-news
+    name: Inside Climate News
+    region: US
+    rss_url: https://insideclimatenews.org/feed/
+    topic: Climate
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: climate-grist
+    name: Grist
+    region: US
+    rss_url: https://grist.org/feed/
+    topic: Climate
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: climate-yale-connections
+    name: Yale Climate Connections
+    region: US
+    rss_url: https://yaleclimateconnections.org/feed/
+    topic: Climate
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: climate-climate-home-news
+    name: Climate Home News
+    rss_url: https://www.climatechangenews.com/feed/
+    topic: Climate
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: climate-desmog
+    name: DeSmog
+    rss_url: https://www.desmog.com/feed/
+    topic: Climate
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  - id: climate-cleantechnica
+    name: CleanTechnica
+    region: US
+    rss_url: https://cleantechnica.com/feed/
+    topic: Climate
+    enabled: true
+    ingest_mode: full
+    jurisdiction_sensitive: false
+
+  # The Guardian — RSS delivers excerpts; UK press, post-Brexit (not EU/EEA).
+  - id: climate-guardian-environment
+    name: The Guardian (Environment)
+    region: GB
+    rss_url: https://www.theguardian.com/environment/rss
+    topic: Climate
+    enabled: true
+    ingest_mode: excerpt
+    jurisdiction_sensitive: false
+

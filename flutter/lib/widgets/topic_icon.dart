@@ -12,6 +12,7 @@ const _topicIcons = <String, IconData>{
   'Cybersecurity': Icons.shield_outlined,
   'Personal Finance': Icons.savings_outlined,
   'Science': Icons.science_outlined,
+  'Climate': Icons.eco_outlined,
   'Sports': Icons.sports_basketball_outlined,
   'Culture': Icons.theater_comedy_outlined,
   'Health & Wellness': Icons.spa_outlined,
