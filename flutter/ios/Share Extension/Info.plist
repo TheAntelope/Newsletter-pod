@@ -9,8 +9,25 @@
 	     Runner/Info.plist + both .entitlements. -->
 	<key>AppGroupId</key>
 	<string>group.com.newsletterpod.shared</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
 	<string>ClawCast</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<!-- Without an explicit CFBundleIdentifier the embedded .appex ships with an
+	     empty bundle id (GENERATE_INFOPLIST_FILE=NO does NOT inject it), and the
+	     archive fails: "Embedded binary's bundle identifier is not prefixed with
+	     the parent app's." Resolves to com.newsletterpod.app.share. -->
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<!-- App extensions are XPC bundles. -->
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
 	<!-- Keep the extension's version in lock-step with the app, or App Store
 	     validation rejects the build (extension CFBundleVersion must match). -->
 	<key>CFBundleShortVersionString</key>

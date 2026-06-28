@@ -8,59 +8,79 @@ the shared item in the App Group and **reopens the app**, which reads it via
 session token already lives — **the extension itself needs no auth**, which is why it
 deliberately has **no** `keychain-access-groups` entitlement, unlike the native one).
 
-> **Why a runbook:** the source/config files are committed, but creating the **Xcode target**
-> and assigning **Portal capabilities** can't be done from the Windows dev box — they need Xcode
-> on a Mac (or the Codemagic mac instance) and the Apple Developer Portal.
+> **Status (2026-06):** the Xcode **target is now committed** in
+> `flutter/ios/Runner.xcodeproj/project.pbxproj` — it was hand-wired into the pbxproj (no Mac
+> required). The only remaining manual step is the one-time **Apple Developer Portal** App-Group
+> assignment (no API exists for it). See *Portal* below.
 
-## Already committed (no action needed)
-- `flutter/ios/Share Extension/ShareViewController.swift` — subclasses `RSIShareViewController` (relies on default `shouldAutoRedirect()==true`).
+## Design: self-contained extension (do NOT re-add a plugin dependency)
+
+`ShareViewController.swift` is **self-contained** — it does **not** `import receive_sharing_intent`
+and subclasses `SLComposeServiceViewController` directly. This is deliberate:
+
+- `receive_sharing_intent` ships **only a CocoaPods podspec** (no `Package.swift`), and this app
+  integrates Flutter plugins via **Swift Package Manager** (`FlutterGeneratedPluginSwiftPackage`,
+  no committed Podfile). A CocoaPods-only plugin module therefore cannot be linked into an
+  app-extension target without bolting CocoaPods onto the build *just* for the extension.
+- Instead the extension **vendors** the tiny (MIT) extension-side logic from the plugin and
+  reproduces its **App-Group wire format byte-for-byte**: it writes a JSON `[SharedMediaFile]` to
+  `UserDefaults(suiteName: group.com.newsletterpod.shared)` under key **`ShareKey`** (+ the post
+  message under `ShareMessageKey`), then reopens the host via `ShareMedia-<hostbundleid>:share`.
+  The **host app still uses the plugin normally** to read that payload
+  (`SwiftReceiveSharingIntentPlugin.handleUrl`).
+
+⚠️ Keep the wire format in `ShareViewController.swift` (the `kUserDefaultsKey` constants, the
+`SharedMediaFile` coding keys, and the `SharedMediaType` raw values) in lock-step with the pinned
+`receive_sharing_intent` version (`pubspec.yaml`: `^1.8.0`). If you bump the plugin, re-diff
+`RSIShareViewController.swift` / `SwiftReceiveSharingIntentPlugin.swift`. **Do not** "fix" the
+extension by adding a framework dependency — its Frameworks build phase is intentionally empty
+(only system frameworks `Social`/`UIKit`, auto-linked via Clang modules).
+
+## Committed (no action needed)
+- `flutter/ios/Runner.xcodeproj/project.pbxproj` — the **`Share Extension`** app-extension target
+  (bundle id `com.newsletterpod.app.share`): Sources/Resources/Frameworks phases; Debug/Release/
+  Profile configs whose `baseConfigurationReference` is Flutter's Debug/Release `.xcconfig` so
+  `$(FLUTTER_BUILD_NUMBER)`/`$(FLUTTER_BUILD_NAME)` resolve (keeps the appex version in lockstep
+  with the app — required for App Store validation); `DEVELOPMENT_TEAM` pinned; embedded into
+  Runner via an **Embed Foundation Extensions** copy-files phase (`dstSubfolderSpec = 13`, PlugIns)
+  placed **before** Flutter's *Thin Binary* phase; Runner has a target dependency on the extension.
+- `flutter/ios/Share Extension/ShareViewController.swift` — self-contained capture + redirect (see above).
 - `flutter/ios/Share Extension/Info.plist` — `NSExtension` activation for **text + web URL + attachment/file** (pdf/epub/docx; no image/video); App Group **hardcoded**; version pinned to the app.
-- `flutter/ios/Share Extension/Share Extension.entitlements` — App Group `group.com.newsletterpod.shared`.
-- `flutter/ios/Share Extension/Base.lproj/MainInterface.storyboard` — instantiates `ShareViewController`.
+- `flutter/ios/Share Extension/Share Extension.entitlements` — App Group `group.com.newsletterpod.shared` (and nothing else).
+- `flutter/ios/Share Extension/Base.lproj/MainInterface.storyboard` — instantiates `ShareViewController` (customModuleProvider = target).
 - `flutter/ios/Runner/Info.plist` — `AppGroupId` (hardcoded) + `CFBundleURLTypes` (`ShareMedia-$(PRODUCT_BUNDLE_IDENTIFIER)`).
 - `flutter/ios/Runner/Runner.entitlements` — App Group `group.com.newsletterpod.shared`.
-- `flutter/ios/Runner/AppDelegate.swift` — **routes the `ShareMedia-<bundleid>` reopen URL** to the plugin and falls through to `super` for other URLs (e.g. Google Sign-In). Required because we have more than one URL-handling plugin; without it shares are silently dropped.
+- `flutter/ios/Runner/AppDelegate.swift` — routes the `ShareMedia-<bundleid>` reopen URL to the
+  plugin and falls through to `super` for other URLs (e.g. Google Sign-In). `main` runs the classic
+  (pre-UIScene) Flutter lifecycle — deliberately, because the UIScene template crashes at launch on
+  iOS 26 (PR #62) — so this `application(_:open:options:)` override is the active delivery path for
+  shares (not a no-op).
 
 The App Group id is **hardcoded** to `group.com.newsletterpod.shared` in both Info.plists and both
-entitlements (the plugin reads the `AppGroupId` Info.plist key directly — `RSIShareViewController.loadIds`
-/ `SwiftReceiveSharingIntentPlugin.handleUrl`). So there is **no `CUSTOM_GROUP_ID` build setting** to
-configure — one less thing to get wrong.
+entitlements (the plugin reads the `AppGroupId` Info.plist key directly). So there is **no
+`CUSTOM_GROUP_ID` build setting** to configure — one less thing to get wrong.
 
-## Build-system note (read first)
-This project appears to use Flutter's **Swift Package Manager** integration
-(`flutter/ios/Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage/` is present and there is
-**no Podfile**). Confirm on the Mac. This changes how the extension links `receive_sharing_intent`
-(step 4 below).
+## Apple Developer Portal (one-time, manual — the only thing CI can't do)
+The App Group `group.com.newsletterpod.shared` and bundle id `com.newsletterpod.app.share` are
+**already registered** (the native build uses them). Confirm the App Group is **assigned to both**
+`com.newsletterpod.app` **and** `com.newsletterpod.app.share`: Identifiers → each bundle id → App
+Groups → Configure → tick `group.com.newsletterpod.shared` → Continue → **Save** (the Save at the
+top-right of the bundle-id page, not just the popup's Continue — easy to miss). App-Group
+assignment has **no API** — this manual click is the single most likely first-build signing
+failure. The `ios-flutter-testflight` signing step now **dumps `bundle-ids capabilities` for both
+ids**, so a missing App Group shows up in the log instead of as an opaque codesign rejection.
 
-## Mac / Xcode steps
-1. **Add the target.** Xcode → File → New → Target → **Share Extension**. Name it **`Share Extension`**. Set **Bundle Identifier = `com.newsletterpod.app.share`** (reuse the native one — already registered, and the plugin derives the host id by stripping `.share`). Deployment target = same as Runner.
-2. **Use the committed files.** Delete the stubs Xcode generated; add the committed files from `flutter/ios/Share Extension/` to the target. Point the target's **Info.plist** and **Code Signing Entitlements** build settings at the committed `Info.plist` / `Share Extension.entitlements`.
-3. **App Groups capability.** Signing & Capabilities → add **App Groups** to **BOTH** `Runner` and `Share Extension`, ticking `group.com.newsletterpod.shared`.
-4. **Link `receive_sharing_intent` into the extension** so `import receive_sharing_intent` resolves in `ShareViewController`:
-   - **If SPM (no Podfile):** add the `receive_sharing_intent` package product to the **Share Extension** target (target → General → *Frameworks and Libraries*, or Build Phases → *Link Binary With Libraries*), from the Flutter-generated Swift package.
-   - **If CocoaPods (a `flutter/ios/Podfile` is generated by `flutter pub get`):** add the nested target and `pod install`:
-     ```ruby
-     target 'Runner' do
-       use_frameworks!
-       use_modular_headers!
-       flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-       target 'Share Extension' do
-         inherit! :search_paths
-       end
-     end
-     ```
-     Then Runner → Build Phases → drag **Embed Foundation Extension** **above** **Thin Binary** (fixes "No such module 'receive_sharing_intent'"). Do **not** commit a Podfile before the target exists, or `pod install` fails with *target 'Share Extension' not found*.
-5. **Build & run on a device.** Share a link / text / PDF from another app → ClawCast should reopen on `ShareIntakeScreen`.
-
-## Apple Developer Portal
-- The App Group `group.com.newsletterpod.shared` and bundle id `com.newsletterpod.app.share` are **already registered** (the native build uses them). Just confirm the App Group is still **assigned to both** `com.newsletterpod.app` and `com.newsletterpod.app.share` (Identifiers → each bundle id → App Groups → Configure → Save). App Group assignment is the one signing step with **no API** — a manual portal click.
-
-## Codemagic (folds into Workstream G — the Flutter iOS workflow does not exist yet)
-- The current `codemagic.yaml` `ios-testflight` builds the **native** app (`xcodegen` on `ios/project.yml`) and **excludes `flutter/**`** — it will **not** build the Flutter app. Workstream G adds a separate `ios-flutter-testflight` workflow.
-- That workflow must sign **both** `com.newsletterpod.app` and `com.newsletterpod.app.share` — reuse the native workflow's regenerate-profiles approach (exact-identifier match to avoid the `--bundle-id-identifier` *prefix* trap; one `IOS_APP_STORE` profile per bundle id). Re-read the `codemagic_multi_bundle_id_signing` memory before editing the signing block.
-
-## Testing note
-- If you install the Flutter build on a device that still has the native app, uninstall the native app first. It's an in-place upgrade (same App Store id `com.newsletterpod.app`), but side-by-side **dev** installs share the same App Group container and can confuse it.
+## Codemagic
+`codemagic.yaml` → `ios-flutter-testflight` (manual-trigger; the native `ios-testflight` stays the
+production pipeline during coexistence). The signing step regenerates fresh App Store profiles for
+**both** bundle ids against the newest distribution cert (exact-identifier match to avoid the
+`--bundle-id-identifier` *prefix* trap) and runs `xcode-project use-profiles`, which injects manual
+signing per target by bundle id. Both bundle ids are **mandatory** — a missing
+`com.newsletterpod.app.share` fails the cheap signing step rather than the archive ~20 min later.
 
 ## Verify on a real device (acceptance)
-- From another app, Share → **ClawCast** with (a) a link, (b) selected text, (c) a PDF. Each should reopen ClawCast and land on `ShareIntakeScreen`, then "Pinned to your next pod." after upload — the same end state the Android share flow already produces.
+Install the Flutter TestFlight build (uninstall the native app first to avoid two installs sharing
+the App Group container). From another app, Share → **ClawCast** with (a) a link, (b) selected
+text, (c) a PDF. Each should reopen ClawCast on `ShareIntakeScreen`, then "Pinned to your next pod."
+after upload — the same end state the Android share flow produces. Sharing a **photo** (unsupported)
+should simply dismiss without hanging or opening an empty app.
