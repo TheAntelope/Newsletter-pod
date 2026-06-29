@@ -155,6 +155,19 @@ class ApiClient {
     await _send('/v1/me/trial-gift/ack', method: 'POST', token: token);
   }
 
+  /// Redeems a promo code, granting a window of full-access (Max) time on the
+  /// backend (it extends the trial). Returns the number of days granted on
+  /// success. Throws [ApiException] whose `message` is the backend `detail` — a
+  /// user-facing reason (invalid / expired / exhausted / already redeemed /
+  /// already subscribed) — on any failure. The caller reloads `me` afterwards
+  /// so the extended trial window and Max entitlements surface immediately.
+  Future<int> redeemPromoCode(String token, String code) async {
+    final json = await _send('/v1/me/redeem',
+        method: 'POST', token: token, body: {'code': code});
+    final days = json['granted_days'];
+    return days is int ? days : int.tryParse('${days ?? ''}') ?? 0;
+  }
+
   // -------------------------------------------------------------------------
   // Catalogs
   // -------------------------------------------------------------------------

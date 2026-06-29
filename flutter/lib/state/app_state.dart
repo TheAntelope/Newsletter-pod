@@ -111,6 +111,23 @@ class AppState extends ChangeNotifier {
     );
   }
 
+  /// Redeems a promo code via the backend, then reloads `me` so the extended
+  /// trial window (and the resulting Max entitlements) surface immediately.
+  /// Returns the number of days granted. Throws [ApiException] (its `message` is
+  /// a user-facing reason) so the caller can show it; requires a live session
+  /// (real-auth build) — throws [ApiException] otherwise rather than silently
+  /// no-op'ing, since the user is actively waiting on a result.
+  Future<int> redeemPromoCode(String code) async {
+    final client = _apiClient;
+    final session = _sessionToken;
+    if (client == null || session == null) {
+      throw ApiException('Sign in to redeem a code.');
+    }
+    final days = await client.redeemPromoCode(session, code.trim());
+    await loadMe();
+    return days;
+  }
+
   /// Persists the share-tip dismissal across launches on the real-auth build
   /// (the demo build / tests use an in-memory stub — see [ShareTipStore]).
   final ShareTipStore _shareTipStore;

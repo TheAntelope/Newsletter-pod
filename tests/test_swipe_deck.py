@@ -347,6 +347,14 @@ def test_cached_topic_deck_falls_back_when_stale():
         ),
     )
     service.refresh_topic_decks({"Tech": ["techcrunch"]})
+    # Force a clearly-positive age so the 0-hour TTL marks the deck stale
+    # deterministically. utc_now() can return the SAME value across calls within
+    # one OS clock tick (notably on Windows), so a just-baked deck can read as
+    # exactly age 0 — and `age > timedelta(hours=0)` is then False, wrongly
+    # treating it as fresh. Backdating computed_at removes that timing race.
+    baked = repo.get_swipe_deck(topic_deck_id("Tech"))
+    baked.computed_at = utc_now() - timedelta(hours=1)
+    repo.save_swipe_deck(baked)
     repo.upsert_source_items(
         [_record("tech-new", embedding=[1.0], source_id="techcrunch",
                  last_seen_offset_minutes=100)]

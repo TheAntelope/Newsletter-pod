@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../api/api_client.dart';
 import '../api/models.dart';
 import '../config.dart';
 import '../design_tokens.dart';
@@ -59,6 +60,7 @@ class PaywallScreen extends StatefulWidget {
 class _PaywallScreenState extends State<PaywallScreen> {
   String? _busyTier;
   bool _restoring = false;
+  bool _redeeming = false;
 
   /// Selected billing period for the paid plans. Drives both the price shown on
   /// each card and the `annual:` flag passed to the purchase.
@@ -115,6 +117,60 @@ class _PaywallScreenState extends State<PaywallScreen> {
       );
     } finally {
       if (mounted) setState(() => _restoring = false);
+    }
+  }
+
+  /// Prompts for a promo code and redeems it. On success the backend extends
+  /// the trial window; reloading `me` (inside [AppState.redeemPromoCode]) makes
+  /// the `_TrialStatusCard` above refresh to the granted window. Backend
+  /// rejections (invalid / expired / exhausted / already redeemed / already
+  /// subscribed) arrive as [ApiException] with a user-facing message.
+  Future<void> _redeem(AppState app) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final controller = TextEditingController();
+    final code = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Redeem a code'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.characters,
+          decoration: const InputDecoration(hintText: 'Enter promo code'),
+          onSubmitted: (value) => Navigator.of(ctx).pop(value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            child: const Text('Redeem'),
+          ),
+        ],
+      ),
+    );
+    if (code == null || code.trim().isEmpty) return;
+
+    setState(() => _redeeming = true);
+    try {
+      final days = await app.redeemPromoCode(code);
+      final years = days ~/ 365;
+      final span = years >= 1
+          ? (years == 1 ? '1 year' : '$years years')
+          : '$days days';
+      messenger.showSnackBar(
+        SnackBar(content: Text("Code applied — you've got $span of full access 🎉")),
+      );
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not redeem that code. Please try again.')),
+      );
+    } finally {
+      if (mounted) setState(() => _redeeming = false);
     }
   }
 
@@ -181,6 +237,14 @@ class _PaywallScreenState extends State<PaywallScreen> {
                   child: Text(_restoring ? 'Restoring…' : 'Restore purchases'),
                 ),
               ),
+            // Promo codes are redeemed server-side (not via the store), so this
+            // entry point is shown regardless of the RevenueCat flag.
+            Center(
+              child: TextButton(
+                onPressed: _redeeming ? null : () => _redeem(app),
+                child: Text(_redeeming ? 'Redeeming…' : 'Have a promo code?'),
+              ),
+            ),
             if (!FeatureFlags.purchasesRevenueCat)
               Text(
                 'Subscriptions are handled by the App Store / Google Play via '

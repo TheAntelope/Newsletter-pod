@@ -1412,6 +1412,96 @@ class ControlPlaneService:
             self.repository.save_user(user)
         return {"ok": True}
 
+    # --- Promo codes ---------------------------------------------------------
+
+    # User-facing messages per failure status from the repository claim. Kept
+    # here (not in the repo) because they're product copy, not storage concerns.
+    _PROMO_REDEEM_MESSAGES = {
+        "invalid_code": "That code isn't valid. Double-check it and try again.",
+        "inactive": "This code is no longer active.",
+        "expired": "This code has expired.",
+        "exhausted": "This code has reached its redemption limit.",
+        "already_redeemed": "You've already redeemed this code.",
+    }
+
+    @staticmethod
+    def normalize_promo_code(code: str) -> str:
+        """Canonical form used as the document id and for matching: trimmed and
+        upper-cased so entry is case-insensitive. Codes must be CREATED in this
+        same form (the management script normalizes too)."""
+        return (code or "").strip().upper()
+
+    def redeem_promo_code(self, user_id: str, code: str) -> dict[str, Any]:
+        """Redeem a promo code for `user_id`. On success grants `grant_days` of
+        full-access (Max) by extending the trial window (`trial_ends_at`) — the
+        same lever the 7-day trial and grant scripts use, so no new gating code
+        is needed and the app already surfaces the countdown.
+
+        Robustness (user-facing money/access path):
+          - Idempotent per (code, user): a second redemption is rejected, never
+            double-granted.
+          - The cap check + counter increment + redemption record happen in one
+            repository transaction, so concurrent redemptions can't overrun
+            `max_redemptions`.
+          - Already-paid subscribers (active pro/max) are rejected up front so a
+            capped redemption isn't spent on someone who doesn't need it (the
+            trial→Max grant is a no-op while their subscription is active).
+          - The grant never SHRINKS an existing window: `trial_ends_at` moves to
+            max(existing, now + grant_days).
+
+        Raises ControlPlaneError (→ HTTP 400) with a user-facing message on any
+        failure. Returns {ok, granted_days, trial_ends_at} on success."""
+        normalized = self.normalize_promo_code(code)
+        if not normalized:
+            raise ControlPlaneError("Enter a promo code.")
+
+        user = self._require_user(user_id)
+        now = utc_now()
+
+        subscription = self._get_subscription(user_id)
+        if self._resolve_tier(subscription) in {"pro", "max"}:
+            raise ControlPlaneError(
+                "You already have an active subscription — no code needed."
+            )
+
+        status, record = self.repository.try_claim_promo_code(normalized, user_id, now)
+        if status != "ok" or record is None:
+            raise ControlPlaneError(
+                self._PROMO_REDEEM_MESSAGES.get(
+                    status, "This code can't be redeemed right now."
+                )
+            )
+
+        granted_days = record.grant_days
+        new_trial_end = now + timedelta(days=granted_days)
+        existing = user.trial_ends_at
+        if existing is not None and ensure_utc(existing) > new_trial_end:
+            new_trial_end = ensure_utc(existing)
+        user.trial_ends_at = new_trial_end
+        # Clean full-access window: clear the legacy pod-trial / first-month
+        # downgrades and reset the weekly counters (mirrors grant_time_trial.py).
+        user.trial_premium_pods_remaining = 0
+        user.trial_exhausted_at = None
+        user.first_month_ends_at = None
+        user.premium_pods_this_week = 0
+        user.default_pods_this_week = 0
+        user.current_week_iso = None
+        user.updated_at = now
+        self.repository.save_user(user)
+
+        logger.info(
+            "promo_code_redeemed user=%s code=%s granted_days=%s trial_ends_at=%s",
+            user_id,
+            normalized,
+            granted_days,
+            new_trial_end.isoformat(),
+        )
+        return {
+            "ok": True,
+            "granted_days": granted_days,
+            "trial_ends_at": new_trial_end,
+        }
+
     def get_source_catalog(self) -> list[dict[str, Any]]:
         return [
             {

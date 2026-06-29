@@ -130,6 +130,10 @@ class ValidateSourceRequest(BaseModel):
     rss_url: str
 
 
+class RedeemPromoCodeRequest(BaseModel):
+    code: str
+
+
 class ReplaceSourcesRequest(BaseModel):
     sources: list[dict]
 
@@ -1145,6 +1149,25 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         assert container.control_plane is not None
         try:
             return container.control_plane.acknowledge_trial_gift(user.id)
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    @app.post("/v1/me/redeem")
+    def redeem_promo_code(
+        request_payload: RedeemPromoCodeRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        """Redeem a promo code for the calling user. On success grants a window
+        of full-access (Max) time by extending the trial; the app reloads
+        /v1/me to surface it. Every failure (invalid / inactive / expired /
+        exhausted / already-redeemed / already-subscribed) is a ControlPlaneError
+        → HTTP 400 whose `detail` is a user-facing message the client shows."""
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.redeem_promo_code(
+                user.id, request_payload.code
+            )
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
