@@ -150,6 +150,51 @@ class SubscriptionRecord(BaseModel):
     updated_at: datetime
 
 
+class PromoCodeRecord(BaseModel):
+    """A redeemable promo code that grants free full-access (Max) time.
+
+    The grant reuses the trial lever: redeeming sets the user's `trial_ends_at`
+    to now + `grant_days`, so a free user is computed as Max until it lapses
+    (see ControlPlane._compute_entitlements) — the same mechanism the 7-day
+    trial and the grant scripts use. The Firestore document id is the
+    normalized code (uppercase, stripped — see ControlPlane.normalize_promo_code).
+
+    `max_redemptions` caps the TOTAL redemptions across all users (None =
+    unlimited); `redemptions_used` is incremented atomically per redemption, so
+    a single shared code can be handed out and still bounded. `expires_at`
+    bounds the redemption WINDOW (until when the code can be entered) and is
+    independent of `grant_days` (how long the granted access lasts).
+    """
+
+    code: str
+    grant_days: int = 365
+    max_redemptions: Optional[int] = None
+    redemptions_used: int = 0
+    active: bool = True
+    expires_at: Optional[datetime] = None
+    label: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PromoRedemptionRecord(BaseModel):
+    """One user's redemption of a promo code. The Firestore document id is
+    `{code}:{user_id}` so a user can redeem a given code at most once (the
+    document's existence IS the "already redeemed" check) and the per-code
+    counter increment + this write happen in a single transaction.
+
+    `granted_days` / `trial_ends_at` record what this code granted at redemption
+    time; the user's effective `trial_ends_at` is merged with any longer
+    existing window in the control plane, so it may differ from this audit row.
+    """
+
+    code: str
+    user_id: str
+    redeemed_at: datetime
+    granted_days: int
+    trial_ends_at: datetime
+
+
 class DeliveryScheduleRecord(BaseModel):
     user_id: str
     timezone: str = "UTC"

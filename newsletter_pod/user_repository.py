@@ -62,6 +62,8 @@ from .user_models import (
     FeedTokenRecord,
     InboundEmailItem,
     PodcastProfileRecord,
+    PromoCodeRecord,
+    PromoRedemptionRecord,
     SubscriptionRecord,
     SwipeRecord,
     UserEpisodeRecord,
@@ -131,6 +133,45 @@ class ControlPlaneRepository(ABC):
 
     @abstractmethod
     def save_subscription(self, subscription: SubscriptionRecord) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_promo_code(self, code: str) -> Optional[PromoCodeRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_promo_code(self, record: PromoCodeRecord) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_promo_codes(self, limit: int = 500) -> list[PromoCodeRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_promo_redemption(
+        self, code: str, user_id: str
+    ) -> Optional[PromoRedemptionRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def try_claim_promo_code(
+        self, code: str, user_id: str, now: datetime
+    ) -> tuple[str, Optional[PromoCodeRecord]]:
+        """Atomically attempt to claim ONE redemption of `code` for `user_id`.
+
+        Returns `(status, code_record)` where status is one of:
+          - "ok"              redemption recorded + counter incremented
+          - "invalid_code"    no such code (code_record is None)
+          - "inactive"        code.active is False
+          - "expired"         now >= code.expires_at
+          - "exhausted"       redemptions_used >= max_redemptions
+          - "already_redeemed" this user already redeemed this code
+
+        On "ok" the returned record reflects the post-increment counter and a
+        PromoRedemptionRecord (id `{code}:{user_id}`) has been written. The cap
+        check, the once-per-user check, the counter increment, and the
+        redemption write MUST happen atomically so concurrent redemptions can
+        neither overrun `max_redemptions` nor double-claim for one user."""
         raise NotImplementedError
 
     @abstractmethod
@@ -584,6 +625,10 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
         self._feed_tokens_by_user: dict[str, FeedTokenRecord] = {}
         self._feed_tokens: dict[str, FeedTokenRecord] = {}
         self._subscriptions: dict[str, SubscriptionRecord] = {}
+        # Promo codes keyed by normalized code; redemptions keyed by
+        # f"{code}:{user_id}" so once-per-user is a dict-membership check.
+        self._promo_codes: dict[str, PromoCodeRecord] = {}
+        self._promo_redemptions: dict[str, PromoRedemptionRecord] = {}
         self._schedules: dict[str, DeliveryScheduleRecord] = {}
         self._cursors: dict[tuple[str, str], datetime] = {}
         self._episodes: dict[str, UserEpisodeRecord] = {}
@@ -671,6 +716,54 @@ class InMemoryControlPlaneRepository(ControlPlaneRepository):
 
     def save_subscription(self, subscription: SubscriptionRecord) -> None:
         self._subscriptions[subscription.user_id] = subscription
+
+    def get_promo_code(self, code: str) -> Optional[PromoCodeRecord]:
+        existing = self._promo_codes.get(code)
+        return existing.model_copy() if existing else None
+
+    def save_promo_code(self, record: PromoCodeRecord) -> None:
+        self._promo_codes[record.code] = record.model_copy()
+
+    def list_promo_codes(self, limit: int = 500) -> list[PromoCodeRecord]:
+        records = [record.model_copy() for record in self._promo_codes.values()]
+        records.sort(key=lambda r: r.created_at, reverse=True)
+        return records[:limit]
+
+    def get_promo_redemption(
+        self, code: str, user_id: str
+    ) -> Optional[PromoRedemptionRecord]:
+        existing = self._promo_redemptions.get(f"{code}:{user_id}")
+        return existing.model_copy() if existing else None
+
+    def try_claim_promo_code(
+        self, code: str, user_id: str, now: datetime
+    ) -> tuple[str, Optional[PromoCodeRecord]]:
+        record = self._promo_codes.get(code)
+        if record is None:
+            return ("invalid_code", None)
+        if not record.active:
+            return ("inactive", record.model_copy())
+        if record.expires_at is not None and now >= ensure_utc(record.expires_at):
+            return ("expired", record.model_copy())
+        redemption_id = f"{code}:{user_id}"
+        if redemption_id in self._promo_redemptions:
+            return ("already_redeemed", record.model_copy())
+        if (
+            record.max_redemptions is not None
+            and record.redemptions_used >= record.max_redemptions
+        ):
+            return ("exhausted", record.model_copy())
+        # Live reference (not a copy) so the increment persists in the store.
+        record.redemptions_used += 1
+        record.updated_at = now
+        self._promo_redemptions[redemption_id] = PromoRedemptionRecord(
+            code=code,
+            user_id=user_id,
+            redeemed_at=now,
+            granted_days=record.grant_days,
+            trial_ends_at=now + timedelta(days=record.grant_days),
+        )
+        return ("ok", record.model_copy())
 
     def get_schedule(self, user_id: str) -> Optional[DeliveryScheduleRecord]:
         return self._schedules.get(user_id)
@@ -1226,6 +1319,10 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
         self._sources = self._db.collection(f"{collection_prefix}_user_sources")
         self._feed_tokens = self._db.collection(f"{collection_prefix}_feed_tokens")
         self._subscriptions = self._db.collection(f"{collection_prefix}_subscriptions")
+        self._promo_codes = self._db.collection(f"{collection_prefix}_promo_codes")
+        self._promo_redemptions = self._db.collection(
+            f"{collection_prefix}_promo_redemptions"
+        )
         self._schedules = self._db.collection(f"{collection_prefix}_delivery_schedules")
         self._episodes = self._db.collection(f"{collection_prefix}_user_episodes")
         self._runs = self._db.collection(f"{collection_prefix}_user_runs")
@@ -1504,6 +1601,73 @@ class FirestoreControlPlaneRepository(ControlPlaneRepository):
 
     def save_subscription(self, subscription: SubscriptionRecord) -> None:
         self._subscriptions.document(subscription.user_id).set(subscription.model_dump(mode="python"))
+
+    def get_promo_code(self, code: str) -> Optional[PromoCodeRecord]:
+        doc = self._promo_codes.document(code).get()
+        if not doc.exists:
+            return None
+        return PromoCodeRecord.model_validate(doc.to_dict())
+
+    def save_promo_code(self, record: PromoCodeRecord) -> None:
+        self._promo_codes.document(record.code).set(record.model_dump(mode="python"))
+
+    def list_promo_codes(self, limit: int = 500) -> list[PromoCodeRecord]:
+        docs = list(self._promo_codes.limit(limit).stream())
+        records = [PromoCodeRecord.model_validate(doc.to_dict()) for doc in docs]
+        records.sort(key=lambda r: r.created_at, reverse=True)
+        return records
+
+    def get_promo_redemption(
+        self, code: str, user_id: str
+    ) -> Optional[PromoRedemptionRecord]:
+        doc = self._promo_redemptions.document(f"{code}:{user_id}").get()
+        if not doc.exists:
+            return None
+        return PromoRedemptionRecord.model_validate(doc.to_dict())
+
+    def try_claim_promo_code(
+        self, code: str, user_id: str, now: datetime
+    ) -> tuple[str, Optional[PromoCodeRecord]]:
+        # Transactional claim: the cap check, once-per-user check, counter
+        # increment, and redemption write must be atomic so two concurrent
+        # redemptions can neither overrun max_redemptions nor double-claim.
+        # Mirrors fail_run_if_in_progress: all reads precede all writes.
+        code_ref = self._promo_codes.document(code)
+        redemption_ref = self._promo_redemptions.document(f"{code}:{user_id}")
+        transaction = self._db.transaction()
+
+        @firestore.transactional
+        def _claim(txn) -> tuple[str, Optional[PromoCodeRecord]]:
+            code_snap = code_ref.get(transaction=txn)
+            if not code_snap.exists:
+                return ("invalid_code", None)
+            record = PromoCodeRecord.model_validate(code_snap.to_dict())
+            if not record.active:
+                return ("inactive", record)
+            if record.expires_at is not None and now >= ensure_utc(record.expires_at):
+                return ("expired", record)
+            redemption_snap = redemption_ref.get(transaction=txn)
+            if redemption_snap.exists:
+                return ("already_redeemed", record)
+            if (
+                record.max_redemptions is not None
+                and record.redemptions_used >= record.max_redemptions
+            ):
+                return ("exhausted", record)
+            record.redemptions_used += 1
+            record.updated_at = now
+            txn.set(code_ref, record.model_dump(mode="python"))
+            redemption = PromoRedemptionRecord(
+                code=code,
+                user_id=user_id,
+                redeemed_at=now,
+                granted_days=record.grant_days,
+                trial_ends_at=now + timedelta(days=record.grant_days),
+            )
+            txn.set(redemption_ref, redemption.model_dump(mode="python"))
+            return ("ok", record)
+
+        return _claim(transaction)
 
     def get_schedule(self, user_id: str) -> Optional[DeliveryScheduleRecord]:
         doc = self._schedules.document(user_id).get()
