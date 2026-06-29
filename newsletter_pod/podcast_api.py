@@ -4,9 +4,8 @@ import base64
 import json
 import logging
 import time
-from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Optional
+from typing import Any, Optional
 
 import requests
 
@@ -80,35 +79,32 @@ class PodcastApiClient:
             # generation gate when a user's premium quota for the week is
             # exhausted. It pins TTS to OpenAI with the bundled voice,
             # regardless of self.tts_provider / the requested voice_id.
+            #
+            # IMPORTANT: the effective provider is threaded through the call
+            # chain as a *parameter* rather than by mutating self.tts_provider.
+            # PodcastApiClient is a process-wide singleton shared across
+            # concurrent generations, so mutating instance state here would
+            # leak one episode's provider into another that runs in parallel
+            # (a premium episode reading a leaked "openai" would post its
+            # ElevenLabs voice_id to OpenAI's TTS endpoint → HTTP 400).
             effective_voice_id = None if force_default_voice else voice_id
             effective_secondary_voice_id = None if force_default_voice else secondary_voice_id
-            with self._tts_provider_override("openai" if force_default_voice else None):
-                return self._generate_with_openai(
-                    prompt=prompt,
-                    title=title,
-                    voice_id=effective_voice_id,
-                    secondary_voice_id=effective_secondary_voice_id,
-                    primary_speaker_name=primary_speaker_name,
-                    secondary_speaker_name=secondary_speaker_name,
-                    ux=ux,
-                    lead_in_texts=lead_in_texts,
-                    tail_texts=tail_texts,
-                )
+            effective_tts_provider = "openai" if force_default_voice else self.tts_provider
+            return self._generate_with_openai(
+                prompt=prompt,
+                title=title,
+                voice_id=effective_voice_id,
+                secondary_voice_id=effective_secondary_voice_id,
+                primary_speaker_name=primary_speaker_name,
+                secondary_speaker_name=secondary_speaker_name,
+                ux=ux,
+                lead_in_texts=lead_in_texts,
+                tail_texts=tail_texts,
+                tts_provider=effective_tts_provider,
+            )
         if provider == "generic":
             return self._generate_with_generic(prompt=prompt, title=title)
         raise PodcastApiError(f"Unsupported podcast provider: {self.provider}")
-
-    @contextmanager
-    def _tts_provider_override(self, override: Optional[str]) -> Iterator[None]:
-        if override is None:
-            yield
-            return
-        prior = self.tts_provider
-        self.tts_provider = override
-        try:
-            yield
-        finally:
-            self.tts_provider = prior
 
     def _generate_with_openai(
         self,
@@ -121,6 +117,7 @@ class PodcastApiClient:
         ux: Optional[PodcastUxConfig] = None,
         lead_in_texts: Optional[list[str]] = None,
         tail_texts: Optional[list[str]] = None,
+        tts_provider: Optional[str] = None,
     ) -> GeneratedEpisode:
         if not self.api_key:
             raise PodcastApiUnavailable("OpenAI API key is not configured")
@@ -148,7 +145,7 @@ class PodcastApiClient:
             )
             audio_segments.append(closing_segment)
 
-        speech_max_chars = self._speech_max_chars()
+        speech_max_chars = self._speech_max_chars(tts_provider)
         for segment in audio_segments:
             if len(segment.text) > speech_max_chars:
                 raise PodcastApiError(
@@ -180,7 +177,24 @@ class PodcastApiClient:
                 return voice_id
             return voice_id if segment.role == "primary" else secondary_voice_id
 
-        audio_chunks = [self._synthesize_speech(segment.text, _voice_for(segment)) for segment in audio_segments]
+        # Drop empty/whitespace-only segments before synthesis: the TTS
+        # endpoints (OpenAI in particular) reject empty input with HTTP 400,
+        # which would otherwise fail the whole episode over one stray blank
+        # line in the generated script.
+        non_empty_segments = [s for s in audio_segments if s.text and s.text.strip()]
+        if len(non_empty_segments) < len(audio_segments):
+            logger.warning(
+                "Dropping %d empty audio segment(s) before TTS",
+                len(audio_segments) - len(non_empty_segments),
+            )
+        audio_segments = non_empty_segments
+        if not audio_segments:
+            raise PodcastApiError("No non-empty audio segments to synthesize")
+
+        audio_chunks = [
+            self._synthesize_speech(segment.text, _voice_for(segment), tts_provider=tts_provider)
+            for segment in audio_segments
+        ]
         transcript = "\n\n".join(f"{segment.speaker}: {segment.text}" for segment in audio_segments)
         audio_bytes = self._assemble_audio(audio_chunks)
 
@@ -373,8 +387,10 @@ class PodcastApiClient:
             raise PodcastApiError("Closing response missing text field")
         return data["text"]
 
-    def _synthesize_speech(self, script: str, voice_id: Optional[str]) -> bytes:
-        provider = (self.tts_provider or "openai").strip().lower()
+    def _synthesize_speech(
+        self, script: str, voice_id: Optional[str], tts_provider: Optional[str] = None
+    ) -> bytes:
+        provider = (tts_provider or self.tts_provider or "openai").strip().lower()
         if provider == "elevenlabs":
             try:
                 return self._generate_elevenlabs_speech(script, voice_id)
@@ -413,8 +429,8 @@ class PodcastApiClient:
                 )
         return _concat_mp3_chunks(audio_chunks)
 
-    def _speech_max_chars(self) -> int:
-        provider = (self.tts_provider or "openai").strip().lower()
+    def _speech_max_chars(self, tts_provider: Optional[str] = None) -> int:
+        provider = (tts_provider or self.tts_provider or "openai").strip().lower()
         if provider == "elevenlabs":
             return ELEVENLABS_SPEECH_MAX_CHARS
         return OPENAI_SPEECH_MAX_CHARS
@@ -436,6 +452,19 @@ class PodcastApiClient:
             timeout=60,
         )
         self._raise_for_availability(response)
+        if response.status_code >= 400:
+            # Surface OpenAI's error body — raise_for_status only carries the
+            # status line, which hid the real cause of a 400 here for a full
+            # incident (an ElevenLabs voice_id leaked onto the OpenAI path).
+            body = getattr(response, "text", "")
+            logger.error(
+                "OpenAI TTS failed: status=%s voice=%r model=%r input_chars=%d body=%s",
+                response.status_code,
+                payload["voice"],
+                payload["model"],
+                len(script),
+                body[:500],
+            )
         response.raise_for_status()
         return response.content
 

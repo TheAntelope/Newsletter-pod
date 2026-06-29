@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from newsletter_pod.ingestion import IngestionResult, RSSIngestionService
 from newsletter_pod.main import _build_container, create_app
-from newsletter_pod.models import AudioSegment, GeneratedEpisode, SourceItem
+from newsletter_pod.models import AudioSegment, GeneratedEpisode, PublishStatus, SourceItem
 from newsletter_pod.utils import utc_now
 from newsletter_pod.user_models import (
     InboundEmailItem,
@@ -178,6 +178,109 @@ def test_schedule_patch_allows_empty_weekdays_for_on_demand():
     # regardless of the current time.
     result = container.control_plane.dispatch_due_users()
     assert all(p["user_id"] != "on-demand-user" for p in result["processed"])
+
+
+def test_dispatch_enqueues_due_users_instead_of_running_inline():
+    """The dispatcher hands each due user to the task enqueuer and returns
+    immediately — it must NOT run the full generation pipeline inline (doing so
+    for the whole cohort at once blew the Cloud Run request timeout)."""
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("due-user", "due@example.com"))
+    client.patch(
+        "/v1/me/schedule",
+        json={"timezone": "UTC", "weekdays": ["monday"], "local_time": "07:00"},
+        headers=headers,
+    )
+    cp = container.control_plane
+    user_id = cp.repository.list_schedules()[0].user_id
+
+    # 2026-06-29 08:00 UTC is a Monday inside the 07:00–cutoff delivery window.
+    now = datetime(2026, 6, 29, 8, 0, tzinfo=timezone.utc)
+    result = cp.dispatch_due_users(now_utc=now)
+
+    assert user_id in [job["user_id"] for job in cp.task_enqueuer.jobs]
+    assert any(
+        p["user_id"] == user_id and p["status"] == "enqueued"
+        for p in result["processed"]
+    )
+
+
+def test_dispatch_skips_user_after_daily_failure_cap():
+    """A user that has hit the daily failed-attempt cap is no longer
+    re-enqueued, even though the retry interval has elapsed — this bounds wasted
+    model spend on a generation that keeps erroring."""
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("cap-user", "cap@example.com"))
+    client.patch(
+        "/v1/me/schedule",
+        json={"timezone": "UTC", "weekdays": ["monday"], "local_time": "07:00"},
+        headers=headers,
+    )
+    cp = container.control_plane
+    user_id = cp.repository.list_schedules()[0].user_id
+    now = datetime(2026, 6, 29, 8, 0, tzinfo=timezone.utc)
+    cap = cp.settings.max_failed_generation_attempts_per_day
+
+    # Failures old enough that the retry-interval gate would otherwise allow a
+    # fresh attempt — so this isolates the cap, not the interval.
+    old = now - timedelta(minutes=cp.settings.dispatch_interval_minutes + 5)
+
+    def seed_failure():
+        cp.repository.save_user_run(
+            UserRunRecord(
+                id=uuid4().hex,
+                user_id=user_id,
+                local_run_date=now.date(),
+                started_at=old,
+                completed_at=old,
+                status=PublishStatus.FAILED.value,
+                message="boom",
+            )
+        )
+
+    for _ in range(cap - 1):
+        seed_failure()
+    cp.task_enqueuer.jobs.clear()
+    cp.dispatch_due_users(now_utc=now)
+    assert user_id in [job["user_id"] for job in cp.task_enqueuer.jobs]  # below cap
+
+    seed_failure()  # now exactly at the cap
+    cp.task_enqueuer.jobs.clear()
+    cp.dispatch_due_users(now_utc=now)
+    assert user_id not in [job["user_id"] for job in cp.task_enqueuer.jobs]  # capped
+
+
+def test_process_user_generation_job_records_failed_run_and_reraises():
+    """The enqueued worker entrypoint records a FAILED run when generation
+    raises (so the failure is visible and counts toward the retry cap) and then
+    re-raises so the task runner retries with backoff."""
+    import pytest
+
+    container, client = _build_app()
+    _, headers = _auth_headers(client, FakeAppleVerifier("job-fail-user", "jf@example.com"))
+    cp = container.control_plane
+    user_id = cp.repository.list_schedules()[0].user_id
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("kaboom")
+
+    cp.process_user_generation = boom  # type: ignore[assignment]
+
+    saved: list[UserRunRecord] = []
+    orig_save = cp.repository.save_user_run
+
+    def capture(run):
+        saved.append(run)
+        return orig_save(run)
+
+    cp.repository.save_user_run = capture  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError):
+        cp.process_user_generation_job(user_id=user_id, force=True)
+
+    assert any(
+        r.user_id == user_id and r.status == PublishStatus.FAILED.value for r in saved
+    )
 
 
 def test_feedback_endpoint_translates_and_persists(monkeypatch):

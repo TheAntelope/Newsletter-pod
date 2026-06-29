@@ -377,7 +377,7 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
     ) -> dict:
         _validate_job_auth(container.settings, authorization, x_job_trigger_token)
         assert container.control_plane is not None
-        result = container.control_plane.process_user_generation(
+        result = container.control_plane.process_user_generation_job(
             user_id=request_payload.user_id,
             force=request_payload.force,
         )

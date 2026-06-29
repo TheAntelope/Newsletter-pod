@@ -2211,6 +2211,16 @@ class ControlPlaneService:
         log_event(EventName.SUBSCRIPTION_CHANGED, user_id, **common)
 
     def dispatch_due_users(self, now_utc: Optional[datetime] = None) -> dict[str, Any]:
+        """Enqueue a generation task per due user and return immediately.
+
+        Generation is NOT run inline here: a single dispatch request cannot
+        finish every due user's full pipeline within the Cloud Run request
+        timeout (the morning cohort all share one delivery time), which caused
+        the request to be killed mid-batch (504) and the next tick to redo the
+        same work — a retry storm that spiked OpenAI spend. Each user is instead
+        handed to the task enqueuer, which fans them out as independent
+        /jobs/process-user-podcast requests with controlled concurrency and
+        bounded retries."""
         now_utc = now_utc or utc_now()
         processed: list[dict[str, Any]] = []
         for schedule in self.repository.list_schedules():
@@ -2221,11 +2231,16 @@ class ControlPlaneService:
             if not self._should_attempt_user(schedule.user_id, schedule, now_utc):
                 continue
             try:
-                result = self.process_user_generation(schedule.user_id, now_utc=now_utc)
-                run_status = (result.get("run") or {}).get("status") or result.get("status")
-                processed.append({"user_id": schedule.user_id, "status": run_status})
+                self.task_enqueuer.enqueue_user_generation(schedule.user_id)
+                processed.append({"user_id": schedule.user_id, "status": "enqueued"})
             except Exception as exc:
-                processed.append({"user_id": schedule.user_id, "status": "error", "error": str(exc)})
+                logger.exception(
+                    "dispatch_due_users: enqueue failed for user=%s",
+                    schedule.user_id,
+                )
+                processed.append(
+                    {"user_id": schedule.user_id, "status": "error", "error": str(exc)}
+                )
 
         return {
             "status": "ok",
@@ -2877,6 +2892,51 @@ class ControlPlaneService:
         )
         return {"run": run.model_dump(mode="json"), "started": True}
 
+    def _record_failed_run(
+        self,
+        user_id: str,
+        exc: Exception,
+        *,
+        run_id: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> UserRunRecord:
+        """Persist (or finalize) a FAILED run record and emit EPISODE_FAILED.
+
+        Shared by the interactive background path and the enqueued worker path
+        so a failed generation always leaves a visible run — which surfaces the
+        error AND lets the dispatcher's daily retry cap stop re-enqueuing a
+        user that keeps failing (otherwise every dispatch tick re-runs the
+        expensive script+TTS pipeline; see _should_attempt_user)."""
+        now = now or utc_now()
+        run = self.repository.get_user_run(run_id) if run_id else None
+        if run is None:
+            try:
+                schedule = self._get_schedule(user_id)
+                local_date = now.astimezone(ZoneInfo(schedule.timezone)).date()
+            except Exception:  # pragma: no cover - schedule lookup is best-effort
+                local_date = now.date()
+            run = UserRunRecord(
+                id=run_id or uuid4().hex,
+                user_id=user_id,
+                local_run_date=local_date,
+                started_at=now,
+                completed_at=now,
+                status=PublishStatus.FAILED.value,
+                message=str(exc)[:500] or "Generation failed",
+            )
+        else:
+            run.status = PublishStatus.FAILED.value
+            run.message = (str(exc)[:500] or "Generation failed")
+            run.completed_at = now
+        self.repository.save_user_run(run)
+        log_event(
+            EventName.EPISODE_FAILED,
+            user_id,
+            run_id=run.id,
+            error_class=type(exc).__name__,
+        )
+        return run
+
     def run_user_generation_in_background(
         self, *, run_id: str, user_id: str, force: bool = True
     ) -> None:
@@ -2884,31 +2944,27 @@ class ControlPlaneService:
             self.process_user_generation(user_id=user_id, force=force, run_id=run_id)
         except Exception as exc:
             logger.exception("Background generation failed for run %s", run_id)
-            run = self.repository.get_user_run(run_id)
-            now = utc_now()
-            if run is None:
-                schedule = self._get_schedule(user_id)
-                local_date = now.astimezone(ZoneInfo(schedule.timezone)).date()
-                run = UserRunRecord(
-                    id=run_id,
-                    user_id=user_id,
-                    local_run_date=local_date,
-                    started_at=now,
-                    completed_at=now,
-                    status=PublishStatus.FAILED.value,
-                    message=str(exc)[:500] or "Generation failed",
-                )
-            else:
-                run.status = PublishStatus.FAILED.value
-                run.message = (str(exc)[:500] or "Generation failed")
-                run.completed_at = now
-            self.repository.save_user_run(run)
-            log_event(
-                EventName.EPISODE_FAILED,
-                user_id,
-                run_id=run_id,
-                error_class=type(exc).__name__,
+            self._record_failed_run(user_id, exc, run_id=run_id)
+
+    def process_user_generation_job(
+        self,
+        user_id: str,
+        force: bool = False,
+        now_utc: Optional[datetime] = None,
+    ) -> dict[str, Any]:
+        """Worker entrypoint for an enqueued per-user generation (Cloud Tasks →
+        /jobs/process-user-podcast). Unlike the raw control-plane call this
+        records a FAILED run on exception (so the dispatcher's retry cap and our
+        observability can see it), then re-raises so the task runner retries
+        with backoff (bounded by the queue's max-attempts)."""
+        try:
+            return self.process_user_generation(
+                user_id=user_id, force=force, now_utc=now_utc
             )
+        except Exception as exc:
+            logger.exception("Enqueued generation failed for user=%s", user_id)
+            self._record_failed_run(user_id, exc)
+            raise
 
     def get_user_run_status(self, user_id: str, run_id: str) -> dict[str, Any]:
         run = self.repository.get_user_run(run_id)
@@ -3542,6 +3598,13 @@ class ControlPlaneService:
         local_date = now_utc.astimezone(ZoneInfo(schedule.timezone)).date()
         runs = self.repository.list_user_runs_for_date(user_id, local_date)
         if any(run.status in COMPLETED_RUN_STATUSES for run in runs):
+            return False
+        # Stop re-attempting a user that has already failed repeatedly today.
+        # Without this cap a persistently-failing generation (e.g. a bad source
+        # or a TTS error) is re-enqueued on every dispatch tick, re-running the
+        # whole script+TTS pipeline each time and burning model spend.
+        failed_today = sum(1 for run in runs if run.status == PublishStatus.FAILED.value)
+        if failed_today >= self.settings.max_failed_generation_attempts_per_day:
             return False
         if not runs:
             return True
