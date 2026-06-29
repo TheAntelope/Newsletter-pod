@@ -758,3 +758,132 @@ def test_concat_mp3_chunks_yields_single_clean_stream():
 def test_measure_mp3_duration_returns_none_for_non_mp3():
     assert _measure_mp3_duration_seconds(b"not audio") is None
     assert _measure_mp3_duration_seconds(b"") is None
+
+
+def test_default_voice_generation_does_not_leak_provider_to_concurrent_premium(monkeypatch):
+    """Regression for the 2026-06-29 TTS-400 incident.
+
+    PodcastApiClient is a process-wide singleton shared across concurrent
+    generations. A `force_default_voice` (OpenAI) episode must not leak its
+    provider onto a premium (ElevenLabs) episode running at the same time.
+    We simulate the interleave deterministically by kicking off a nested
+    premium generate() *during* the default episode's OpenAI TTS call, and
+    assert the premium one still routes to ElevenLabs and never posts its
+    ElevenLabs voice_id to OpenAI's /audio/speech endpoint (which 400s).
+    """
+    el_voice = "suMMgpGbVcnihP1CcgFS"
+    state = {"reentered": False, "elevenlabs_calls": []}
+    openai_tts_calls: list[dict] = []
+
+    script_json = {
+        "output": [
+            {
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": (
+                            '{"episode_title":"T","show_notes":"- s",'
+                            '"audio_segments":[{"role":"primary","text":"Hello."}]}'
+                        ),
+                    }
+                ]
+            }
+        ]
+    }
+
+    def fake_post(url, json, headers, timeout):
+        if url.endswith("/v1/responses"):
+            return FakeResponse(json_data=script_json)
+        if url.endswith("/v1/audio/speech"):
+            openai_tts_calls.append(json)
+            # Mid-flight of the default (OpenAI) episode, start a premium one on
+            # the same client instance — this is the concurrency the bug needs.
+            if not state["reentered"]:
+                state["reentered"] = True
+                client.generate(
+                    prompt="p", title="t", voice_id=el_voice, force_default_voice=False
+                )
+            return FakeResponse(content=b"mp3")
+        if "/v1/text-to-speech/" in url:
+            state["elevenlabs_calls"].append(url)
+            return FakeResponse(content=b"el-mp3")
+        raise AssertionError(url)
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="gpt-4o-mini-tts",
+        tts_voice="alloy",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key="el-key",
+        elevenlabs_model="eleven_multilingual_v2",
+    )
+
+    client.generate(prompt="p", title="t", voice_id=el_voice, force_default_voice=True)
+
+    # The nested premium episode routed to ElevenLabs with its voice id...
+    assert any(el_voice in u for u in state["elevenlabs_calls"]), state["elevenlabs_calls"]
+    # ...and never posted the ElevenLabs voice id to OpenAI's TTS endpoint.
+    assert all(c.get("voice") != el_voice for c in openai_tts_calls), openai_tts_calls
+    # The shared instance's provider was never mutated.
+    assert client.tts_provider == "elevenlabs"
+
+
+def test_empty_audio_segments_are_dropped_before_tts(monkeypatch):
+    """A blank segment in the generated script must be dropped, not sent to
+    TTS (OpenAI rejects empty input with HTTP 400, failing the whole episode)."""
+    inputs: list[str] = []
+
+    def fake_post(url, json, headers, timeout):
+        if url.endswith("/v1/responses"):
+            return FakeResponse(
+                json_data={
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": (
+                                        '{"episode_title":"T","show_notes":"- s",'
+                                        '"audio_segments":['
+                                        '{"role":"primary","text":"Real line."},'
+                                        '{"role":"secondary","text":"   "},'
+                                        '{"role":"primary","text":""}'
+                                        "]}"
+                                    ),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        if url.endswith("/v1/audio/speech"):
+            inputs.append(json["input"])
+            return FakeResponse(content=json["input"].encode("utf-8"))
+        raise AssertionError(url)
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="gpt-4o-mini-tts",
+        tts_voice="alloy",
+    )
+
+    client.generate(prompt="p", title="t")
+
+    # Only the one non-blank segment is synthesized.
+    assert inputs == ["Real line."]

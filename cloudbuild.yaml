@@ -58,7 +58,14 @@ steps:
       # service; pin it here so a future deploy can't silently drop it. ffmpeg
       # ships in the Dockerfile and any failure falls back to raw concat, so this
       # can never break generation.
-      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true,CANDIDATE_QUEUE_ENABLED=true,APNS_ENABLED=true,APNS_TEAM_ID=R7HS2T53Z8,APNS_BUNDLE_ID=com.newsletterpod.app,APNS_ENVIRONMENT=production,FIREBASE_PROJECT_ID=theclawcast-9a045,FCM_ENABLED=true,ANALYTICS_EXPORT_ENABLED=true,PODCAST_AUDIO_MASTERING_ENABLED=true
+      # CLOUD_TASKS_* wires the per-user dispatcher to the Cloud Tasks queue
+      # `user-podcast-generation` (europe-west1). dispatch_due_users enqueues one
+      # task per due user instead of generating the whole cohort inline (which
+      # blew the request timeout). MUST stay set: if CLOUD_TASKS_QUEUE is unset
+      # the dispatcher falls back to the in-memory enqueuer and silently drops
+      # every generation. The queue posts to /jobs/process-user-podcast with the
+      # JOB_TRIGGER_TOKEN header (the service is public), so no OIDC SA needed.
+      - --update-env-vars=SOURCE_ITEM_EMBEDDINGS_ENABLED=true,CANDIDATE_QUEUE_ENABLED=true,APNS_ENABLED=true,APNS_TEAM_ID=R7HS2T53Z8,APNS_BUNDLE_ID=com.newsletterpod.app,APNS_ENVIRONMENT=production,FIREBASE_PROJECT_ID=theclawcast-9a045,FCM_ENABLED=true,ANALYTICS_EXPORT_ENABLED=true,PODCAST_AUDIO_MASTERING_ENABLED=true,CLOUD_TASKS_QUEUE=user-podcast-generation,CLOUD_TASKS_LOCATION=europe-west1,CLOUD_TASKS_PROJECT_ID=newsletter-pod
       # Pin every critical secret on every deploy so that if a future config
       # edit strips a binding (as happened on revision 00045 on 2026-05-01,
       # and again with MAILGUN_WEBHOOK_SIGNING_KEY in 2026-05), the next deploy

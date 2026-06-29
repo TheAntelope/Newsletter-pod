@@ -256,6 +256,13 @@ class Settings(BaseSettings):
     weekly_target_local: str = Field(default="07:00", alias="WEEKLY_TARGET_LOCAL")
     weekly_cutoff_local: str = Field(default="11:00", alias="WEEKLY_CUTOFF_LOCAL")
     dispatch_interval_minutes: int = Field(default=15, alias="DISPATCH_INTERVAL_MINUTES")
+    # Per-user, per-day cap on failed generation attempts. Once a user has this
+    # many FAILED runs for their local date the dispatcher stops re-enqueuing
+    # them until the next day — bounds wasted model spend on a user whose
+    # generation keeps erroring (see ControlPlaneService._should_attempt_user).
+    max_failed_generation_attempts_per_day: int = Field(
+        default=3, alias="MAX_FAILED_GENERATION_ATTEMPTS_PER_DAY"
+    )
 
     # Defensive ceiling on user source count. Not a tier limit — the paywall
     # doesn't mention it. Sized to absorb pathological cases (OPML paste,
