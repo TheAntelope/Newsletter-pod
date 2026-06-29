@@ -14,7 +14,11 @@ from datetime import datetime, timedelta, timezone
 from newsletter_pod.models import SourceItemRecord
 from newsletter_pod.user_repository import FirestoreControlPlaneRepository
 
-_BASE = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+# Anchor fixtures to "now" (one day in the past) rather than a fixed calendar
+# date. `list_recent_source_items_for_sources` filters `last_seen_at` by a
+# lookback window relative to the wall clock, so a hardcoded past date silently
+# ages out of the window and turns these tests red on their own over time.
+_BASE = datetime.now(timezone.utc) - timedelta(days=1)
 
 
 def _record(
