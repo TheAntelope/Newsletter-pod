@@ -198,6 +198,16 @@ class _Dashboard extends StatelessWidget {
             startedAt: app.generationStartedAt,
           ),
           const SizedBox(height: DesignTokens.spacingL),
+          // The generation wait is dead time — a natural, low-friction moment to
+          // ask the one attribution question. Only while the answer is unknown.
+          if (me.user.acquisitionSource == null &&
+              !app.acquisitionPromptDismissed) ...[
+            _AcquisitionSourceCard(
+              onSelect: app.recordAcquisitionSource,
+              onSkip: app.skipAcquisitionPrompt,
+            ),
+            const SizedBox(height: DesignTokens.spacingL),
+          ],
         ] else if (app.runNotice != null) ...[
           _RunNoticeBanner(
             message: app.runNotice!,
@@ -1064,6 +1074,163 @@ class _ShareTipCard extends StatelessWidget {
 /// The platform's name for the share affordance: "Share" on Android, "the Share
 /// button" on iOS. Keeps the tip's instruction matching what the user sees.
 String get _shareVerb => Platform.isIOS ? 'the Share button' : 'Share';
+
+/// The "where did you find us?" attribution prompt, shown once during the
+/// first-pod generation wait (gated on the user's `acquisitionSource` being
+/// null). One tap records the channel and dismisses; "Other" reveals a short
+/// text box; "Skip" records a decline so we stop asking. Values must match
+/// `ACQUISITION_SOURCES` in the backend control plane.
+class _AcquisitionSourceCard extends StatefulWidget {
+  const _AcquisitionSourceCard({required this.onSelect, required this.onSkip});
+
+  /// Records the chosen channel (+ free text for "other"). Tear-off of
+  /// [AppState.recordAcquisitionSource].
+  final void Function(String source, {String? detail}) onSelect;
+  final VoidCallback onSkip;
+
+  @override
+  State<_AcquisitionSourceCard> createState() => _AcquisitionSourceCardState();
+}
+
+class _AcquisitionSourceCardState extends State<_AcquisitionSourceCard> {
+  // (label shown to the user, value stored on the backend).
+  static const List<(String, String)> _options = [
+    ('Word of mouth', 'word_of_mouth'),
+    ('X', 'x'),
+    ('Reddit', 'reddit'),
+    ('LinkedIn', 'linkedin'),
+    ('Product Hunt', 'product_hunt'),
+    ('Other', 'other'),
+  ];
+
+  bool _showOther = false;
+  final TextEditingController _otherController = TextEditingController();
+
+  @override
+  void dispose() {
+    _otherController.dispose();
+    super.dispose();
+  }
+
+  void _tap(String value) {
+    if (value == 'other') {
+      setState(() => _showOther = true);
+      return;
+    }
+    widget.onSelect(value);
+  }
+
+  void _submitOther() {
+    final detail = _otherController.text.trim();
+    widget.onSelect('other', detail: detail.isEmpty ? null : detail);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return EditorialCard(
+      spacing: DesignTokens.spacingS,
+      children: [
+        Row(
+          children: [
+            const Expanded(child: MetaLabel('Quick one')),
+            InkWell(
+              onTap: widget.onSkip,
+              child: Text(
+                'Skip',
+                style: DesignTokens.typographyCalloutStrong
+                    .copyWith(color: DesignTokens.colorMuted),
+              ),
+            ),
+          ],
+        ),
+        Text(
+          'Where did you find us?',
+          style: DesignTokens.typographySubtitle
+              .copyWith(color: DesignTokens.colorInk),
+        ),
+        Wrap(
+          spacing: DesignTokens.spacingS,
+          runSpacing: DesignTokens.spacingS,
+          children: [
+            for (final (label, value) in _options)
+              _SourceChip(
+                label: label,
+                selected: value == 'other' && _showOther,
+                onTap: () => _tap(value),
+              ),
+          ],
+        ),
+        if (_showOther) ...[
+          TextField(
+            controller: _otherController,
+            autofocus: true,
+            textCapitalization: TextCapitalization.sentences,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _submitOther(),
+            maxLength: 200,
+            decoration: const InputDecoration(
+              hintText: 'Where did you hear about us?',
+              counterText: '',
+              isDense: true,
+            ),
+            style: DesignTokens.typographyBody
+                .copyWith(color: DesignTokens.colorInk),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: AmberButton.filled(
+              label: 'Done',
+              expand: false,
+              onPressed: _submitOther,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// A tap-to-select pill used by [_AcquisitionSourceCard]. Hairline ring by
+/// default, amber fill when selected — the same idiom as the schedule
+/// DayToggle, sized for a text label in a [Wrap].
+class _SourceChip extends StatelessWidget {
+  const _SourceChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: DesignTokens.spacingM,
+          vertical: DesignTokens.spacingS,
+        ),
+        decoration: BoxDecoration(
+          color: selected ? DesignTokens.colorAmber : Colors.transparent,
+          borderRadius: BorderRadius.circular(DesignTokens.radiusCard),
+          border: Border.all(
+            color: selected ? DesignTokens.colorAmber : DesignTokens.colorRule,
+            width: 1.5,
+          ),
+        ),
+        child: Text(
+          label,
+          style: DesignTokens.typographyCalloutStrong.copyWith(
+            color: selected ? Colors.white : DesignTokens.colorInk,
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _SetupChecklistCard extends StatelessWidget {
   const _SetupChecklistCard({

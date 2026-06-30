@@ -11,6 +11,8 @@
 --                                    (sanitized), not arbitrary aliases.
 --   * analytics.subscriptions_export — daily Firestore snapshot.
 --   * analytics.users_export        — daily Firestore snapshot.
+--   * analytics.acquisition_export  — daily Firestore snapshot (one row per
+--                                     user, their "where did you find us?" answer).
 --
 -- Cost discipline:
 --   The brief constrains every view that scans events_raw to filter on
@@ -391,3 +393,32 @@ LEFT JOIN user_device_platform d USING (user_id)
 WHERE e.ts IS NOT NULL
 GROUP BY event_date, platform
 ORDER BY event_date DESC, platform;
+
+
+CREATE OR REPLACE VIEW `analytics.vw_acquisition_breakdown` AS
+-- Snapshot-only view: reads the daily Firestore export, not events_raw.
+-- "Where did you find us?" answers, one bucket per channel. A NULL source is
+-- a user who hasn't answered yet ('unknown'); 'skipped' is an explicit decline.
+-- response_rate = answered / total, so we can see how many users the prompt
+-- actually converts, not just the split among answerers.
+WITH labelled AS (
+  SELECT
+    COALESCE(acquisition_source, 'unknown') AS source,
+    acquisition_source IS NOT NULL
+      AND acquisition_source != 'skipped' AS answered
+  FROM `analytics.acquisition_export`
+),
+total AS (
+  SELECT COUNT(*) AS total_users, COUNTIF(answered) AS answered_users
+  FROM labelled
+)
+SELECT
+  l.source,
+  COUNT(*) AS user_count,
+  SAFE_DIVIDE(COUNT(*), NULLIF(t.total_users, 0)) AS share_of_users,
+  -- Same on every row: fraction of all users who gave a real answer.
+  SAFE_DIVIDE(t.answered_users, NULLIF(t.total_users, 0)) AS overall_response_rate
+FROM labelled l
+CROSS JOIN total t
+GROUP BY l.source, t.total_users, t.answered_users
+ORDER BY user_count DESC;

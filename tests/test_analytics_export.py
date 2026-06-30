@@ -5,15 +5,17 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 
 from newsletter_pod.analytics_export import (
+    ACQUISITION_TABLE,
     DEVICE_TOKENS_TABLE,
     SUBSCRIPTIONS_TABLE,
+    build_acquisition_rows,
     build_device_token_rows,
     build_subscription_rows,
     run_export,
 )
 from newsletter_pod.config import Settings
 from newsletter_pod.main import _build_container, create_app
-from newsletter_pod.user_models import DeviceTokenRecord, SubscriptionRecord
+from newsletter_pod.user_models import DeviceTokenRecord, SubscriptionRecord, UserRecord
 from newsletter_pod.user_repository import InMemoryControlPlaneRepository
 
 NOW = datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc)
@@ -87,6 +89,26 @@ def test_list_all_active_device_tokens_excludes_invalidated():
     assert {t.user_id for t in toks} == {"u1", "u2"}
 
 
+def test_build_acquisition_rows():
+    repo = InMemoryControlPlaneRepository()
+    repo.save_user(
+        UserRecord(
+            id="u1", created_at=EARLIER, updated_at=NOW,
+            acquisition_source="reddit", acquisition_recorded_at=NOW,
+        )
+    )
+    # Unanswered user: source stays NULL so the breakdown can report response rate.
+    repo.save_user(UserRecord(id="u2", created_at=NOW, updated_at=NOW))
+    rows = build_acquisition_rows(repo)
+    by_user = {r["user_id"]: r for r in rows}
+    assert set(by_user) == {"u1", "u2"}
+    assert by_user["u1"]["acquisition_source"] == "reddit"
+    assert by_user["u1"]["acquisition_recorded_at"] == "2026-06-14T12:00:00+00:00"
+    assert by_user["u1"]["created_at"] == "2026-06-10T08:00:00+00:00"
+    assert by_user["u2"]["acquisition_source"] is None
+    assert by_user["u2"]["acquisition_recorded_at"] is None
+
+
 def test_run_export_calls_writer_per_table_and_counts():
     repo = _repo_with_data()
     captured: dict[str, tuple] = {}
@@ -96,14 +118,25 @@ def test_run_export_calls_writer_per_table_and_counts():
             captured[table] = (schema, rows)
 
     counts = run_export(repo, FakeWriter())
-    assert counts == {SUBSCRIPTIONS_TABLE: 2, DEVICE_TOKENS_TABLE: 3}
-    assert set(captured) == {SUBSCRIPTIONS_TABLE, DEVICE_TOKENS_TABLE}
+    # _repo_with_data seeds subscriptions/tokens but no user records, so the
+    # acquisition snapshot is present-but-empty.
+    assert counts == {
+        SUBSCRIPTIONS_TABLE: 2,
+        DEVICE_TOKENS_TABLE: 3,
+        ACQUISITION_TABLE: 0,
+    }
+    assert set(captured) == {
+        SUBSCRIPTIONS_TABLE,
+        DEVICE_TOKENS_TABLE,
+        ACQUISITION_TABLE,
+    }
     # Schema is threaded through so an empty snapshot still types the table.
     assert ("user_id", "STRING") in captured[SUBSCRIPTIONS_TABLE][0]
     assert ("last_seen_at", "TIMESTAMP") in captured[DEVICE_TOKENS_TABLE][0]
+    assert ("acquisition_source", "STRING") in captured[ACQUISITION_TABLE][0]
 
 
-def test_run_export_empty_repo_still_writes_both_tables():
+def test_run_export_empty_repo_still_writes_all_tables():
     captured = []
 
     class FakeWriter:
@@ -111,9 +144,17 @@ def test_run_export_empty_repo_still_writes_both_tables():
             captured.append((table, rows))
 
     counts = run_export(InMemoryControlPlaneRepository(), FakeWriter())
-    assert counts == {SUBSCRIPTIONS_TABLE: 0, DEVICE_TOKENS_TABLE: 0}
-    # Both tables are replaced (emptied), not skipped.
-    assert {t for t, _ in captured} == {SUBSCRIPTIONS_TABLE, DEVICE_TOKENS_TABLE}
+    assert counts == {
+        SUBSCRIPTIONS_TABLE: 0,
+        DEVICE_TOKENS_TABLE: 0,
+        ACQUISITION_TABLE: 0,
+    }
+    # Every table is replaced (emptied), not skipped.
+    assert {t for t, _ in captured} == {
+        SUBSCRIPTIONS_TABLE,
+        DEVICE_TOKENS_TABLE,
+        ACQUISITION_TABLE,
+    }
     assert all(rows == [] for _, rows in captured)
 
 

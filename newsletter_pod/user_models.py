@@ -84,6 +84,15 @@ class UserRecord(BaseModel):
     trial_gift_acknowledged_at: Optional[datetime] = None
     trial_gift_pushed_at: Optional[datetime] = None
 
+    # Acquisition attribution (2026-06-29). Captured once, during the first-pod
+    # generation wait (or the next generation for an existing user). None means
+    # never answered → still eligible to be asked. Otherwise one of the values in
+    # ACQUISITION_SOURCES (control_plane) or "skipped" when the user declined.
+    # `*_detail` holds the free text typed for the "other" choice. Write-once.
+    acquisition_source: Optional[str] = None
+    acquisition_source_detail: Optional[str] = None
+    acquisition_recorded_at: Optional[datetime] = None
+
 
 class PodcastProfileRecord(BaseModel):
     user_id: str

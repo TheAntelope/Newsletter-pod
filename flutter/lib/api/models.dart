@@ -142,12 +142,19 @@ class UserDto {
   final String timezone;
   final String? inboundAddress;
 
+  /// Where the user said they found us, once answered. Null = never asked,
+  /// which is what gates the "where did you find us?" card during generation.
+  /// One of the chip values (word_of_mouth/x/reddit/linkedin/product_hunt/other)
+  /// or 'skipped' when they declined.
+  final String? acquisitionSource;
+
   UserDto({
     required this.id,
     this.email,
     required this.displayName,
     required this.timezone,
     this.inboundAddress,
+    this.acquisitionSource,
   });
 
   factory UserDto.fromJson(Map<String, dynamic> json) =>

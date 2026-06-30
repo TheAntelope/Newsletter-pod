@@ -168,6 +168,22 @@ class ApiClient {
     return days is int ? days : int.tryParse('${days ?? ''}') ?? 0;
   }
 
+  /// Records the answer to "where did you find us?" (asked once, during the
+  /// first-pod generation wait). `detail` is the free text typed for the
+  /// "other" choice; pass null/empty for every other source and the backend
+  /// ignores it. Write-once and idempotent server-side. Returns the refreshed
+  /// `me` envelope so the caller can drop the card without a second fetch.
+  Future<MeEnvelope> recordAcquisitionSource(
+    String token, {
+    required String source,
+    String? detail,
+  }) async =>
+      MeEnvelope.fromJson(_decodeWeekdays(
+          await _send('/v1/me/acquisition-source', method: 'POST', token: token, body: {
+        'source': source,
+        if (detail != null && detail.isNotEmpty) 'detail': detail,
+      })));
+
   // -------------------------------------------------------------------------
   // Catalogs
   // -------------------------------------------------------------------------

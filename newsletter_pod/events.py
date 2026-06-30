@@ -172,6 +172,7 @@ class EventName(str, Enum):
     SCHEDULE_CHANGED = "schedule_changed"
     CHURN_RISK_SCORED = "churn_risk_scored"
     SHARED_ITEM_RECEIVED = "shared_item_received"
+    ACQUISITION_SOURCE_SELECTED = "acquisition_source_selected"
 
 
 # Property keys we refuse to log. These are the fields most likely to
