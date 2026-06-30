@@ -127,6 +127,17 @@ WEEKDAY_NAMES = [
 # canonical full names we store and schedule against so either form is accepted.
 WEEKDAY_ABBREVIATIONS = {name[:3]: name for name in WEEKDAY_NAMES}
 
+# Acquisition-attribution channels offered by the "where did you find us?" prompt
+# (see record_acquisition_source). The client sends one of these; "skipped" is
+# also accepted to record a decline. Keep in sync with the chips in the Flutter
+# _AcquisitionSourceCard.
+ACQUISITION_SOURCES = frozenset(
+    {"word_of_mouth", "x", "reddit", "linkedin", "product_hunt", "other"}
+)
+# Cap on the free text typed for the "other" choice, so a runaway client can't
+# stash an unbounded blob on the user record.
+ACQUISITION_DETAIL_MAX_LEN = 200
+
 
 class ControlPlaneError(RuntimeError):
     pass
@@ -1411,6 +1422,38 @@ class ControlPlaneService:
             user.updated_at = utc_now()
             self.repository.save_user(user)
         return {"ok": True}
+
+    def record_acquisition_source(
+        self, user_id: str, source: str, detail: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Record where the user found us (the "where did you find us?" prompt).
+
+        `source` must be one of ACQUISITION_SOURCES or "skipped" (the user
+        declined). Free text typed for the "other" choice is trimmed, length-
+        capped and kept only for source == "other". Write-once: once a source is
+        stored the call is a no-op, so a later "skipped" can't clobber a real
+        answer (e.g. a re-render of the card after the answer round-trips).
+        Returns the same payload as get_me so the client refreshes in place.
+        """
+        normalized = (source or "").strip().lower()
+        if normalized not in ACQUISITION_SOURCES and normalized != "skipped":
+            raise ControlPlaneError(f"Unknown acquisition source: {source!r}")
+
+        user = self._require_user(user_id)
+        if user.acquisition_source is not None:
+            return self.get_me(user_id)
+
+        user.acquisition_source = normalized
+        if normalized == "other" and detail:
+            user.acquisition_source_detail = detail.strip()[:ACQUISITION_DETAIL_MAX_LEN] or None
+        user.acquisition_recorded_at = utc_now()
+        user.updated_at = utc_now()
+        self.repository.save_user(user)
+
+        # Source only (no free text) into the event stream — the detail can be
+        # PII-ish and the breakdown view reads the snapshot, not events.
+        log_event(EventName.ACQUISITION_SOURCE_SELECTED, user_id, source=normalized)
+        return self.get_me(user_id)
 
     def get_source_catalog(self) -> list[dict[str, Any]]:
         return [

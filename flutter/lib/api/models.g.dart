@@ -150,6 +150,7 @@ UserDto _$UserDtoFromJson(Map<String, dynamic> json) => UserDto(
   displayName: json['display_name'] as String,
   timezone: json['timezone'] as String,
   inboundAddress: json['inbound_address'] as String?,
+  acquisitionSource: json['acquisition_source'] as String?,
 );
 
 Map<String, dynamic> _$UserDtoToJson(UserDto instance) => <String, dynamic>{
@@ -158,6 +159,7 @@ Map<String, dynamic> _$UserDtoToJson(UserDto instance) => <String, dynamic>{
   'display_name': instance.displayName,
   'timezone': instance.timezone,
   'inbound_address': instance.inboundAddress,
+  'acquisition_source': instance.acquisitionSource,
 };
 
 SubscriptionDto _$SubscriptionDtoFromJson(Map<String, dynamic> json) =>

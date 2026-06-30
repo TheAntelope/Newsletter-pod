@@ -126,6 +126,13 @@ class UpdateMeRequest(BaseModel):
     timezone: Optional[str] = None
 
 
+class AcquisitionSourceRequest(BaseModel):
+    # One of control_plane.ACQUISITION_SOURCES or "skipped"; validated there.
+    source: str
+    # Free text for the "other" choice; ignored for every other source.
+    detail: Optional[str] = None
+
+
 class ValidateSourceRequest(BaseModel):
     rss_url: str
 
@@ -1145,6 +1152,23 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         assert container.control_plane is not None
         try:
             return container.control_plane.acknowledge_trial_gift(user.id)
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    @app.post("/v1/me/acquisition-source")
+    def post_acquisition_source(
+        request_payload: AcquisitionSourceRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        """Record the answer to "where did you find us?" (asked once, during the
+        first-pod generation wait). Write-once and idempotent; returns the same
+        payload as GET /v1/me so the client refreshes in place."""
+        user = _require_session_user(container, authorization)
+        assert container.control_plane is not None
+        try:
+            return container.control_plane.record_acquisition_source(
+                user.id, request_payload.source, request_payload.detail
+            )
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 

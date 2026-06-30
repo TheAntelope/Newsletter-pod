@@ -56,6 +56,19 @@ DEVICE_TOKENS_SCHEMA: list[tuple[str, str]] = [
     ("last_seen_at", "TIMESTAMP"),
 ]
 
+# One row per user with their acquisition answer ("where did you find us?").
+# `acquisition_source` is NULL until the user answers — vw_acquisition_breakdown
+# buckets those as "unknown". `created_at` carries the signup time so the
+# breakdown can be cohorted by week.
+ACQUISITION_TABLE = "acquisition_export"
+ACQUISITION_SCHEMA: list[tuple[str, str]] = [
+    ("user_id", "STRING"),
+    ("acquisition_source", "STRING"),
+    ("acquisition_source_detail", "STRING"),
+    ("acquisition_recorded_at", "TIMESTAMP"),
+    ("created_at", "TIMESTAMP"),
+]
+
 
 def build_subscription_rows(repo: ControlPlaneRepository) -> list[dict[str, Any]]:
     """One row per user subscription, shaped for SUBSCRIPTIONS_SCHEMA."""
@@ -89,6 +102,22 @@ def build_device_token_rows(repo: ControlPlaneRepository) -> list[dict[str, Any]
     ]
 
 
+def build_acquisition_rows(repo: ControlPlaneRepository) -> list[dict[str, Any]]:
+    """One row per user with their acquisition attribution, shaped for
+    ACQUISITION_SCHEMA. Unanswered users keep a NULL source so the breakdown
+    can report response rate, not just the answered split."""
+    return [
+        {
+            "user_id": user.id,
+            "acquisition_source": user.acquisition_source,
+            "acquisition_source_detail": user.acquisition_source_detail,
+            "acquisition_recorded_at": _iso(user.acquisition_recorded_at),
+            "created_at": _iso(user.created_at),
+        }
+        for user in repo.list_all_users(limit=_MAX_ROWS)
+    ]
+
+
 class TableWriter(Protocol):
     """Replaces a whole table from in-memory rows. The Protocol keeps run_export
     decoupled from BigQuery so tests can inject a fake."""
@@ -102,11 +131,14 @@ def run_export(repo: ControlPlaneRepository, writer: TableWriter) -> dict[str, i
     """Build every snapshot and replace its BigQuery table. Returns row counts."""
     subscriptions = build_subscription_rows(repo)
     device_tokens = build_device_token_rows(repo)
+    acquisition = build_acquisition_rows(repo)
     writer.replace_table(SUBSCRIPTIONS_TABLE, SUBSCRIPTIONS_SCHEMA, subscriptions)
     writer.replace_table(DEVICE_TOKENS_TABLE, DEVICE_TOKENS_SCHEMA, device_tokens)
+    writer.replace_table(ACQUISITION_TABLE, ACQUISITION_SCHEMA, acquisition)
     return {
         SUBSCRIPTIONS_TABLE: len(subscriptions),
         DEVICE_TOKENS_TABLE: len(device_tokens),
+        ACQUISITION_TABLE: len(acquisition),
     }
 
 
