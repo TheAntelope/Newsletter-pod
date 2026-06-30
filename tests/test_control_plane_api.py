@@ -3443,3 +3443,65 @@ def test_reap_stale_runs_endpoint_is_idempotent():
     second = client.post("/jobs/reap-stale-runs")
     assert second.status_code == 200
     assert second.json()["reaped"] == 0
+
+
+# --- "Where did you find us?" acquisition prompt -------------------------------
+
+def test_acquisition_source_records_and_is_write_once():
+    container, client = _build_app()
+    _, headers = _auth_user(client, "acq-user", "acq@example.com")
+
+    # Unanswered to start — this null is what gates the prompt client-side.
+    me = client.get("/v1/me", headers=headers).json()
+    assert me["user"]["acquisition_source"] is None
+
+    resp = client.post(
+        "/v1/me/acquisition-source", headers=headers, json={"source": "reddit"}
+    )
+    assert resp.status_code == 200
+    user = resp.json()["user"]
+    assert user["acquisition_source"] == "reddit"
+    assert user["acquisition_recorded_at"] is not None
+
+    # Write-once: a later "skipped" (e.g. a re-rendered card) must not clobber
+    # the real answer.
+    resp2 = client.post(
+        "/v1/me/acquisition-source", headers=headers, json={"source": "skipped"}
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["user"]["acquisition_source"] == "reddit"
+
+
+def test_acquisition_source_other_keeps_trimmed_detail():
+    container, client = _build_app()
+    _, headers = _auth_user(client, "acq-other", "other@example.com")
+    resp = client.post(
+        "/v1/me/acquisition-source",
+        headers=headers,
+        json={"source": "other", "detail": "  a friend's newsletter  "},
+    )
+    assert resp.status_code == 200
+    user = resp.json()["user"]
+    assert user["acquisition_source"] == "other"
+    assert user["acquisition_source_detail"] == "a friend's newsletter"
+
+
+def test_acquisition_source_detail_ignored_for_non_other():
+    container, client = _build_app()
+    _, headers = _auth_user(client, "acq-x", "x@example.com")
+    resp = client.post(
+        "/v1/me/acquisition-source",
+        headers=headers,
+        json={"source": "x", "detail": "should be dropped"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["user"]["acquisition_source_detail"] is None
+
+
+def test_acquisition_source_rejects_unknown():
+    container, client = _build_app()
+    _, headers = _auth_user(client, "acq-bad", "bad@example.com")
+    resp = client.post(
+        "/v1/me/acquisition-source", headers=headers, json={"source": "myspace"}
+    )
+    assert resp.status_code == 400

@@ -128,6 +128,44 @@ class AppState extends ChangeNotifier {
     return days;
   }
 
+  /// Whether the "where did you find us?" card has been answered or skipped
+  /// this session. The card shows during generation while the user's
+  /// `acquisitionSource` is still null and this flag is false; answering or
+  /// skipping flips it optimistically so it disappears immediately, ahead of
+  /// the backend write landing. Per-session — the durable state is the backend
+  /// `acquisition_source`, which the response refreshes into `me`. Reset on
+  /// sign-out so the next user is asked.
+  bool _acquisitionPromptDismissed = false;
+  bool get acquisitionPromptDismissed => _acquisitionPromptDismissed;
+
+  /// Records where the user found us: hides the card immediately, then writes
+  /// to the backend and folds the refreshed `me` back in (so the gate stays
+  /// closed across a reload). No-ops without a live ApiClient/session (demo
+  /// build / widget tests), like [acknowledgeTrialGift]. Best-effort: an
+  /// unobserved failure just leaves the card hidden for this session.
+  void recordAcquisitionSource(String source, {String? detail}) {
+    if (_acquisitionPromptDismissed) return;
+    _acquisitionPromptDismissed = true;
+    notifyListeners();
+    final client = _apiClient;
+    final session = _sessionToken;
+    if (client == null || session == null) return;
+    unawaited(
+      client
+          .recordAcquisitionSource(session, source: source, detail: detail)
+          .then((env) {
+        _me = env;
+        notifyListeners();
+      }).catchError((_) {
+        // Best-effort; the card stays hidden this session regardless.
+      }),
+    );
+  }
+
+  /// The "Skip" affordance on the acquisition card. Records a decline so the
+  /// backend stops asking and we can measure the skip rate.
+  void skipAcquisitionPrompt() => recordAcquisitionSource('skipped');
+
   /// Persists the share-tip dismissal across launches on the real-auth build
   /// (the demo build / tests use an in-memory stub — see [ShareTipStore]).
   final ShareTipStore _shareTipStore;
@@ -499,6 +537,8 @@ class AppState extends ChangeNotifier {
     // Per-user, per-session: the next signed-in user must see their own gift
     // card if the backend still reports it pending.
     _trialGiftDismissed = false;
+    // Same — the next user gets their own "where did you find us?" prompt.
+    _acquisitionPromptDismissed = false;
     // The tip is per-device education, not per-user state — keep whatever the
     // store persisted rather than forcing it back on for the next sign-in.
     _shareTipDismissed = _shareTipStore.dismissed;
