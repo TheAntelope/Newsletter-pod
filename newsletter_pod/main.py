@@ -103,6 +103,7 @@ from .push import (
     build_fcm_sender_from_settings,
     build_push_sender_from_settings,
     send_pod_ready_push,
+    send_share_tip_push,
     send_trial_gift_push,
 )
 from .shared_items import MAX_UPLOAD_BYTES as SHARED_MAX_UPLOAD_BYTES, SUPPORTED_KINDS as SHARED_SUPPORTED_KINDS
@@ -1987,6 +1988,77 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         return {
             "candidates": len(candidates),
             "pushed": pushed,
+            "deregistered": deregistered,
+        }
+
+    @app.post("/admin/share-tip/notify")
+    def admin_share_tip_notify(
+        dry_run: bool = False,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        """Admin-only: announce the "share anything to ClawCast" feature. Targets
+        every user not yet announced to (share_tip_pushed_at None), sends the
+        awareness push, and stamps share_tip_pushed_at so a re-run only reaches
+        newcomers. A user with no active device token is left UNSTAMPED so a
+        later run reaches them once they register one. `?dry_run=true` reports
+        the candidate + reachable counts without sending or stamping — call it
+        first to preview the broadcast. Gated by ADMIN_USER_IDS exactly like
+        /admin/metrics (403 for non-admins)."""
+        session_user = _require_session_user(container, authorization)
+        if not is_admin(session_user.id, container.settings):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+        assert container.control_repository is not None
+        repository = container.control_repository
+
+        candidates = [
+            user
+            for user in repository.list_all_users(limit=5000)
+            if user.share_tip_pushed_at is None
+        ]
+
+        if dry_run:
+            reachable = sum(
+                1 for user in candidates if repository.list_active_device_tokens(user.id)
+            )
+            return {
+                "dry_run": True,
+                "candidates": len(candidates),
+                "reachable": reachable,
+            }
+
+        pushed = 0
+        skipped_no_token = 0
+        deregistered = 0
+        for user in candidates:
+            try:
+                result = send_share_tip_push(
+                    sender=container.push_sender,
+                    fcm_sender=container.fcm_sender,
+                    repository=repository,
+                    user_id=user.id,
+                )
+            except Exception:  # pragma: no cover — push is best-effort
+                logger.warning("Share-tip push failed: user=%s", user.id)
+                continue
+            # No device token → don't stamp, so a later run reaches this user
+            # once they register one (unlike trial-gift, whose audience is a
+            # fixed granted set, this broadcast targets everyone exactly once).
+            if result.get("attempted", 0) == 0:
+                skipped_no_token += 1
+                continue
+            deregistered += result.get("deregistered", 0)
+            user.share_tip_pushed_at = utc_now()
+            repository.save_user(user)
+            pushed += 1
+
+        return {
+            "dry_run": False,
+            "candidates": len(candidates),
+            "pushed": pushed,
+            "skipped_no_token": skipped_no_token,
             "deregistered": deregistered,
         }
 

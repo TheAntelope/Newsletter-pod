@@ -601,6 +601,74 @@ def send_trial_gift_push(
     )
 
 
+# Verbatim push copy for the share-sheet awareness announcement (2026-07-01):
+# teaches users they can send anything they read into their next briefing via
+# the OS share sheet. Kept as module constants so the payload + any tests share
+# one source of truth for the wording.
+_SHARE_TIP_PUSH_TITLE = "Turn any article into audio 🎧"
+_SHARE_TIP_PUSH_BODY = (
+    "From your browser, Mail, or Substack — share a story to ClawCast and hear "
+    "it in your next briefing."
+)
+
+
+def build_share_tip_payload() -> dict:
+    """Construct the APNs JSON body for the "share to ClawCast" awareness push.
+
+    `category` lets the iOS handler match this push kind; the top-level `type`
+    mirrors the other push kinds so a single handler can branch on it. Unknown
+    to older clients, which simply display the alert and open the app on tap —
+    so this needs no client change to ship.
+    """
+    return {
+        "aps": {
+            "alert": {
+                "title": _SHARE_TIP_PUSH_TITLE,
+                "body": _SHARE_TIP_PUSH_BODY,
+            },
+            "sound": "default",
+            "category": "SHARE_TIP",
+        },
+        "type": "share_tip",
+    }
+
+
+def send_share_tip_push(
+    *,
+    sender: Optional[PushSender],
+    repository: ControlPlaneRepository,
+    user_id: str,
+    fcm_sender: Optional["FcmSender"] = None,
+) -> dict:
+    """Notify every active device a user has that they can share anything they
+    read straight into their next briefing, routing iOS→APNs and Android→FCM.
+    Thin wrapper over [_dispatch_to_user_devices]; see it for the return shape
+    and no-op behavior.
+
+    The collapse id is keyed on the user so a retry replaces rather than stacks
+    a duplicate announcement.
+    """
+    apns_payload = build_share_tip_payload()
+
+    fcm_notification = {
+        "title": _SHARE_TIP_PUSH_TITLE,
+        "body": _SHARE_TIP_PUSH_BODY,
+    }
+    fcm_data: dict = {"type": "share_tip"}
+
+    return _dispatch_to_user_devices(
+        sender=sender,
+        fcm_sender=fcm_sender,
+        repository=repository,
+        user_id=user_id,
+        apns_payload=apns_payload,
+        fcm_notification=fcm_notification,
+        fcm_data=fcm_data,
+        collapse_id=f"share-tip-{user_id[:8]}",
+        log_label="share-tip push",
+    )
+
+
 def build_push_sender_from_settings(
     *,
     enabled: bool,
