@@ -63,6 +63,22 @@ class Settings(BaseSettings):
     podcast_tts_provider: str = Field(default="elevenlabs", alias="PODCAST_TTS_PROVIDER")
     podcast_tts_model: str = Field(default="gpt-4o-mini-tts", alias="PODCAST_TTS_MODEL")
     podcast_tts_voice: str = Field(default="alloy", alias="PODCAST_TTS_VOICE")
+    # Second OpenAI voice used for the co-host on multi-host episodes that render
+    # on the default (OpenAI) voice tier — e.g. free/expired-trial users. Without
+    # a distinct secondary voice, both hosts collapse onto `podcast_tts_voice` and
+    # a two-host script sounds like one voice ("second host introduced but no
+    # second voice"). Must be a valid voice for `podcast_tts_model`.
+    podcast_tts_voice_secondary: str = Field(
+        default="onyx", alias="PODCAST_TTS_VOICE_SECONDARY"
+    )
+    # Persona names for the standard (OpenAI) voice duo. On default-voice
+    # episodes the hosts are named after these instead of the user's premium
+    # voice picks, so the transcript/labels match what's actually heard. Keep
+    # these in sync with `podcast_tts_voice` / `podcast_tts_voice_secondary`.
+    podcast_tts_voice_name: str = Field(default="Alex", alias="PODCAST_TTS_VOICE_NAME")
+    podcast_tts_voice_secondary_name: str = Field(
+        default="Sam", alias="PODCAST_TTS_VOICE_SECONDARY_NAME"
+    )
     podcast_tts_instructions: Optional[str] = Field(default=None, alias="PODCAST_TTS_INSTRUCTIONS")
     elevenlabs_api_key: Optional[str] = Field(default=None, alias="ELEVENLABS_API_KEY")
     elevenlabs_model: str = Field(default="eleven_multilingual_v2", alias="ELEVENLABS_MODEL")
