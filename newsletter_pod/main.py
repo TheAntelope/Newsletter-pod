@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import format_datetime, parsedate_to_datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import (
     BackgroundTasks,
@@ -24,7 +24,7 @@ from fastapi import (
     status,
 )
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .auth import (
     AppleIdentityVerifier,
@@ -56,6 +56,13 @@ from .broadcast.x_client import (
     XClientUnavailable,
     XPostFailed,
     XReadFailed,
+)
+from .blueprint import ShowBlueprint, default_blueprint
+from .config_repository import (
+    BlueprintProvider,
+    BlueprintRepository,
+    FirestoreBlueprintRepository,
+    InMemoryBlueprintRepository,
 )
 from .config import Settings, load_voices
 from .admin_metrics import (
@@ -89,7 +96,7 @@ from .inbound import (
 from .legal import PRIVACY_HTML, TERMS_HTML
 from .mailer import NoopMailer, SMTPMailer
 from .models import PublishStatus, SourceItem
-from .podcast_api import PodcastApiClient, PodcastApiUnavailable
+from .podcast_api import PodcastApiClient, PodcastApiError, PodcastApiUnavailable
 from .push import (
     FcmSender,
     PushSender,
@@ -296,6 +303,32 @@ class BroadcastScheduledRunRequest(BaseModel):
     feedback_prompt_override: Optional[str] = None
 
 
+class UpdateBlueprintRequest(BaseModel):
+    # Raw blueprint object; validated manually against ShowBlueprint so a bad
+    # shape surfaces as a 400 with the pydantic message rather than a 422.
+    blueprint: dict[str, Any]
+    note: Optional[str] = None
+    updated_by: Optional[str] = None
+
+
+class RestoreBlueprintRequest(BaseModel):
+    version: int
+    updated_by: Optional[str] = None
+
+
+class PreviewBlueprintRequest(BaseModel):
+    blueprint: dict[str, Any]
+
+
+class GenerateUserPodRequest(BaseModel):
+    # Identify the target account by id or email (email is resolved server-side).
+    user_id: Optional[str] = None
+    email: Optional[str] = None
+    # force bypasses the schedule/already-generated-today gates so an admin can
+    # regenerate on demand to hear the current blueprint.
+    force: bool = True
+
+
 class BroadcastPasteFeedbackRequest(BaseModel):
     feedback_text: str
 
@@ -324,14 +357,28 @@ class ServiceContainer:
     # Phase 2 broadcast-loop persistence. In-memory in dev, Firestore in
     # prod — paralleling AudioStorage.
     broadcast_repository: BroadcastRepository | None = None
+    # Admin show-blueprint persistence + read-path cache. The repository backs
+    # the /jobs/config* CRUD; the provider is the SAME instance the control
+    # plane reads at generation time, so a studio save (which invalidates the
+    # provider) is reflected on the next pod without a redeploy.
+    blueprint_repository: BlueprintRepository | None = None
+    blueprint_provider: BlueprintProvider | None = None
 
 
 def create_app(container: ServiceContainer | None = None) -> FastAPI:
     if container is None:
         settings = Settings.from_env()
         container = _build_container(settings)
+    if container.blueprint_provider is None or container.blueprint_repository is None:
+        blueprint_repository, blueprint_provider = _build_blueprint(container.settings)
+        container.blueprint_repository = blueprint_repository
+        container.blueprint_provider = blueprint_provider
     if container.control_plane is None or container.control_repository is None:
-        control_repository, control_plane = _build_control_plane(container.settings, container.storage)
+        control_repository, control_plane = _build_control_plane(
+            container.settings,
+            container.storage,
+            blueprint_provider=container.blueprint_provider,
+        )
         container.control_repository = control_repository
         container.control_plane = control_plane
 
@@ -1080,6 +1127,156 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 else ("summarizer_unavailable" if summarizer is None else "no_useful_content")
             ),
         }
+
+    # --- Podcast Shaping Studio: admin show-blueprint config -----------------
+    # Gated by the shared job-trigger token (same as /jobs/broadcast/*) because
+    # the caller is the server-side Next.js admin app, not an app-user session.
+    @app.get("/jobs/config")
+    def get_show_blueprint(
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.blueprint_repository is not None
+        active = container.blueprint_repository.get_active()
+        if active is None:
+            # Nothing saved yet — hand back the seed default so the studio always
+            # has a valid blueprint to render and edit. version 0 = unsaved.
+            return {
+                "version": 0,
+                "blueprint": default_blueprint(container.settings).model_dump(mode="json"),
+                "updated_at": None,
+                "updated_by": None,
+                "note": "unsaved default",
+                "is_default": True,
+            }
+        payload = active.model_dump(mode="json")
+        payload["is_default"] = False
+        return payload
+
+    @app.put("/jobs/config")
+    def put_show_blueprint(
+        request_payload: UpdateBlueprintRequest,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.blueprint_repository is not None
+        assert container.blueprint_provider is not None
+        try:
+            blueprint = ShowBlueprint.model_validate(request_payload.blueprint)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
+        record = container.blueprint_repository.save_new_version(
+            blueprint,
+            updated_by=(request_payload.updated_by or "admin"),
+            note=request_payload.note,
+        )
+        # Reflect the change on this instance immediately; other instances
+        # converge within the provider TTL.
+        container.blueprint_provider.invalidate()
+        return record.model_dump(mode="json")
+
+    @app.get("/jobs/config/history")
+    def list_show_blueprint_history(
+        limit: int = 50,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.blueprint_repository is not None
+        versions = container.blueprint_repository.list_history(limit=max(1, min(limit, 200)))
+        return {"versions": [v.model_dump(mode="json") for v in versions]}
+
+    @app.post("/jobs/config/restore")
+    def restore_show_blueprint(
+        request_payload: RestoreBlueprintRequest,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.blueprint_repository is not None
+        assert container.blueprint_provider is not None
+        record = container.blueprint_repository.restore_version(
+            request_payload.version,
+            updated_by=(request_payload.updated_by or "admin"),
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Version not found"
+            )
+        container.blueprint_provider.invalidate()
+        return record.model_dump(mode="json")
+
+    @app.post("/jobs/config/preview")
+    def preview_show_blueprint(
+        request_payload: PreviewBlueprintRequest,
+        text_only: bool = True,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Dry-run a CANDIDATE blueprint over sample stories and return the
+        shaped script without persisting anything. ``text_only`` (default) skips
+        TTS/music spend."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.control_plane is not None
+        try:
+            blueprint = ShowBlueprint.model_validate(request_payload.blueprint)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            )
+        try:
+            return container.control_plane.preview_blueprint(blueprint, text_only=text_only)
+        except PodcastApiError as exc:
+            # Generation not configured (no OpenAI key / disabled) — surface as
+            # a clear 503 rather than a 500.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            )
+
+    @app.post("/jobs/generate-user")
+    def generate_user_pod(
+        request_payload: GenerateUserPodRequest,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Run the REAL per-user generation for one account so an admin can hear
+        the current (global) blueprint on their own pod, then tweak and rerun.
+        Thin wrapper over the existing job path; resolves an email to a user id
+        for convenience. Persists/publishes exactly like a normal run."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.control_plane is not None
+        user_id = (request_payload.user_id or "").strip() or None
+        if not user_id and request_payload.email:
+            matches = list(
+                container.control_plane.repository.list_users_by_email(
+                    request_payload.email.strip().lower()
+                )
+            )
+            if not matches:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="No user found for that email",
+                )
+            user_id = matches[0].id
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Provide user_id or email",
+            )
+        try:
+            return container.control_plane.process_user_generation_job(
+                user_id=user_id, force=request_payload.force
+            )
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        except PodcastApiError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            )
 
     @app.post("/v1/auth/apple")
     def auth_with_apple(request_payload: AppleAuthRequest) -> dict:
@@ -2157,11 +2354,14 @@ def _build_container(settings: Settings) -> ServiceContainer:
     else:
         mailer = NoopMailer()
 
+    blueprint_repository, blueprint_provider = _build_blueprint(settings)
+
     control_repository, control_plane = _build_control_plane(
         settings=settings,
         storage=storage,
         podcast_client=podcast_client,
         mailer=mailer,
+        blueprint_provider=blueprint_provider,
     )
 
     push_sender = build_push_sender_from_settings(
@@ -2202,7 +2402,18 @@ def _build_container(settings: Settings) -> ServiceContainer:
         podcast_client=podcast_client,
         x_client=x_client,
         broadcast_repository=broadcast_repository,
+        blueprint_repository=blueprint_repository,
+        blueprint_provider=blueprint_provider,
     )
+
+
+def _build_blueprint(settings: Settings) -> tuple[BlueprintRepository, BlueprintProvider]:
+    if settings.use_inmemory_adapters:
+        repository: BlueprintRepository = InMemoryBlueprintRepository()
+    else:
+        repository = FirestoreBlueprintRepository(settings.firestore_collection_prefix)
+    provider = BlueprintProvider(repository, settings)
+    return repository, provider
 
 
 def _warm_corpus_safely(container, user_id: str) -> None:
@@ -2260,6 +2471,7 @@ def _build_control_plane(
     storage: AudioStorage,
     podcast_client: PodcastApiClient | None = None,
     mailer=None,
+    blueprint_provider: BlueprintProvider | None = None,
 ) -> tuple[ControlPlaneRepository, ControlPlaneService]:
     if settings.use_inmemory_adapters:
         control_repository: ControlPlaneRepository = InMemoryControlPlaneRepository()
@@ -2291,6 +2503,7 @@ def _build_control_plane(
             audio_mastering_enabled=settings.podcast_audio_mastering_enabled,
             audio_target_lufs=settings.podcast_audio_target_lufs,
             audio_crossfade_ms=settings.podcast_audio_crossfade_ms,
+            delint_enabled=settings.podcast_delint_enabled,
         )
     session_manager = SessionManager(
         signing_secret=settings.session_signing_secret,
@@ -2319,6 +2532,7 @@ def _build_control_plane(
         card_summarizer=card_summarizer,
         substack_discovery=substack_discovery,
         app_store_verifier=app_store_verifier,
+        blueprint_provider=blueprint_provider,
     )
     return control_repository, control_plane
 

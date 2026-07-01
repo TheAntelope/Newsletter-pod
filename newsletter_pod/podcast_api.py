@@ -5,13 +5,14 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import requests
 
-from .audio_mastering import MasteringError, master_mp3_segments
+from .audio_mastering import MasteringError, master_mp3_segments, splice_music
 from .models import AudioSegment, GeneratedEpisode, PodcastUxConfig
 from .prompting import build_closing_prompt, fallback_closing_text
+from .text_lint import DEFAULT_BANNED_PHRASES, matched_phrases, scan_segments
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,24 @@ OPENAI_DEFAULT_BASE_URL = "https://api.openai.com"
 OPENAI_SPEECH_MAX_CHARS = 4096
 ELEVENLABS_BASE_URL = "https://api.elevenlabs.io"
 ELEVENLABS_SPEECH_MAX_CHARS = 4096
+
+# Named on-air sections a blueprint-driven script can tag segments with. Mirrors
+# blueprint.SectionKind; duplicated here to keep podcast_api free of a blueprint
+# import and to bound the OpenAI schema enum.
+_VALID_SECTIONS = frozenset(
+    {
+        "cold_open",
+        "headlines",
+        "weather",
+        "story_block",
+        "market",
+        "announcements",
+        "closing",
+    }
+)
+# Upper bound on returned segments. Raised from 12 to accommodate a multi-section
+# blueprint (opening + headlines + weather + several story blocks + closing).
+OPENAI_MAX_AUDIO_SEGMENTS = 16
 
 
 class PodcastApiError(RuntimeError):
@@ -61,6 +80,11 @@ class PodcastApiClient:
     audio_mastering_enabled: bool = False
     audio_target_lufs: float = -16.0
     audio_crossfade_ms: int = 40
+    # De-AI linter kill-switch (env PODCAST_DELINT_ENABLED). When True and a
+    # blueprint with style.lint_enabled drives the episode, offending segments
+    # are rewritten before TTS. Default keeps prior behaviour off for callers
+    # that don't pass a blueprint (blueprint None -> no-op regardless).
+    delint_enabled: bool = True
 
     def generate(
         self,
@@ -74,6 +98,8 @@ class PodcastApiClient:
         force_default_voice: bool = False,
         lead_in_texts: Optional[list[str]] = None,
         tail_texts: Optional[list[str]] = None,
+        music_loader: Optional[Callable[[str], bytes]] = None,
+        text_only: bool = False,
     ) -> GeneratedEpisode:
         if not self.enabled:
             raise PodcastApiUnavailable("Podcast API is disabled")
@@ -122,6 +148,8 @@ class PodcastApiClient:
                 lead_in_texts=lead_in_texts,
                 tail_texts=tail_texts,
                 tts_provider=effective_tts_provider,
+                music_loader=music_loader,
+                text_only=text_only,
             )
         if provider == "generic":
             return self._generate_with_generic(prompt=prompt, title=title)
@@ -139,6 +167,8 @@ class PodcastApiClient:
         lead_in_texts: Optional[list[str]] = None,
         tail_texts: Optional[list[str]] = None,
         tts_provider: Optional[str] = None,
+        music_loader: Optional[Callable[[str], bytes]] = None,
+        text_only: bool = False,
     ) -> GeneratedEpisode:
         if not self.api_key:
             raise PodcastApiUnavailable("OpenAI API key is not configured")
@@ -154,6 +184,9 @@ class PodcastApiClient:
         if not audio_segments:
             raise PodcastApiError("Structured response missing audio segments")
 
+        if ux is not None and ux.blueprint is not None:
+            self._log_section_drift(audio_segments, ux.blueprint)
+
         if ux is not None:
             primary_display = (primary_speaker_name or "").strip() or "Host"
             body_transcript = "\n\n".join(
@@ -165,6 +198,12 @@ class PodcastApiClient:
                 primary_display=primary_display,
             )
             audio_segments.append(closing_segment)
+
+        # De-AI pass: rewrite only the segments that tripped a style tic, before
+        # TTS so we never synthesize a segment we then replace. No-op unless a
+        # blueprint with style.lint_enabled drives the episode and the env
+        # kill-switch is on.
+        audio_segments = self._delint_segments(audio_segments, ux)
 
         speech_max_chars = self._speech_max_chars(tts_provider)
         for segment in audio_segments:
@@ -212,12 +251,28 @@ class PodcastApiClient:
         if not audio_segments:
             raise PodcastApiError("No non-empty audio segments to synthesize")
 
+        transcript = "\n\n".join(f"{segment.speaker}: {segment.text}" for segment in audio_segments)
+
+        # Text-only preview: stop before any TTS/music spend. Returns the fully
+        # shaped script (sections, de-linted text, closing) with empty audio so
+        # the studio can show the effect of a candidate blueprint cheaply.
+        if text_only:
+            return GeneratedEpisode(
+                episode_title=episode_title,
+                audio_bytes=b"",
+                mime_type="audio/mpeg",
+                show_notes=show_notes,
+                audio_segments=audio_segments,
+                transcript=transcript,
+                duration_seconds=_estimate_duration_seconds(transcript),
+            )
+
         audio_chunks = [
             self._synthesize_speech(segment.text, _voice_for(segment), tts_provider=tts_provider)
             for segment in audio_segments
         ]
-        transcript = "\n\n".join(f"{segment.speaker}: {segment.text}" for segment in audio_segments)
         audio_bytes = self._assemble_audio(audio_chunks)
+        audio_bytes = self._apply_music(audio_bytes, ux, music_loader)
 
         # Prefer the duration decoded from the rendered MP3 frames; fall back to a
         # word-count estimate only if frame parsing finds nothing (e.g. a stub
@@ -249,8 +304,11 @@ class PodcastApiClient:
                             "text": (
                                 "You write spoken-word daily digests on the user's selected sources. "
                                 "Return valid JSON only. "
-                                f"Split the narration into 1-12 audio_segments, each at most {OPENAI_SPEECH_MAX_CHARS} "
+                                f"Split the narration into 1-{OPENAI_MAX_AUDIO_SEGMENTS} audio_segments, each at most {OPENAI_SPEECH_MAX_CHARS} "
                                 "characters because they will be sent separately to a text-to-speech endpoint. "
+                                "Tag each segment with its `section` (cold_open, headlines, weather, story_block, "
+                                "market, announcements, or closing); when the prompt gives a segment plan, follow "
+                                "its sections and order exactly. "
                                 "Preserve natural transitions across segments. "
                                 "The anchor must always round off and close out the podcast with a clear sign-off so the listener knows the episode is over. "
                                 "Write show_notes as markdown with source attributions and links."
@@ -282,7 +340,7 @@ class PodcastApiClient:
                             "audio_segments": {
                                 "type": "array",
                                 "minItems": 1,
-                                "maxItems": 12,
+                                "maxItems": OPENAI_MAX_AUDIO_SEGMENTS,
                                 "items": {
                                     "type": "object",
                                     "additionalProperties": False,
@@ -291,12 +349,16 @@ class PodcastApiClient:
                                             "type": "string",
                                             "enum": ["primary", "secondary"],
                                         },
+                                        "section": {
+                                            "type": "string",
+                                            "enum": sorted(_VALID_SECTIONS),
+                                        },
                                         "text": {
                                             "type": "string",
                                             "maxLength": OPENAI_SPEECH_MAX_CHARS,
                                         },
                                     },
-                                    "required": ["role", "text"],
+                                    "required": ["role", "section", "text"],
                                 },
                             },
                         },
@@ -344,7 +406,9 @@ class PodcastApiClient:
         text = text.strip() or fallback_closing_text()
         if len(text) > OPENAI_SPEECH_MAX_CHARS:
             text = text[:OPENAI_SPEECH_MAX_CHARS]
-        return AudioSegment(role="primary", speaker=primary_display, text=text)
+        return AudioSegment(
+            role="primary", speaker=primary_display, text=text, section="closing"
+        )
 
     def _generate_closing_text(self, body_transcript: str, ux: PodcastUxConfig) -> str:
         if not self.api_key:
@@ -408,6 +472,125 @@ class PodcastApiClient:
             raise PodcastApiError("Closing response missing text field")
         return data["text"]
 
+    def _delint_segments(
+        self, segments: list[AudioSegment], ux: Optional[PodcastUxConfig]
+    ) -> list[AudioSegment]:
+        """Rewrite the segments that contain banned style tics, bounded by the
+        blueprint's ``max_rewrite_segments``. Best-effort: a failed or
+        non-clearing rewrite keeps the original segment. Returns the (possibly
+        mutated) list.
+        """
+        if not self.delint_enabled or ux is None or ux.blueprint is None:
+            return segments
+        style = ux.blueprint.style
+        if not style.lint_enabled:
+            return segments
+        banned = list(DEFAULT_BANNED_PHRASES) + [
+            p for p in style.banned_phrases if (p or "").strip()
+        ]
+        hits = scan_segments(segments, banned)
+        if not hits:
+            return segments
+
+        max_rewrites = max(0, style.max_rewrite_segments)
+        attempts = 0
+        for hit in hits:
+            if attempts >= max_rewrites:
+                logger.info(
+                    "De-lint cap reached (%d); %d segment(s) left un-rewritten",
+                    max_rewrites,
+                    len(hits) - attempts,
+                )
+                break
+            attempts += 1
+            original = segments[hit.segment_index]
+            try:
+                new_text = self._rewrite_segment_text(original.text, hit.matched)
+            except Exception as exc:  # noqa: BLE001 — de-lint must never block publish
+                logger.warning(
+                    "De-lint rewrite failed for segment %d, keeping original: %s",
+                    hit.segment_index,
+                    exc,
+                )
+                continue
+            new_text = (new_text or "").strip()
+            # Accept only a non-empty, length-valid rewrite that actually cleared
+            # the tics; otherwise keep the original.
+            if (
+                new_text
+                and len(new_text) <= OPENAI_SPEECH_MAX_CHARS
+                and not matched_phrases(new_text, banned)
+            ):
+                segments[hit.segment_index] = original.model_copy(update={"text": new_text})
+            else:
+                logger.info(
+                    "De-lint rewrite rejected for segment %d, keeping original",
+                    hit.segment_index,
+                )
+        return segments
+
+    def _rewrite_segment_text(self, text: str, tics: list[str]) -> str:
+        if not self.api_key:
+            raise PodcastApiUnavailable("OpenAI API key is not configured")
+        tic_list = "; ".join(t for t in tics if t) or "clichéd AI-sounding phrasing"
+        user_prompt = (
+            "Rewrite the following spoken podcast segment to remove clichéd, "
+            "AI-sounding phrasing while preserving the meaning, facts, tone, and "
+            "roughly the same length. Do not add new facts or stage directions. "
+            f"Specifically avoid these tics: {tic_list}.\n\n"
+            f"Segment:\n{text}"
+        )
+        payload = {
+            "model": self.text_model,
+            "input": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "You are a script editor. Return valid JSON only. The "
+                                "text field is the rewritten spoken segment — plain "
+                                "prose, no speaker labels, no stage directions."
+                            ),
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": user_prompt}],
+                },
+            ],
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "delinted_segment",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "text": {"type": "string", "maxLength": OPENAI_SPEECH_MAX_CHARS},
+                        },
+                        "required": ["text"],
+                    },
+                }
+            },
+        }
+        response = requests.post(
+            self._build_openai_endpoint("/responses"),
+            json=payload,
+            headers=self._build_openai_headers(),
+            timeout=60,
+        )
+        self._raise_for_availability(response)
+        response.raise_for_status()
+        output_text = _extract_output_text(response.json())
+        data = json.loads(output_text)
+        if not isinstance(data, dict) or not isinstance(data.get("text"), str):
+            raise PodcastApiError("De-lint response missing text field")
+        return data["text"]
+
     def _synthesize_speech(
         self, script: str, voice_id: Optional[str], tts_provider: Optional[str] = None
     ) -> bytes:
@@ -449,6 +632,41 @@ class PodcastApiClient:
                     "Audio mastering failed (%s); falling back to raw concat", exc
                 )
         return _concat_mp3_chunks(audio_chunks)
+
+    def _apply_music(
+        self,
+        audio_bytes: bytes,
+        ux: Optional[PodcastUxConfig],
+        music_loader: Optional[Callable[[str], bytes]],
+    ) -> bytes:
+        """Splice the blueprint's intro/outro music beds onto the rendered
+        episode. Best-effort: any failure (ffmpeg missing, asset not found,
+        mix error) logs and returns the un-music'd audio so generation never
+        breaks. No-op unless a blueprint enables music and a loader is wired.
+        """
+        if ux is None or ux.blueprint is None or music_loader is None:
+            return audio_bytes
+        bp = ux.blueprint
+        intro_name = bp.opening.intro_music_asset if bp.opening.intro_music_enabled else None
+        outro_name = bp.music.outro_music_asset if bp.music.outro_music_enabled else None
+        if not intro_name and not outro_name:
+            return audio_bytes
+        try:
+            intro_bytes = music_loader(intro_name) if intro_name else None
+            outro_bytes = music_loader(outro_name) if outro_name else None
+            if not intro_bytes and not outro_bytes:
+                return audio_bytes
+            return splice_music(
+                audio_bytes,
+                intro_mp3=intro_bytes,
+                outro_mp3=outro_bytes,
+                intro_bed_seconds=bp.music.intro_bed_seconds,
+                music_gain_db=bp.music.music_gain_db,
+                fade_ms=bp.music.fade_ms,
+            )
+        except Exception as exc:  # noqa: BLE001 — music must never block publish
+            logger.warning("Music splice failed (%s); using un-music'd audio", exc)
+            return audio_bytes
 
     def _speech_max_chars(self, tts_provider: Optional[str] = None) -> int:
         provider = (tts_provider or self.tts_provider or "openai").strip().lower()
@@ -606,6 +824,31 @@ class PodcastApiClient:
         if response.status_code in (401, 403):
             raise PodcastApiUnavailable(f"Podcast API unavailable ({response.status_code})")
 
+    def _log_section_drift(self, segments: list[AudioSegment], blueprint: Any) -> None:
+        """Observability only: warn (never fail) when the model's returned section
+        sequence doesn't match the blueprint plan. LLM drift is a known risk we
+        accept in v1 — this surfaces it in logs without blocking publish.
+        """
+        expected = [s.kind for s in blueprint.enabled_sections()]
+        got: list[str] = []
+        for seg in segments:
+            if seg.section and (not got or got[-1] != seg.section):
+                got.append(seg.section)
+        # `got` should be an order-preserving subsequence of `expected` — weather
+        # (per-user gate) and closing (stage-2) may be absent, which is fine.
+        idx = 0
+        for kind in got:
+            while idx < len(expected) and expected[idx] != kind:
+                idx += 1
+            if idx >= len(expected):
+                logger.warning(
+                    "Segment section drift: expected order %s, model produced %s",
+                    expected,
+                    got,
+                )
+                return
+            idx += 1
+
     def _parse_audio_segments(
         self,
         raw_segments: list[Any],
@@ -638,7 +881,11 @@ class PodcastApiClient:
                 if not text:
                     continue
                 role, speaker = _resolve(raw_role, raw_speaker)
-                segments.append(AudioSegment(role=role, speaker=speaker, text=text))
+                raw_section = str(raw_segment.get("section") or "").strip().casefold()
+                section = raw_section if raw_section in _VALID_SECTIONS else None
+                segments.append(
+                    AudioSegment(role=role, speaker=speaker, text=text, section=section)
+                )
                 continue
             if allow_plain_strings and isinstance(raw_segment, str) and raw_segment.strip():
                 segments.append(

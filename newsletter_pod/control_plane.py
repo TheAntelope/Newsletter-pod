@@ -19,7 +19,10 @@ from .app_store_verifier import (
     DecodedNotification,
 )
 from .config import Settings, load_sources, load_voices
+from .config_repository import BlueprintProvider
 from .costing import estimate_generation_cost
+from .polymarket import fetch_open_markets, relevant_market_hints
+from .text_lint import DEFAULT_BANNED_PHRASES, scan_segments
 from .embeddings import EmbeddingProvider
 from .events import EventName, bucket_body_length as _bucket_body_length, log_event
 from .feedback_digest import (
@@ -270,6 +273,9 @@ class ControlPlaneService:
     substack_discovery: Optional[SubstackDiscoveryService] = None
     app_store_verifier: Optional[AppStoreNotificationVerifier] = None
     firebase_identity_verifier: Optional[FirebaseIdentityVerifier] = None
+    # Read-path cache for the global admin show blueprint. None keeps the legacy
+    # freeform prompt (used by tests / partial containers that don't wire it).
+    blueprint_provider: Optional["BlueprintProvider"] = None
 
     def __post_init__(self) -> None:
         self._catalog = {source.id: source for source in load_sources(self.settings.sources_file)}
@@ -2763,7 +2769,10 @@ class ControlPlaneService:
             else:
                 weekly_update_due = False
         guest_name = secondary_speaker_name if profile.format_preset == "rotating_guest" else None
-        prompt = build_digest_prompt(items, run_date=local_date, ux=ux, skip_closing=True)
+        market_hints = self._market_hints(items, ux)
+        prompt = build_digest_prompt(
+            items, run_date=local_date, ux=ux, skip_closing=True, market_hints=market_hints
+        )
         title_hint = f"{local_date.isoformat()} weekly briefing"
         generated = self.podcast_client.generate(
             prompt=prompt,
@@ -2774,6 +2783,9 @@ class ControlPlaneService:
             secondary_speaker_name=ux.host_secondary_name or None,
             ux=ux,
             force_default_voice=use_default_voice,
+            # Blueprint intro/outro music assets are GCS objects; hand the client
+            # a loader closure so it stays free of a storage dependency.
+            music_loader=self.storage.download_audio,
         )
 
         episode_id = f"{user_id[:8]}-{local_date.isoformat()}-{uuid4().hex[:8]}"
@@ -3700,6 +3712,7 @@ class ControlPlaneService:
         humor = profile.humor_style if profile.humor_style in _HUMOR_OPTIONS else "none"
         key_findings = max(3, min(7, profile.key_findings_count or 3))
         effective_listener = listener_name if profile.personalized_greeting else None
+        blueprint = self.blueprint_provider.get() if self.blueprint_provider else None
         return PodcastUxConfig(
             host_primary_name=primary_name,
             host_secondary_name=secondary_speaker_name or "",
@@ -3714,7 +3727,120 @@ class ControlPlaneService:
             include_top_takeaways=profile.include_top_takeaways,
             custom_guidance=profile.custom_guidance,
             weather_summary=weather_summary,
+            blueprint=blueprint,
         )
+
+    def _market_hints(self, items: list, ux: PodcastUxConfig) -> Optional[list[str]]:
+        """Relevance-matched Polymarket odds for this episode, or None.
+
+        Gated on all of: the blueprint enabling predictions, the env fetch
+        kill-switch, embeddings being available (matching needs them), and at
+        least one story item. Best-effort — any failure degrades to no hints.
+        """
+        blueprint = ux.blueprint
+        if blueprint is None or not blueprint.predictions.enabled:
+            return None
+        if not self.settings.polymarket_fetch_enabled:
+            return None
+        if self.embedding_provider is None or not items:
+            return None
+        try:
+            markets = fetch_open_markets()
+            hints = relevant_market_hints(
+                markets,
+                items,
+                self.embedding_provider,
+                max_mentions=blueprint.predictions.max_mentions,
+                min_relevance=blueprint.predictions.min_relevance,
+            )
+            return hints or None
+        except Exception:  # noqa: BLE001 — market data must never block a pod
+            logger.warning("Polymarket hint building failed", exc_info=True)
+            return None
+
+    def _preview_sample_items(self) -> list[SourceItem]:
+        """Representative sample stories for the studio preview so it never
+        touches user data or Firestore and stays deterministic."""
+        now = datetime.now(timezone.utc)
+        samples = [
+            ("Tech Desk", "A major AI lab shipped a faster, cheaper model",
+             "The release undercuts rivals on price and adds long-context support."),
+            ("Markets Wire", "Central bank signals a rate cut is on the table",
+             "Officials cited cooling inflation; traders moved to price in a summer move."),
+            ("Climate Brief", "Record heat pushes grids to their limits",
+             "Operators asked customers to conserve as demand hit an all-time peak."),
+            ("Sports Daily", "Underdogs clinch the title in overtime",
+             "A last-second play sealed an upset that few analysts predicted."),
+        ]
+        return [
+            SourceItem(
+                source_id="preview",
+                source_name=name,
+                link="https://example.com/preview",
+                title=title,
+                summary=summary,
+                published_at=now,
+                dedupe_key=f"preview-{idx}",
+            )
+            for idx, (name, title, summary) in enumerate(samples)
+        ]
+
+    def preview_blueprint(self, blueprint: ShowBlueprint, *, text_only: bool = True) -> dict[str, Any]:
+        """Run the real script path with a CANDIDATE blueprint over sample stories
+        and return the shaped result without persisting anything. ``text_only``
+        (default) stops before TTS/music so the studio can preview the effect of
+        an edit cheaply. Raises PodcastApi* when generation isn't configured.
+        """
+        ux = PodcastUxConfig(
+            host_primary_name=self.settings.podcast_host_primary_name,
+            host_secondary_name=self.settings.podcast_host_secondary_name,
+            format=self.settings.podcast_format,
+            tone=self.settings.podcast_tone,
+            target_minutes=self.settings.podcast_target_minutes,
+            max_minutes=self.settings.podcast_max_minutes,
+            thin_day_minutes=self.settings.podcast_thin_day_minutes,
+            weather_summary=(
+                "San Francisco — 64°F and partly cloudy, high 70°F, low 58°F."
+                if blueprint.is_enabled("weather")
+                else None
+            ),
+            blueprint=blueprint,
+        )
+        items = self._preview_sample_items()
+        market_hints = self._market_hints(items, ux)
+        prompt = build_digest_prompt(
+            items,
+            run_date=datetime.now(timezone.utc).date(),
+            ux=ux,
+            skip_closing=True,
+            market_hints=market_hints,
+        )
+        generated = self.podcast_client.generate(
+            prompt=prompt,
+            title="Preview",
+            primary_speaker_name=ux.host_primary_name,
+            secondary_speaker_name=ux.host_secondary_name or None,
+            ux=ux,
+            text_only=text_only,
+            music_loader=self.storage.download_audio,
+        )
+        banned = list(DEFAULT_BANNED_PHRASES) + [
+            p for p in blueprint.style.banned_phrases if (p or "").strip()
+        ]
+        lint_hits = [
+            {"segment_index": h.segment_index, "matched": h.matched}
+            for h in scan_segments(generated.audio_segments, banned)
+        ]
+        return {
+            "episode_title": generated.episode_title,
+            "transcript": generated.transcript,
+            "show_notes": generated.show_notes,
+            "duration_seconds": generated.duration_seconds,
+            "section_order": [s.section for s in generated.audio_segments if s.section],
+            "lint_hits": lint_hits,
+            "market_hints": market_hints or [],
+            "text_only": text_only,
+        }
 
     def _build_show_notes(
         self,
