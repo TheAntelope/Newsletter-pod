@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
+import logging
 from datetime import datetime, timezone
 
 import pytest
@@ -146,6 +148,48 @@ def test_inbound_handler_stores_email_for_known_alias():
     assert item.sender_domain == "stratechery.com"
     assert item.subject == "Today's Stratechery"
     assert item.article_url == "https://stratechery.com/2026/some-article/"
+
+
+def _events_named(caplog: pytest.LogCaptureFixture, name: str) -> list[dict]:
+    """Pull structured app_events of a given event_name out of caplog."""
+    out = []
+    for record in caplog.records:
+        try:
+            payload = json.loads(record.getMessage())
+        except (ValueError, TypeError):
+            continue
+        if (
+            isinstance(payload, dict)
+            and payload.get("event") == "app_event"
+            and payload.get("event_name") == name
+        ):
+            out.append(payload)
+    return out
+
+
+def test_inbound_handler_emits_pii_safe_usage_event(caplog):
+    caplog.set_level(logging.INFO, logger="newsletter_pod.events")
+    _, _, user, client = _build_app_with_user()
+    payload = _payload(
+        recipient="a7f2bk9q@theclawcast.com",
+        sender='"Ben Thompson" <newsletter@stratechery.com>',
+        subject="Today's Stratechery",
+        body="Read on the web: https://stratechery.com/2026/some-article/",
+        message_id="<abc@stratechery.com>",
+    )
+    response = client.post("/webhooks/mailgun/inbound", data=payload)
+    assert response.status_code == 200
+
+    events = _events_named(caplog, "inbound_email_received")
+    assert len(events) == 1
+    event = events[0]
+    assert event["user_id"] == user.id
+    # Only ids / buckets / flags — never sender, subject, or body.
+    assert set(event["properties"].keys()) == {"body_len_bucket", "has_article_url"}
+    assert event["properties"]["has_article_url"] is True
+    serialized = json.dumps(event)
+    assert "stratechery.com" not in serialized
+    assert "Stratechery" not in serialized
 
 
 def test_inbound_handler_returns_unauthorized_on_bad_signature():

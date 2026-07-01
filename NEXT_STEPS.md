@@ -343,6 +343,20 @@ triages from `/admin/metrics?user_id=...` manually.
 
 **Revisit trigger:** when podcast engagement justifies the spend — e.g. podcast sources show meaningful attach/listen rates in the platform analytics (`vw_engagement_by_platform` / play-pulse data), OR a user-facing in-app podcast player lands and needs transcript/"key moments" data. Until then, show-notes (1a) stands.
 
+### Generation throttle for dormant users (logged 2026-07-01)
+
+**The idea:** stop spending OpenAI + ElevenLabs on daily pods for users who aren't listening. Gate `dispatch_due_users` (`control_plane.py`) on an engagement-recency check so a user with no listen in N days is skipped **before** enqueue (no worker cost at all), and auto-resumes the moment they return.
+
+**What exists vs what's needed:**
+- Exists: the dispatch path already gates on `enabled` → `_is_due` → `_should_attempt_user`, and the worker further skips on weekly quota + no-sources — so a dormancy gate is one more check in an established structure. Free tier is already cost-bounded to 1/week by entitlements; the daily burn is **trial users (full-access daily *premium* ElevenLabs pods)** and paid users.
+- Missing: **true last-listen is not persisted in Firestore** — it lives only in Cloud Logging / BigQuery (`episode_play_pulse`), which is why `churn_risk.py` falls back to the `days_since_last_episode` *delivery* proxy. Step one is to persist `last_listened_at` on the user doc via a best-effort write-through from the two pulse paths (`/media` fetch `main.py:~2041` + in-app play-pulse `main.py:~1700`); both currently only `log_event`.
+
+**Design (v1):** dormancy gate in `dispatch_due_users`; auto-resume on any listen / app-open / "generate now" (kick an immediate generation on return so it feels responsive). **Tier scoping is the key judgment:** trial = safe to hard-pause after ~7d no-listen (the real waste); **paid (Pro/Max) = never silently stop** (refund/trust risk — pause only as opt-in, or route through the deferred churn-risk *recovery action* instead); free = pause only after longer dormancy, just to stop piling unheard episodes into feeds. The "we paused you, tap to resume" notice **must be email for iOS users** — iOS push is dark ([[ios_push_registration_gap_2026_07_01]]). The dormancy signal itself is trustworthy: the `/media` pulse fires on the podcast app's *download fetch*, so no pulse in N days means their app isn't even pulling the file (unlike `position_bucket`, which is a byte-range artifact and must not be used here).
+
+**Why deferred:** chosen to "let it ride" 2026-07-01. At ~51 users the absolute savings are modest, and — the load-bearing reason — **much of the current dormancy may be caused by users never being told a pod exists** (iOS pod-ready push is dark until the Flutter App Store cutover). Throttling before notifications reach users would treat the symptom and risk accelerating churn for people who'd have engaged if notified. We want to first see what listening behaviour looks like once users actually receive "your briefing is ready" pushes. Distinct from — but shares the `last_listened_at` signal with — the churn-risk *recovery action* entry above.
+
+**Revisit trigger:** after the Flutter iOS App Store cutover ships and pod-ready push reaches the iOS base ([[ios_flutter_cutover_2026_06_15]]), re-measure the 7-day listen rate. If a meaningful cohort — especially **trial users generating daily premium pods** — still doesn't listen, build the throttle then (persist `last_listened_at` first). Size the waste by pulling the quiet-user set split by tier before committing.
+
 ## Useful files
 
 - `codemagic.yaml`: hosted macOS build and TestFlight workflow.

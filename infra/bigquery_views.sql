@@ -422,3 +422,45 @@ FROM labelled l
 CROSS JOIN total t
 GROUP BY l.source, t.total_users, t.answered_users
 ORDER BY user_count DESC;
+
+
+CREATE OR REPLACE VIEW `analytics.vw_activity_windows` AS
+-- Feature-usage counts over rolling 7d / 30d windows, one row per tracked
+-- event. Backs the operator dashboard's activity tiles: listeners
+-- (episode_play_pulse), podcasts created (episode_generated), source edits
+-- (sources_saved), ClawCast-email usage (inbound_email_received), and
+-- share-sheet usage (shared_item_received). `users_*` = COUNT(DISTINCT
+-- user_id); `events_*` = raw event count (e.g. total pods generated). A row is
+-- absent until its event first appears — inbound_email_received won't show up
+-- until that instrumentation deploys and a newsletter lands.
+-- Partition-pruned to 30 days like every events_raw view; the 7d figures ride
+-- a conditional over the same scan so it's one pass, not two.
+WITH events AS (
+  SELECT
+    SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*S%Ez',
+      JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.ts')) AS ts,
+    JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.user_id') AS user_id,
+    JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.event_name') AS event_name
+  FROM `analytics.events_raw`
+  WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+    AND JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.event_name') IN (
+      'episode_play_pulse',
+      'episode_generated',
+      'sources_saved',
+      'inbound_email_received',
+      'shared_item_received'
+    )
+    AND JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.user_id') IS NOT NULL
+)
+SELECT
+  event_name,
+  COUNT(DISTINCT IF(
+    ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY), user_id, NULL))
+    AS users_7d,
+  COUNTIF(ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)) AS events_7d,
+  COUNT(DISTINCT user_id) AS users_30d,
+  COUNT(*) AS events_30d
+FROM events
+WHERE ts IS NOT NULL
+GROUP BY event_name
+ORDER BY events_30d DESC;
