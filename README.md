@@ -94,3 +94,17 @@ The SwiftUI scaffold lives in [ios/](./ios/) and builds via Codemagic to TestFli
 ```bash
 pytest
 ```
+
+## Operations
+
+### Analytics dashboard
+
+- **Live dashboard:** _TODO — paste the Looker Studio report URL here once built (Looker Studio → Share → Get link)._
+- **What it shows:** DAU/WAU/MAU, activation funnel, cohort retention, tier + MRR, episode completion, churn-risk users, and **activity & feature usage** — listeners (7d/30d), podcasts created, source edits, ClawCast-email usage, and share-sheet usage.
+- **Backed by:** the `analytics.vw_*` views in [infra/bigquery_views.sql](./infra/bigquery_views.sql) (BigQuery dataset `analytics`, `europe-west1`).
+- **Build/extend it:** [docs/looker_studio_setup.md](./docs/looker_studio_setup.md) is the click-through runbook; [scripts/looker/build_dashboard.py](./scripts/looker/build_dashboard.py) automates the Google login + data-source boilerplate (`build` subcommand), then hands off tile config.
+
+### Scheduled reports
+
+- **Weekly dashboard email** — configured inside Looker Studio (**Share → Schedule delivery**, Mondays, `vincemartin1991@gmail.com`). It emails the report page as a PDF, so **any tile on that page — including the Activity & usage tile — is included automatically**; adding a tile needs no scheduler change (only re-check the schedule if you place a tile on a *new* page, since delivery is per-page).
+- **Weekly cohort report** (separate, code-generated) — `POST /jobs/weekly-cohort-report` emails signups / activation / paid conversion / top churn-risk users. This is a different email from the dashboard PDF; the new activity metrics are **not** in it unless added to [newsletter_pod/cohort_report.py](./newsletter_pod/cohort_report.py).

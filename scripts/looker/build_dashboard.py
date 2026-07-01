@@ -371,6 +371,7 @@ DASHBOARD_VIEWS: list[tuple[str, str, str]] = [
     ("Activation funnel",   "vw_activation_funnel", "Bar chart"),
     ("Cohort retention",    "vw_cohort_retention",  "Pivot table"),
     ("Episode completion",  "vw_episode_completion","Combo chart"),
+    ("Activity & usage",    "vw_activity_windows",  "Table"),
     # ("Tier breakdown",    "vw_tier_breakdown",    "Table"),     # needs Firestore export
     # ("Churn-risk users",  "vw_churn_risk_users",  "Table"),     # needs Firestore export
 ]

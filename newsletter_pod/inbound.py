@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from .embeddings import EmbeddingProvider
+from .events import EventName, bucket_body_length, log_event
 from .interest_seeds import (
     SEED_KIND_FORWARDED,
     is_user_forwarded_mail,
@@ -339,6 +340,16 @@ class InboundEmailHandler:
             received_at=received_at,
         )
         self.repository.save_inbound_item(item)
+        # First-party usage signal: a newsletter actually landed at the user's
+        # ClawCast alias — this is the "how often do people use their email
+        # address" metric. PII-safe: only a length bucket + a boolean flag,
+        # never the sender, subject, or body (events.py would reject those).
+        log_event(
+            EventName.INBOUND_EMAIL_RECEIVED,
+            user.id,
+            body_len_bucket=bucket_body_length(len(body_text)),
+            has_article_url=bool(item.article_url),
+        )
         self._maybe_seed_from_user_forward(user=user, item=item)
         logger.info(
             "Inbound email stored: user=%s sender=%s subject=%r item_id=%s",

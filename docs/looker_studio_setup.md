@@ -44,6 +44,7 @@ work:
 | `tier_breakdown`      | `SELECT * FROM \`analytics.vw_tier_breakdown\`` |
 | `episode_completion`  | `SELECT * FROM \`analytics.vw_episode_completion\`` |
 | `churn_risk_users`    | `SELECT * FROM \`analytics.vw_churn_risk_users\`` |
+| `activity_windows`    | `SELECT * FROM \`analytics.vw_activity_windows\`` |
 
 For every source, set **Data freshness** to **15 minutes** (the
 `events_raw` partition is updated continuously by the log sink, so
@@ -118,6 +119,34 @@ source.
 - Row limit: 50
 - Add a filter control: dropdown on `tier` so the operator can scope
   to Pro vs Max while triaging
+
+### Tile 7 — Activity & feature usage (rolling 7d / 30d)
+
+- Data source: `activity_windows`
+- Chart: **Table** — one compact tile covering every feature
+  - Dimension: `event_name`
+  - Metrics: `users_7d`, `events_7d`, `users_30d`, `events_30d`
+  - Sort: `events_30d` descending
+- What each `event_name` row means:
+  - `episode_play_pulse` — **listeners** (distinct users who pulled audio);
+    `users_7d` / `users_30d` are your headline listener counts.
+  - `episode_generated` — **podcasts created** (`events_*` = total pods;
+    `users_*` = distinct users who received one).
+  - `sources_saved` — **source adjustments** (fires on the onboarding save
+    too, so read it as "set or changed sources", not purely later edits).
+  - `inbound_email_received` — **ClawCast-email usage** (a newsletter landed
+    at the user's alias). Absent until the `INBOUND_EMAIL_RECEIVED`
+    instrumentation deploys — see `newsletter_pod/inbound.py`.
+  - `shared_item_received` — **share-sheet usage**.
+- Optional headline **scorecards** above the table (each is the same data
+  source with a filter):
+  - "Listeners (7d)" — metric `users_7d`, filter `event_name =
+    episode_play_pulse`; "Listeners (30d)" — metric `users_30d`, same filter.
+  - "Podcasts created (7d)" — metric `events_7d`, filter `event_name =
+    episode_generated`.
+- Caveat: the listening `users_*` is the podcast-app *download-fetch* signal —
+  trustworthy for presence, but do **not** use `position_bucket` for listen
+  depth (it's a byte-range artifact; see `newsletter_pod/events.py`).
 
 ## 4. Share and link from the runbook
 

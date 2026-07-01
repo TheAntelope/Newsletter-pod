@@ -172,6 +172,7 @@ class EventName(str, Enum):
     SCHEDULE_CHANGED = "schedule_changed"
     CHURN_RISK_SCORED = "churn_risk_scored"
     SHARED_ITEM_RECEIVED = "shared_item_received"
+    INBOUND_EMAIL_RECEIVED = "inbound_email_received"
     ACQUISITION_SOURCE_SELECTED = "acquisition_source_selected"
 
 
