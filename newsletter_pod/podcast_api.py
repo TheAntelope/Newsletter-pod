@@ -40,6 +40,11 @@ class PodcastApiClient:
     text_model: str
     tts_model: str
     tts_voice: str
+    # Co-host voice for the OpenAI/default tier. When a multi-host episode is
+    # pinned to the default voice (``force_default_voice``), the co-host renders
+    # with this voice so the two hosts stay audibly distinct. ``None`` falls back
+    # to the single-voice behaviour.
+    tts_voice_secondary: Optional[str] = None
     tts_instructions: Optional[str] = None
     tts_provider: str = "openai"
     elevenlabs_api_key: Optional[str] = None
@@ -87,9 +92,25 @@ class PodcastApiClient:
             # leak one episode's provider into another that runs in parallel
             # (a premium episode reading a leaked "openai" would post its
             # ElevenLabs voice_id to OpenAI's TTS endpoint → HTTP 400).
-            effective_voice_id = None if force_default_voice else voice_id
-            effective_secondary_voice_id = None if force_default_voice else secondary_voice_id
             effective_tts_provider = "openai" if force_default_voice else self.tts_provider
+            if force_default_voice:
+                # Pin to the bundled OpenAI voice(s). For a multi-host episode
+                # still give the co-host a *distinct* OpenAI voice so a two-host
+                # script doesn't collapse onto a single voice ("second host
+                # introduced but no second voice"). Solo episodes pass
+                # secondary_voice_id=None and stay single-voice. Passing None as
+                # the primary lets _generate_openai_speech fall back to
+                # self.tts_voice, preserving the prior single-voice default.
+                effective_voice_id = None
+                effective_secondary_voice_id = (
+                    self.tts_voice_secondary
+                    if secondary_voice_id and self.tts_voice_secondary
+                    and self.tts_voice_secondary != self.tts_voice
+                    else None
+                )
+            else:
+                effective_voice_id = voice_id
+                effective_secondary_voice_id = secondary_voice_id
             return self._generate_with_openai(
                 prompt=prompt,
                 title=title,

@@ -887,3 +887,129 @@ def test_empty_audio_segments_are_dropped_before_tts(monkeypatch):
 
     # Only the one non-blank segment is synthesized.
     assert inputs == ["Real line."]
+
+
+def _two_host_script_post_factory(openai_tts_voices, elevenlabs_urls):
+    """Fake requests.post: returns a primary/secondary/primary script, records
+    the OpenAI /audio/speech `voice` per call and any ElevenLabs TTS URLs."""
+
+    def fake_post(url, json, headers, timeout):
+        if url.endswith("/v1/responses"):
+            return FakeResponse(
+                json_data={
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": (
+                                        '{"episode_title":"T","show_notes":"- s",'
+                                        '"audio_segments":['
+                                        '{"role":"primary","text":"Top story today."},'
+                                        '{"role":"secondary","text":"Quick reaction."},'
+                                        '{"role":"primary","text":"And the wrap-up."}'
+                                        "]}"
+                                    ),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        if url.endswith("/v1/audio/speech"):
+            openai_tts_voices.append(json.get("voice"))
+            return FakeResponse(content=b"mp3")
+        if "/v1/text-to-speech/" in url:
+            elevenlabs_urls.append(url)
+            return FakeResponse(content=b"el-mp3")
+        raise AssertionError(url)
+
+    return fake_post
+
+
+def test_default_voice_two_host_uses_distinct_openai_voices(monkeypatch):
+    """Regression: a two-host episode pinned to the default voice must render
+    the co-host with a *distinct* OpenAI voice, not collapse both hosts onto
+    one (the "second host introduced but no second voice" bug)."""
+    openai_tts_voices: list[str] = []
+    elevenlabs_urls: list[str] = []
+    monkeypatch.setattr(
+        "newsletter_pod.podcast_api.requests.post",
+        _two_host_script_post_factory(openai_tts_voices, elevenlabs_urls),
+    )
+
+    el_primary = "L0Dsvb3SLTyegXwtm47J"
+    el_secondary = "eXpIbVcVbLo8ZJQDlDnl"
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="gpt-4o-mini-tts",
+        tts_voice="alloy",
+        tts_voice_secondary="onyx",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key="el-key",
+        elevenlabs_model="eleven_multilingual_v2",
+    )
+
+    client.generate(
+        prompt="p",
+        title="t",
+        voice_id=el_primary,
+        secondary_voice_id=el_secondary,
+        primary_speaker_name="Archer Ames",
+        secondary_speaker_name="Lola Lumen",
+        force_default_voice=True,
+    )
+
+    # Pinned to OpenAI; ElevenLabs never called.
+    assert elevenlabs_urls == []
+    # primary -> alloy, secondary -> onyx, primary -> alloy: two distinct voices.
+    assert openai_tts_voices == ["alloy", "onyx", "alloy"]
+    # The ElevenLabs voice ids never leak onto the OpenAI voice field.
+    assert el_primary not in openai_tts_voices
+    assert el_secondary not in openai_tts_voices
+
+
+def test_default_voice_solo_stays_single_voice(monkeypatch):
+    """A solo episode on the default voice (no secondary requested) must stay
+    single-voice — the distinct co-host voice only applies to multi-host."""
+    openai_tts_voices: list[str] = []
+    elevenlabs_urls: list[str] = []
+    monkeypatch.setattr(
+        "newsletter_pod.podcast_api.requests.post",
+        _two_host_script_post_factory(openai_tts_voices, elevenlabs_urls),
+    )
+
+    client = PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model="gpt-5.4-mini",
+        tts_model="gpt-4o-mini-tts",
+        tts_voice="alloy",
+        tts_voice_secondary="onyx",
+        tts_provider="elevenlabs",
+        elevenlabs_api_key="el-key",
+        elevenlabs_model="eleven_multilingual_v2",
+    )
+
+    client.generate(
+        prompt="p",
+        title="t",
+        voice_id="L0Dsvb3SLTyegXwtm47J",
+        secondary_voice_id=None,
+        force_default_voice=True,
+    )
+
+    assert elevenlabs_urls == []
+    # Even though the script emits a "secondary" role segment, with no secondary
+    # voice requested every segment stays on the single default voice.
+    assert set(openai_tts_voices) == {"alloy"}

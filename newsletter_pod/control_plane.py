@@ -2717,6 +2717,17 @@ class ControlPlaneService:
         primary_voice_id, secondary_voice_id, secondary_speaker_name = self._resolve_voice_pair(
             profile, local_date
         )
+        use_default_voice = voice_tier_for_episode == "default"
+        # On the default (standard OpenAI) voice tier the audio is rendered with
+        # the bundled standard voices, not the user's premium picks. Name the
+        # hosts after the standard duo so the transcript/labels match what's
+        # actually heard; the premium picks are still surfaced in the show-notes
+        # upsell below (see _default_voice_disclosure).
+        primary_name_override: Optional[str] = None
+        if use_default_voice:
+            primary_name_override = self.settings.podcast_tts_voice_name
+            if secondary_speaker_name:
+                secondary_speaker_name = self.settings.podcast_tts_voice_secondary_name
         weather_summary: Optional[str] = None
         if profile.include_weather and profile.weather_location:
             try:
@@ -2740,6 +2751,7 @@ class ControlPlaneService:
             secondary_speaker_name,
             listener_name=user.display_name,
             weather_summary=weather_summary,
+            primary_name_override=primary_name_override,
         )
         ux.listener_anchors = self._compute_listener_anchors(user_id)
         current_iso_week = iso_week_key(local_date)
@@ -2761,7 +2773,7 @@ class ControlPlaneService:
             primary_speaker_name=ux.host_primary_name,
             secondary_speaker_name=ux.host_secondary_name or None,
             ux=ux,
-            force_default_voice=(voice_tier_for_episode == "default"),
+            force_default_voice=use_default_voice,
         )
 
         episode_id = f"{user_id[:8]}-{local_date.isoformat()}-{uuid4().hex[:8]}"
@@ -2771,6 +2783,10 @@ class ControlPlaneService:
             mime_type=generated.mime_type,
         )
         show_notes = self._build_show_notes(generated.show_notes, items, cap_hit, dropped_count)
+        if use_default_voice:
+            disclosure = self._default_voice_disclosure(primary_voice_id, secondary_voice_id)
+            if disclosure:
+                show_notes = f"{show_notes}\n\n{disclosure}" if show_notes else disclosure
         transcript_text = generated.transcript or "\n\n".join(
             f"{segment.speaker}: {segment.text}" for segment in generated.audio_segments
         )
@@ -3478,6 +3494,26 @@ class ControlPlaneService:
             return self._voice_catalog[voice_id].name
         return fallback
 
+    def _default_voice_disclosure(
+        self, primary_voice_id: str, secondary_voice_id: Optional[str]
+    ) -> Optional[str]:
+        """Show-notes footer for default-voice episodes: tell the listener they
+        heard ClawCast's standard voices and name the premium picks they'd get on
+        an upgrade. Returns None if the primary pick isn't a named catalog voice
+        (nothing concrete to upsell)."""
+        primary_pick = self._voice_name(primary_voice_id, "")
+        if not primary_pick:
+            return None
+        secondary_pick = self._voice_name(secondary_voice_id, "") if secondary_voice_id else ""
+        if secondary_pick and secondary_pick != primary_pick:
+            picks = f"your selected voices — {primary_pick} & {secondary_pick}"
+        else:
+            picks = f"your selected voice — {primary_pick}"
+        return (
+            f"_This episode used ClawCast's standard voices. "
+            f"Upgrade to hear {picks}._"
+        )
+
     def _resolve_voice_pair(
         self,
         profile: PodcastProfileRecord,
@@ -3654,9 +3690,12 @@ class ControlPlaneService:
         secondary_speaker_name: Optional[str],
         listener_name: Optional[str] = None,
         weather_summary: Optional[str] = None,
+        primary_name_override: Optional[str] = None,
     ) -> PodcastUxConfig:
         duration = profile.desired_duration_minutes
-        primary_name = self._voice_name(primary_voice_id, profile.host_primary_name or "Host")
+        primary_name = primary_name_override or self._voice_name(
+            primary_voice_id, profile.host_primary_name or "Host"
+        )
         tone = profile.tone if profile.tone in _TONE_OPTIONS else "calm_analyst"
         humor = profile.humor_style if profile.humor_style in _HUMOR_OPTIONS else "none"
         key_findings = max(3, min(7, profile.key_findings_count or 3))

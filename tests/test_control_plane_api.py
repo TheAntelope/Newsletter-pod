@@ -1901,6 +1901,83 @@ def test_process_user_generation_records_visible_cap(monkeypatch):
     assert "https://example.com/1" not in description
 
 
+def test_default_voice_episode_renames_hosts_and_discloses(monkeypatch):
+    """Free/expired-trial users generate on the default (standard OpenAI) voice
+    tier, which renders both hosts with the bundled voices. The hosts must be
+    renamed to the standard duo (so the transcript/labels match what's heard),
+    and the show notes must disclose the standard voices while naming the user's
+    premium picks for the upsell. Regression for the "second host introduced but
+    no second voice" report (Zipster/Calvin, 2026-07-01)."""
+    container, client = _build_app()
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier(
+        "apple-default-voice", "dv@example.com"
+    )
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    user_id = auth.json()["user"]["id"]
+    headers = {"Authorization": f"Bearer {auth.json()['session_token']}"}
+
+    catalog = client.get("/v1/sources/catalog").json()["sources"]
+    client.put(
+        "/v1/me/sources",
+        json={"sources": [{"source_id": catalog[0]["source_id"]}]},
+        headers=headers,
+    )
+
+    # Two-host profile with premium voice picks (Archer Ames + Lola Lumen).
+    profile = container.control_repository.get_profile(user_id)
+    profile.format_preset = "two_hosts"
+    profile.voice_id = "L0Dsvb3SLTyegXwtm47J"  # Archer Ames
+    profile.secondary_voice_id = "eXpIbVcVbLo8ZJQDlDnl"  # Lola Lumen
+    container.control_repository.save_profile(profile)
+
+    # Land on the free/default voice tier: expire the time trial, zero the legacy
+    # pod-count trial, and clear the first-month premium window.
+    u = container.control_repository.get_user(user_id)
+    u.trial_ends_at = utc_now() - timedelta(days=1)
+    u.trial_premium_pods_remaining = 0
+    u.first_month_ends_at = None
+    container.control_repository.save_user(u)
+
+    captured: dict = {}
+
+    class CapturingClient(FakePodcastClient):
+        def generate(self, *args, **kwargs):
+            captured.update(kwargs)
+            return super().generate(*args, **kwargs)
+
+    container.control_plane.podcast_client = CapturingClient()
+
+    def fake_fetch(self, sources):
+        return IngestionResult(
+            items=[
+                SourceItem(
+                    source_id="source-a", source_name="Source A", guid="1",
+                    link="https://example.com/1", title="Story One",
+                    summary="Summary one",
+                    published_at=datetime(2026, 6, 30, 8, 0, tzinfo=timezone.utc),
+                    dedupe_key="1",
+                ),
+            ],
+            cursor_updates={"source-a": datetime(2026, 6, 30, 8, 0, tzinfo=timezone.utc)},
+        )
+
+    monkeypatch.setattr(RSSIngestionService, "fetch_new_items", fake_fetch)
+
+    result = client.post("/jobs/process-user-podcast", json={"user_id": user_id, "force": True})
+    assert result.status_code == 200
+
+    # Default voice forced, and hosts renamed to the standard duo.
+    assert captured["force_default_voice"] is True
+    assert captured["primary_speaker_name"] == "Alex"
+    assert captured["secondary_speaker_name"] == "Sam"
+
+    # Show-notes disclosure names the premium picks for the upsell.
+    description = result.json()["episode"]["description"]
+    assert "standard voices" in description
+    assert "Archer Ames" in description
+    assert "Lola Lumen" in description
+
+
 def test_left_swiped_items_are_excluded_from_episode(monkeypatch):
     """First-time user feedback (2026-05-26): a user swiped left on two items
     in the cold-start deck and they immediately resurfaced in the first
