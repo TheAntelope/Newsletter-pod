@@ -77,6 +77,11 @@ dependencies:
   # real-auth build constructs the prefs-backed store (see main.dart); the demo
   # build + widget tests use InMemoryShareTipStore and never touch the channel.
   shared_preferences: ^2.3.2
+  # Plays the bundled "how to share to ClawCast" onboarding clip (muted,
+  # looping) on the share-teach step. The widget (widgets/onboarding_share_video.dart)
+  # falls back to a static share-sheet mock if the controller can't initialise,
+  # so widget tests — which have no platform video plugin — render the mock.
+  video_player: ^2.9.2
 
 dev_dependencies:
   flutter_test:
@@ -150,6 +155,11 @@ flutter:
     # brand kit), shown on the sign-in and onboarding-welcome screens. See
     # lib/widgets/editorial.dart (ElevenLabsBadge).
     - assets/brand/
+    # The share-sheet how-to clip shown on the onboarding "Add from anywhere"
+    # step (widgets/onboarding_share_video.dart). Rendered by the marketing repo's
+    # build_share_feature.sh (onboarding cut): 1080x1920, silent, burned-in
+    # STEP captions — so muted looping playback loses nothing.
+    - assets/onboarding/
 
   # Spectral: the editorial serif for the display/title/subtitle tokens
   # (fontFamily 'Spectral' in design_tokens.dart). Matches iOS's serif identity

@@ -14,6 +14,7 @@ import '../widgets/day_toggle.dart';
 import '../widgets/editorial.dart';
 import '../widgets/inbound_address_card.dart';
 import '../widgets/onboarding_progress_dots.dart';
+import '../widgets/onboarding_share_video.dart';
 import '../widgets/topic_icon.dart';
 import '../widgets/voice_choice_card.dart';
 import '../widgets/weather_location_field.dart';
@@ -998,9 +999,11 @@ class _WelcomePoints extends StatelessWidget {
 
 /// Onboarding teach step for the OS share sheet. ClawCast ingests whatever the
 /// user reads elsewhere, but that flow lives entirely in the system share sheet
-/// (there's no in-app button), so onboarding surfaces it once — a mock of the
-/// share sheet plus a three-step how-to. The dashboard's `_ShareTipCard` is the
-/// recurring reminder; this is the first introduction.
+/// (there's no in-app button), so onboarding surfaces it once — a short muted
+/// clip of the real flow plus a three-step how-to. The clip falls back to a
+/// static share-sheet mock where it can't play (widget tests, decode failure).
+/// The dashboard's `_ShareTipCard` is the recurring reminder; this is the first
+/// introduction.
 class _ShareFromAnywhereStep extends StatelessWidget {
   const _ShareFromAnywhereStep();
 
@@ -1018,7 +1021,7 @@ class _ShareFromAnywhereStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _ShareSheetMock(),
+        const OnboardingShareVideo(fallback: _ShareSheetMock()),
         const SizedBox(height: DesignTokens.spacingL),
         EditorialCard(
           spacing: DesignTokens.spacingM,
