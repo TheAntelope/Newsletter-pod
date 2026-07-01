@@ -93,6 +93,12 @@ class UserRecord(BaseModel):
     acquisition_source_detail: Optional[str] = None
     acquisition_recorded_at: Optional[datetime] = None
 
+    # Share-sheet awareness push (2026-07-01). Stamped once the "share any
+    # article to ClawCast" announcement has been dispatched to this user, so the
+    # /admin/share-tip/notify broadcast only ever targets each user once. Users
+    # with no device token yet are left unstamped so a later run reaches them.
+    share_tip_pushed_at: Optional[datetime] = None
+
 
 class PodcastProfileRecord(BaseModel):
     user_id: str
