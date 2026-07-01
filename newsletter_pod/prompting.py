@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import date
 from typing import Optional
 
+from .blueprint import ShowBlueprint
 from .models import PodcastUxConfig, SourceItem
 
 # Conversational two-host pace; used only as an LLM length anchor on top of the
@@ -35,11 +36,97 @@ def _format_runtime_label(min_minutes: int, max_minutes: int) -> str:
     )
 
 
+def _segment_plan_lines(
+    blueprint: ShowBlueprint,
+    ux: PodcastUxConfig,
+    skip_closing: bool,
+    market_hints: Optional[list[str]] = None,
+) -> list[str]:
+    """Turn the blueprint's enabled sections into an ordered, budgeted plan the
+    script LLM must follow, tagging each produced segment with its `section`.
+
+    Sections are gated by what's actually available for this episode: weather is
+    dropped when the per-user gate left no summary, the closing is dropped on the
+    live path (a separate stage-2 call owns it), announcements are dropped when
+    there's nothing to announce, and the market section only appears when
+    relevance-matched hints were supplied (Phase E).
+    """
+    announcements_text = (blueprint.closing.announcements_text or "").strip()
+    plan: list[str] = []
+    n = 0
+    for section in blueprint.enabled_sections():
+        kind = section.kind
+        if kind == "weather" and not ux.weather_summary:
+            continue
+        if kind == "closing" and skip_closing:
+            continue
+        if kind == "market" and not market_hints:
+            continue
+        if kind == "announcements" and not announcements_text:
+            continue
+
+        n += 1
+        words = section.effective_words()
+        if kind == "story_block":
+            max_blocks = section.max_blocks or 4
+            detail = (
+                f"section=story_block — the {max_blocks} most useful stories, each its "
+                f"own segment of about {words} spoken words. Group related items into a "
+                "single block rather than reading every item."
+            )
+        elif kind == "cold_open":
+            detail = (
+                f"section=cold_open — about {words} spoken words. Open the episode with a "
+                "hook and one sentence on what today is about."
+            )
+        elif kind == "headlines":
+            detail = (
+                f"section=headlines — about {words} spoken words. A fast scan of today's "
+                "top items, one clause each, before the detail."
+            )
+        elif kind == "weather":
+            detail = (
+                f"section=weather — about {words} spoken words. Work in today's weather: "
+                f"{ux.weather_summary}"
+            )
+        elif kind == "market":
+            detail = (
+                f"section=market — about {words} spoken words. Fold in the prediction-market "
+                "context below as colour on a related story (cite as current odds, not fact)."
+            )
+        elif kind == "announcements":
+            detail = (
+                f'section=announcements — read this announcement aloud, naturally: '
+                f'"{announcements_text}"'
+            )
+        elif kind == "closing":
+            detail = (
+                f"section=closing — about {words} spoken words. Wrap up and sign off."
+            )
+            if blueprint.closing.signoff_override:
+                detail += f' End on: "{blueprint.closing.signoff_override.strip()}"'
+        else:  # pragma: no cover - enum keeps this unreachable
+            detail = f"section={kind} — about {words} spoken words."
+
+        if section.instructions and section.instructions.strip():
+            detail += f" {section.instructions.strip()}"
+        plan.append(f"{n}. {detail}")
+
+    return [
+        "Segment plan — produce `audio_segments` in EXACTLY this order and tag each "
+        "segment with its `section`. Do NOT add, drop, reorder, or merge sections. "
+        "Every section except `story_block` appears at most once; `story_block` may "
+        "repeat (one segment per story):",
+        *plan,
+    ]
+
+
 def build_digest_prompt(
     items: list[SourceItem],
     run_date: date,
     ux: PodcastUxConfig,
     skip_closing: bool = False,
+    market_hints: Optional[list[str]] = None,
 ) -> str:
     grouped: dict[str, list[SourceItem]] = defaultdict(list)
     for item in items:
@@ -171,6 +258,27 @@ def build_digest_prompt(
             if len(anchor_phrases) >= 8:
                 break
 
+    if ux.blueprint is not None:
+        # Blueprint drives the section structure; keep the role guidance
+        # (host_structure) which is orthogonal to sections.
+        structure_block = [
+            "Editorial approach:",
+            f"- {editorial_guidance}",
+            "- Focus on the most useful themes, not a full recap of every newsletter item.",
+            "On-air structure:",
+            *host_structure,
+            *_segment_plan_lines(ux.blueprint, ux, skip_closing, market_hints),
+        ]
+    else:
+        structure_block = [
+            "Editorial approach:",
+            f"- {editorial_guidance}",
+            "- Group related items into 2-4 top story blocks when possible.",
+            "- Focus on the most useful themes, not a full recap of every newsletter item.",
+            "On-air structure:",
+            *host_structure,
+        ]
+
     lines = [
         "You are producing a single dated daily podcast episode.",
         f"Episode date: {run_date.isoformat()}",
@@ -180,12 +288,7 @@ def build_digest_prompt(
         f"Tone: {ux.tone}",
         "Audience: one person who wants the most useful updates quickly.",
         f"Goal: a digest of the user's sources that runs approximately {runtime_label}. Hit the word count target — do not produce a shorter script.",
-        "Editorial approach:",
-        f"- {editorial_guidance}",
-        "- Group related items into 2-4 top story blocks when possible.",
-        "- Focus on the most useful themes, not a full recap of every newsletter item.",
-        "On-air structure:",
-        *host_structure,
+        *structure_block,
     ]
     if skip_closing:
         lines.append(
@@ -205,6 +308,13 @@ def build_digest_prompt(
         ]
     if listener_prefs:
         lines += ["Listener preferences:", *listener_prefs]
+    if market_hints:
+        lines += [
+            "Prediction-market context (weave in naturally where it fits a story "
+            f"above — at most {len(market_hints)} time(s); cite as current odds, "
+            "not fact, and attribute to Polymarket):",
+            *market_hints,
+        ]
     if anchor_phrases:
         lines += [
             "Listener anchors (things the listener volunteered when they joined or "
@@ -303,6 +413,9 @@ def build_closing_prompt(body_transcript: str, ux: PodcastUxConfig) -> str:
     enabled) and a sign-off naming the show.
     """
     primary = ux.host_primary_name
+    signoff_override = None
+    if ux.blueprint is not None and ux.blueprint.closing.signoff_override:
+        signoff_override = ux.blueprint.closing.signoff_override.strip()
     parts: list[str] = []
     if ux.include_top_takeaways and ux.key_findings_count > 0:
         parts.append(
@@ -311,11 +424,16 @@ def build_closing_prompt(body_transcript: str, ux: PodcastUxConfig) -> str:
             f'"here are bullet points"). Lead in with one short transition '
             "sentence."
         )
-    parts.append(
-        f"- A brief sign-off naming the show ({SHOW_NAME}) and inviting the "
-        "listener back next time. Example phrasing: \"That's the briefing for "
-        f"today — see you next time on {SHOW_NAME}.\""
-    )
+    if signoff_override:
+        parts.append(
+            f'- End on this exact sign-off: "{signoff_override}"'
+        )
+    else:
+        parts.append(
+            f"- A brief sign-off naming the show ({SHOW_NAME}) and inviting the "
+            "listener back next time. Example phrasing: \"That's the briefing for "
+            f"today — see you next time on {SHOW_NAME}.\""
+        )
 
     lines = [
         "You are writing the closing segment for a podcast episode whose body "

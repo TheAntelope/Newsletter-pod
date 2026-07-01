@@ -75,6 +75,7 @@ class FakePodcastClient:
         secondary_speaker_name: str | None = None,
         ux=None,
         force_default_voice: bool = False,
+        **kwargs,
     ) -> GeneratedEpisode:
         return GeneratedEpisode(
             episode_title="Weekly AI Briefing",
@@ -2539,7 +2540,7 @@ def test_weekly_update_segment_stamps_user_once_per_iso_week(monkeypatch):
     captured_prompts: list[str] = []
 
     class CapturingPodcastClient(FakePodcastClient):
-        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None, ux=None, force_default_voice=False):
+        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None, ux=None, force_default_voice=False, **kwargs):
             captured_prompts.append(prompt)
             return super().generate(
                 prompt,
@@ -2625,7 +2626,7 @@ def test_weekly_update_segment_skipped_when_no_commits(monkeypatch):
     captured_prompts: list[str] = []
 
     class CapturingPodcastClient(FakePodcastClient):
-        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None, ux=None, force_default_voice=False):
+        def generate(self, prompt, title, voice_id=None, secondary_voice_id=None, primary_speaker_name=None, secondary_speaker_name=None, ux=None, force_default_voice=False, **kwargs):
             captured_prompts.append(prompt)
             return super().generate(
                 prompt,

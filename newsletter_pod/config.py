@@ -109,6 +109,16 @@ class Settings(BaseSettings):
     podcast_audio_crossfade_ms: int = Field(
         default=40, alias="PODCAST_AUDIO_CROSSFADE_MS"
     )
+    # De-AI linter: after the script is generated, scan for the banned tics
+    # (text_lint.py + the blueprint's banned_phrases) and rewrite only the
+    # offending segments. Env kill-switch — flip false to disable the whole
+    # pass live without a redeploy (the blueprint's style.lint_enabled is the
+    # per-config toggle layered on top).
+    podcast_delint_enabled: bool = Field(default=True, alias="PODCAST_DELINT_ENABLED")
+    # Polymarket prediction-market context. Env kill-switch for the fetch; the
+    # blueprint's predictions.enabled is the per-config toggle layered on top,
+    # and relevance matching additionally needs embeddings enabled.
+    polymarket_fetch_enabled: bool = Field(default=True, alias="POLYMARKET_FETCH_ENABLED")
     podcast_host_primary_name: str = Field(default="Vinnie", alias="PODCAST_HOST_PRIMARY_NAME")
     podcast_host_secondary_name: str = Field(default="Demi", alias="PODCAST_HOST_SECONDARY_NAME")
     podcast_format: str = Field(default="anchor_guest", alias="PODCAST_FORMAT")

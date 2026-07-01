@@ -6,6 +6,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from .blueprint import ShowBlueprint
+
 
 class PublishStatus(str, Enum):
     PUBLISHED = "published"
@@ -179,6 +181,10 @@ class AudioSegment(BaseModel):
     role: str = "primary"
     speaker: str
     text: str
+    # Named section this segment belongs to (cold_open, headlines, weather,
+    # story_block, market, announcements, closing) when a show blueprint drove
+    # the script. None on the legacy freeform path and on code-built framing.
+    section: Optional[str] = None
 
 
 class PodcastUxConfig(BaseModel):
@@ -201,6 +207,10 @@ class PodcastUxConfig(BaseModel):
     # forwarded. The script may acknowledge one once per episode when it
     # naturally connects to an item — never list them at the top of the show.
     listener_anchors: Optional[list[str]] = None
+    # Global admin show blueprint (structure + style). None keeps the legacy
+    # freeform prompt behaviour; when present it drives the segment plan and
+    # style guardrails. See blueprint.py / config_repository.py.
+    blueprint: Optional[ShowBlueprint] = None
 
 
 class GeneratedEpisode(BaseModel):
