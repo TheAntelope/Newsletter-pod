@@ -1250,24 +1250,9 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         for convenience. Persists/publishes exactly like a normal run."""
         _validate_job_auth(container.settings, authorization, x_job_trigger_token)
         assert container.control_plane is not None
-        user_id = (request_payload.user_id or "").strip() or None
-        if not user_id and request_payload.email:
-            matches = list(
-                container.control_plane.repository.list_users_by_email(
-                    request_payload.email.strip().lower()
-                )
-            )
-            if not matches:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="No user found for that email",
-                )
-            user_id = matches[0].id
-        if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Provide user_id or email",
-            )
+        user_id = _resolve_target_user_id(
+            container, request_payload.user_id, request_payload.email
+        )
         try:
             return container.control_plane.process_user_generation_job(
                 user_id=user_id, force=request_payload.force
@@ -1278,6 +1263,70 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
             )
+
+    @app.post("/jobs/generate-user/start")
+    def generate_user_pod_start(
+        request_payload: GenerateUserPodRequest,
+        background_tasks: BackgroundTasks,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Async counterpart of /jobs/generate-user for the Studio: start the run
+        and return immediately with a run_id, so the caller polls
+        /jobs/generate-user/status instead of holding a 1-2 min connection open
+        (which a serverless proxy times out — the "status unknown" symptom)."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.control_plane is not None
+        user_id = _resolve_target_user_id(
+            container, request_payload.user_id, request_payload.email
+        )
+        try:
+            result = container.control_plane.start_user_generation(
+                user_id=user_id, force=request_payload.force
+            )
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        # Only kick off the background worker when a fresh run was created; an
+        # already-in-flight run (started=False) is left to finish on its own.
+        if result.get("started"):
+            background_tasks.add_task(
+                container.control_plane.run_user_generation_in_background,
+                run_id=result["run"]["id"],
+                user_id=user_id,
+                force=request_payload.force,
+            )
+        return {"user_id": user_id, **result}
+
+    @app.get("/jobs/generate-user/status")
+    def generate_user_pod_status(
+        user_id: str,
+        run_id: str,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Poll a run started via /jobs/generate-user/start. Returns the run
+        (status + message), the published episode once done, and the feed_url so
+        the caller can build a play link. Short, cheap read — no timeout risk."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.control_plane is not None
+        try:
+            payload = container.control_plane.get_user_run_status(
+                user_id=user_id, run_id=run_id
+            )
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        try:
+            payload["feed_url"] = container.control_plane.get_feed_details(user_id)["feed_url"]
+        except Exception:  # noqa: BLE001
+            # feed_url is decorative here (run/episode is authoritative), but the
+            # token is create-if-missing so this can only fire on a genuine
+            # error — log it rather than swallow silently.
+            logger.warning(
+                "get_feed_details failed for user=%s in generate-user status",
+                user_id,
+                exc_info=True,
+            )
+        return payload
 
     @app.post("/v1/auth/apple")
     def auth_with_apple(request_payload: AppleAuthRequest) -> dict:
@@ -2859,6 +2908,31 @@ def _validate_job_auth(
         return
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+
+def _resolve_target_user_id(
+    container: ServiceContainer, user_id: str | None, email: str | None
+) -> str:
+    """Resolve a target account id from an explicit user_id or an email (used by
+    the Studio's generate endpoints). Raises 404 for an unknown email, 400 when
+    neither is supplied."""
+    assert container.control_plane is not None
+    uid = (user_id or "").strip() or None
+    if not uid and email:
+        matches = list(
+            container.control_plane.repository.list_users_by_email(email.strip().lower())
+        )
+        if not matches:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No user found for that email",
+            )
+        uid = matches[0].id
+    if not uid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Provide user_id or email"
+        )
+    return uid
 
 
 def _require_session_user(container: ServiceContainer, authorization: str | None):
