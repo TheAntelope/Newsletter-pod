@@ -63,3 +63,103 @@ def test_email_resolves_to_user_id(monkeypatch):
 def test_requires_job_token_when_configured():
     client, _ = _build(job_token="s3cret")
     assert client.post("/jobs/generate-user", json={"user_id": "u1"}).status_code == 401
+
+
+# --- async start/status (robust Studio UX) ----------------------------------
+
+def test_start_returns_run_id_and_schedules_background():
+    client, container = _build()
+    cp = container.control_plane
+    calls = {}
+    cp.start_user_generation = lambda user_id, force=False: {
+        "run": {"id": "r1", "status": "in_progress"},
+        "started": True,
+    }
+    cp.run_user_generation_in_background = lambda **kw: calls.update(kw)
+
+    resp = client.post("/jobs/generate-user/start", json={"user_id": "u1"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["user_id"] == "u1"
+    assert body["started"] is True
+    assert body["run"]["id"] == "r1"
+    # TestClient runs background tasks after the response.
+    assert calls.get("run_id") == "r1"
+    assert calls.get("user_id") == "u1"
+    assert calls.get("force") is True
+
+
+def test_start_does_not_schedule_when_already_in_flight():
+    client, container = _build()
+    cp = container.control_plane
+    calls = {}
+    cp.start_user_generation = lambda user_id, force=False: {
+        "run": {"id": "r2", "status": "in_progress"},
+        "started": False,
+    }
+    cp.run_user_generation_in_background = lambda **kw: calls.update(kw)
+
+    resp = client.post("/jobs/generate-user/start", json={"user_id": "u1"})
+    assert resp.status_code == 200
+    assert resp.json()["started"] is False
+    assert calls == {}  # no second generation kicked off
+
+
+def test_status_returns_run_episode_and_feed_url():
+    client, container = _build()
+    cp = container.control_plane
+    cp.get_user_run_status = lambda user_id, run_id: {
+        "run": {"status": "published", "published_episode_id": "e1"},
+        "episode": {"id": "e1", "title": "T"},
+    }
+    cp.get_feed_details = lambda user_id: {"feed_url": "http://x/feeds/tok.xml"}
+
+    resp = client.get(
+        "/jobs/generate-user/status", params={"user_id": "u1", "run_id": "r1"}
+    )
+    assert resp.status_code == 200
+    b = resp.json()
+    assert b["run"]["status"] == "published"
+    assert b["episode"]["id"] == "e1"
+    assert b["feed_url"].endswith("tok.xml")
+
+
+def test_status_surfaces_skip_message():
+    client, container = _build()
+    cp = container.control_plane
+    cp.get_user_run_status = lambda user_id, run_id: {
+        "run": {"status": "skipped", "message": "Weekly podcast quota reached for your plan"}
+    }
+    cp.get_feed_details = lambda user_id: {"feed_url": "http://x/feeds/tok.xml"}
+
+    b = client.get(
+        "/jobs/generate-user/status", params={"user_id": "u1", "run_id": "r1"}
+    ).json()
+    assert b["run"]["status"] == "skipped"
+    assert "quota" in b["run"]["message"]
+
+
+def test_status_404_when_run_missing():
+    from newsletter_pod.control_plane import ControlPlaneError
+
+    client, container = _build()
+
+    def _raise(user_id, run_id):
+        raise ControlPlaneError("Run not found")
+
+    container.control_plane.get_user_run_status = _raise
+    resp = client.get(
+        "/jobs/generate-user/status", params={"user_id": "u1", "run_id": "nope"}
+    )
+    assert resp.status_code == 404
+
+
+def test_async_endpoints_require_job_token():
+    client, _ = _build(job_token="s3cret")
+    assert client.post("/jobs/generate-user/start", json={"user_id": "u1"}).status_code == 401
+    assert (
+        client.get(
+            "/jobs/generate-user/status", params={"user_id": "u1", "run_id": "r1"}
+        ).status_code
+        == 401
+    )
