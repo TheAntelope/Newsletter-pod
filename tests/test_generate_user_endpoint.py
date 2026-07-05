@@ -163,3 +163,52 @@ def test_async_endpoints_require_job_token():
         ).status_code
         == 401
     )
+    assert client.get("/jobs/generate-user/latest", params={"user_id": "u1"}).status_code == 401
+
+
+# --- latest existing episode (fallback when generation has no new content) ----
+
+def test_latest_returns_most_recent_episode_and_feed_url():
+    from types import SimpleNamespace
+    from datetime import datetime, timezone
+
+    client, container = _build()
+    cp = container.control_plane
+    ep = SimpleNamespace(
+        id="ep-9",
+        title="Yesterday's Briefing",
+        published_at=datetime(2026, 7, 4, 6, 0, tzinfo=timezone.utc),
+        duration_seconds=350,
+    )
+    cp.repository.list_recent_user_episodes = lambda user_id, limit: [ep]
+    cp.get_feed_details = lambda user_id: {"feed_url": "http://x/feeds/tok.xml"}
+
+    b = client.get("/jobs/generate-user/latest", params={"user_id": "u1"}).json()
+    assert b["episode"]["id"] == "ep-9"
+    assert b["episode"]["title"] == "Yesterday's Briefing"
+    assert b["feed_url"].endswith("tok.xml")
+
+
+def test_latest_returns_null_episode_when_none_exist():
+    client, container = _build()
+    container.control_plane.repository.list_recent_user_episodes = lambda user_id, limit: []
+    container.control_plane.get_feed_details = lambda user_id: {"feed_url": "http://x/feeds/tok.xml"}
+
+    b = client.get("/jobs/generate-user/latest", params={"user_id": "u1"}).json()
+    assert b["episode"] is None
+
+
+def test_latest_resolves_email():
+    from types import SimpleNamespace
+
+    client, container = _build()
+    cp = container.control_plane
+    cp.repository.list_users_by_email = (
+        lambda email: [SimpleNamespace(id="u2")] if email == "me@example.com" else []
+    )
+    seen = {}
+    cp.repository.list_recent_user_episodes = lambda user_id, limit: seen.update(uid=user_id) or []
+    cp.get_feed_details = lambda user_id: {"feed_url": "http://x/feeds/tok.xml"}
+
+    client.get("/jobs/generate-user/latest", params={"email": "ME@Example.com"})
+    assert seen["uid"] == "u2"
