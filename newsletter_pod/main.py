@@ -1328,6 +1328,39 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             )
         return payload
 
+    @app.get("/jobs/generate-user/latest")
+    def generate_user_pod_latest(
+        user_id: str | None = None,
+        email: str | None = None,
+        authorization: str | None = Header(default=None),
+        x_job_trigger_token: str | None = Header(default=None),
+    ) -> dict:
+        """Return the account's most recent published episode + feed_url so the
+        Studio can offer the last pod to listen to when a fresh generation has
+        no new content (or is otherwise skipped)."""
+        _validate_job_auth(container.settings, authorization, x_job_trigger_token)
+        assert container.control_plane is not None
+        uid = _resolve_target_user_id(container, user_id, email)
+        episodes = container.control_plane.repository.list_recent_user_episodes(uid, limit=1)
+        payload: dict[str, Any] = {"episode": None, "feed_url": None}
+        if episodes:
+            ep = episodes[0]
+            payload["episode"] = {
+                "id": ep.id,
+                "title": ep.title,
+                "published_at": ep.published_at.isoformat(),
+                "duration_seconds": ep.duration_seconds,
+            }
+        try:
+            payload["feed_url"] = container.control_plane.get_feed_details(uid)["feed_url"]
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "get_feed_details failed for user=%s in generate-user latest",
+                uid,
+                exc_info=True,
+            )
+        return payload
+
     @app.post("/v1/auth/apple")
     def auth_with_apple(request_payload: AppleAuthRequest) -> dict:
         assert container.control_plane is not None
