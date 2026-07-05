@@ -661,6 +661,7 @@ class PodcastApiClient:
                 intro_mp3=intro_bytes,
                 outro_mp3=outro_bytes,
                 intro_bed_seconds=bp.music.intro_bed_seconds,
+                outro_seconds=bp.music.outro_seconds,
                 music_gain_db=bp.music.music_gain_db,
                 fade_ms=bp.music.fade_ms,
             )
