@@ -86,3 +86,80 @@ def test_preview_rejects_invalid_blueprint(monkeypatch):
     bad["sections"] = [{"kind": "story_block", "enabled": True}]  # closing not last
     resp = client.post("/jobs/config/preview", json={"blueprint": bad})
     assert resp.status_code == 400
+
+
+# --- preview AS a real account (uses their sources + profile) ----------------
+
+def test_preview_uses_account_when_email_resolves(monkeypatch):
+    from newsletter_pod.models import PodcastUxConfig
+
+    client, container = _client(monkeypatch)
+    cp = container.control_plane
+    sample = cp._preview_sample_items()
+    seen = {}
+
+    def fake_resolve(user_id, email):
+        seen["email"] = email
+        return "u1" if email == "vince@example.com" else None
+
+    def fake_inputs(uid, bp):
+        seen["uid"] = uid
+        return sample, PodcastUxConfig(blueprint=bp), "vince@example.com"
+
+    cp._resolve_preview_user = fake_resolve
+    cp._preview_inputs_for_user = fake_inputs
+
+    resp = client.post(
+        "/jobs/config/preview",
+        json={
+            "blueprint": default_blueprint().model_dump(mode="json"),
+            "email": "vince@example.com",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["previewed_as"] == "vince@example.com"
+    assert body["source_item_count"] == len(sample)
+    assert seen["uid"] == "u1"
+
+
+def test_resolve_preview_user(monkeypatch):
+    from types import SimpleNamespace
+
+    client, container = _client(monkeypatch)
+    cp = container.control_plane
+    cp.repository.get_user = lambda uid: SimpleNamespace(id=uid) if uid == "u9" else None
+    cp.repository.list_users_by_email = (
+        lambda e: [SimpleNamespace(id="u2")] if e == "me@x.com" else []
+    )
+    assert cp._resolve_preview_user("u9", None) == "u9"
+    assert cp._resolve_preview_user("missing", None) is None
+    assert cp._resolve_preview_user(None, "ME@X.com") == "u2"
+    assert cp._resolve_preview_user(None, "nobody@x.com") is None
+    assert cp._resolve_preview_user(None, None) is None
+
+
+def test_record_to_source_item(monkeypatch):
+    from datetime import datetime, timezone
+
+    from newsletter_pod.models import SourceItemRecord
+
+    client, container = _client(monkeypatch)
+    cp = container.control_plane
+    now = datetime(2026, 7, 5, tzinfo=timezone.utc)
+    rec = SourceItemRecord(
+        dedupe_key="k",
+        source_id="s",
+        source_name="Src",
+        link="http://x/a",
+        title="A story",
+        summary="what happened",
+        published_at=now,
+        first_seen_at=now,
+        last_seen_at=now,
+    )
+    item = cp._record_to_source_item(rec)
+    assert item.dedupe_key == "k"
+    assert item.source_id == "s"
+    assert item.title == "A story"
+    assert item.summary == "what happened"
