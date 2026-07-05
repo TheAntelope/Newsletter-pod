@@ -99,6 +99,9 @@ class MusicConfig(BaseModel):
     # ffmpeg mix parameters (see audio_mastering.splice_music).
     music_gain_db: float = Field(default=-18.0, ge=-40.0, le=0.0)
     intro_bed_seconds: float = Field(default=4.0, ge=0.0, le=20.0)
+    # Max seconds of the outro track played out under/after the tail — a long
+    # song is trimmed to this (with a fade) rather than tailing out in full.
+    outro_seconds: float = Field(default=25.0, ge=1.0, le=120.0)
     fade_ms: int = Field(default=800, ge=0, le=5000)
 
 

@@ -11,39 +11,47 @@ from newsletter_pod.podcast_api import PodcastApiClient
 
 def test_filter_neither_is_empty():
     fc, label = _build_music_filter(
-        has_intro=False, has_outro=False, intro_bed_seconds=4, music_gain_db=-18, fade_ms=800
+        has_intro=False, has_outro=False, intro_bed_seconds=4, outro_seconds=25,
+        music_gain_db=-18, fade_ms=800
     )
     assert fc == "" and label == ""
 
 
 def test_filter_intro_only_delays_speech_and_mixes():
     fc, label = _build_music_filter(
-        has_intro=True, has_outro=False, intro_bed_seconds=4, music_gain_db=-18, fade_ms=800
+        has_intro=True, has_outro=False, intro_bed_seconds=4, outro_seconds=25,
+        music_gain_db=-18, fade_ms=800
     )
     assert label == "[out]"
     assert "[1:a]volume=-18dB" in fc  # intro is input 1, ducked
     assert "adelay=4000:all=1" in fc  # speech delayed by the bed
     assert "amix=inputs=2:normalize=0" in fc
     assert "acrossfade" not in fc  # no outro -> no crossfade
+    assert "atrim" not in fc  # no outro -> no trim
 
 
 def test_filter_outro_only_crossfades_speech():
     fc, label = _build_music_filter(
-        has_intro=False, has_outro=True, intro_bed_seconds=4, music_gain_db=-12, fade_ms=500
+        has_intro=False, has_outro=True, intro_bed_seconds=4, outro_seconds=25,
+        music_gain_db=-12, fade_ms=500
     )
     assert label == "[out]"
     assert "[1:a]volume=-12dB" in fc  # outro is input 1 when no intro
+    assert "atrim=0:25" in fc  # outro capped to 25s
+    assert "afade=t=out:st=24.5:d=0.5" in fc  # tail fade ends the clip cleanly
     assert "[0:a][outrobed]acrossfade=d=0.5" in fc
     assert "adelay" not in fc and "amix" not in fc
 
 
 def test_filter_both_uses_intro_index_1_and_outro_index_2():
     fc, label = _build_music_filter(
-        has_intro=True, has_outro=True, intro_bed_seconds=3, music_gain_db=-18, fade_ms=800
+        has_intro=True, has_outro=True, intro_bed_seconds=3, outro_seconds=25,
+        music_gain_db=-18, fade_ms=800
     )
     assert label == "[out]"
     assert "[1:a]volume=-18dB" in fc  # intro input 1
     assert "[2:a]volume=-18dB" in fc  # outro input 2
+    assert "atrim=0:25" in fc  # outro capped
     assert "[body]" in fc  # intro+speech mix feeds the outro crossfade
     assert "acrossfade" in fc
 

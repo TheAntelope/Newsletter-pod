@@ -145,6 +145,7 @@ def splice_music(
     intro_mp3: bytes | None = None,
     outro_mp3: bytes | None = None,
     intro_bed_seconds: float = 4.0,
+    outro_seconds: float = 25.0,
     music_gain_db: float = -18.0,
     fade_ms: int = 800,
     timeout_seconds: int = 300,
@@ -154,8 +155,9 @@ def splice_music(
     v1 keeps this cheap on Cloud Run's 2 vCPU: rather than full-episode sidechain
     ducking, the intro plays alone for ``intro_bed_seconds`` then mixes (at
     ``music_gain_db``) under the opening while fading out, and the outro
-    crossfades in under the tail. Any absent side is skipped; if neither is
-    supplied the input is returned unchanged.
+    crossfades in under the tail for at most ``outro_seconds`` (so a long track
+    doesn't play out in full) with a tail fade. Any absent side is skipped; if
+    neither is supplied the input is returned unchanged.
 
     Raises ``MasteringUnavailable`` if ffmpeg is missing and ``MasteringError``
     on any ffmpeg failure/timeout, so the caller can fall back to the un-music'd
@@ -190,6 +192,7 @@ def splice_music(
             has_intro=bool(intro_mp3),
             has_outro=bool(outro_mp3),
             intro_bed_seconds=max(0.0, intro_bed_seconds),
+            outro_seconds=max(0.0, outro_seconds),
             music_gain_db=music_gain_db,
             fade_ms=max(0, fade_ms),
         )
@@ -230,6 +233,7 @@ def _build_music_filter(
     has_intro: bool,
     has_outro: bool,
     intro_bed_seconds: float,
+    outro_seconds: float,
     music_gain_db: float,
     fade_ms: int,
 ) -> tuple[str, str]:
@@ -267,7 +271,17 @@ def _build_music_filter(
         body_src = "[0:a]"
 
     if has_outro:
-        parts.append(f"[{outro_index}:a]volume={gain}[outrobed]")
+        # Cap the outro to `outro_seconds` so a long track doesn't tail out in
+        # full; atrim then reset PTS so the tail fade times from zero. The
+        # acrossfade already fades the outro IN under the speech tail; afade
+        # gives it a clean end. When outro_seconds <= fade, the fade covers the
+        # whole clip (fade start clamps to 0).
+        fade_start = max(0.0, outro_seconds - fade_s)
+        parts.append(
+            f"[{outro_index}:a]volume={gain},"
+            f"atrim=0:{outro_seconds:g},asetpts=PTS-STARTPTS,"
+            f"afade=t=out:st={fade_start:g}:d={fade_s:g}[outrobed]"
+        )
         parts.append(
             f"{body_src}[outrobed]acrossfade=d={fade_s:g}:c1=tri:c2=tri[out]"
         )
