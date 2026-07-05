@@ -319,6 +319,9 @@ class RestoreBlueprintRequest(BaseModel):
 
 class PreviewBlueprintRequest(BaseModel):
     blueprint: dict[str, Any]
+    # Optional account to preview AS — uses that user's real sources + profile.
+    user_id: Optional[str] = None
+    email: Optional[str] = None
 
 
 class GenerateUserPodRequest(BaseModel):
@@ -1230,7 +1233,12 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
             )
         try:
-            return container.control_plane.preview_blueprint(blueprint, text_only=text_only)
+            return container.control_plane.preview_blueprint(
+                blueprint,
+                user_id=request_payload.user_id,
+                email=request_payload.email,
+                text_only=text_only,
+            )
         except PodcastApiError as exc:
             # Generation not configured (no OpenAI key / disabled) — surface as
             # a clear 503 rather than a 500.

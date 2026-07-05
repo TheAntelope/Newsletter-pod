@@ -3785,28 +3785,34 @@ class ControlPlaneService:
             for idx, (name, title, summary) in enumerate(samples)
         ]
 
-    def preview_blueprint(self, blueprint: ShowBlueprint, *, text_only: bool = True) -> dict[str, Any]:
-        """Run the real script path with a CANDIDATE blueprint over sample stories
-        and return the shaped result without persisting anything. ``text_only``
-        (default) stops before TTS/music so the studio can preview the effect of
-        an edit cheaply. Raises PodcastApi* when generation isn't configured.
+    def preview_blueprint(
+        self,
+        blueprint: ShowBlueprint,
+        *,
+        user_id: Optional[str] = None,
+        email: Optional[str] = None,
+        text_only: bool = True,
+    ) -> dict[str, Any]:
+        """Run the real script path with a CANDIDATE blueprint and return the
+        shaped result without persisting anything.
+
+        When a user is given (by id or email) the preview uses THAT account's
+        real inputs — their attached sources' recent items, their tone/voices/
+        humor, and their weather location — so the transcript matches what their
+        pod would actually look like. With no user (or an unresolvable one) it
+        falls back to representative sample stories.
+
+        ``text_only`` (default) stops before TTS/music. Raises PodcastApi* when
+        generation isn't configured.
         """
-        ux = PodcastUxConfig(
-            host_primary_name=self.settings.podcast_host_primary_name,
-            host_secondary_name=self.settings.podcast_host_secondary_name,
-            format=self.settings.podcast_format,
-            tone=self.settings.podcast_tone,
-            target_minutes=self.settings.podcast_target_minutes,
-            max_minutes=self.settings.podcast_max_minutes,
-            thin_day_minutes=self.settings.podcast_thin_day_minutes,
-            weather_summary=(
-                "San Francisco — 64°F and partly cloudy, high 70°F, low 58°F."
-                if blueprint.is_enabled("weather")
-                else None
-            ),
-            blueprint=blueprint,
-        )
-        items = self._preview_sample_items()
+        uid = self._resolve_preview_user(user_id, email)
+        if uid is not None:
+            items, ux, previewed_as = self._preview_inputs_for_user(uid, blueprint)
+        else:
+            items = self._preview_sample_items()
+            ux = self._preview_default_ux(blueprint)
+            previewed_as = None
+
         market_hints = self._market_hints(items, ux)
         prompt = build_digest_prompt(
             items,
@@ -3840,7 +3846,114 @@ class ControlPlaneService:
             "lint_hits": lint_hits,
             "market_hints": market_hints or [],
             "text_only": text_only,
+            "previewed_as": previewed_as,
+            "source_item_count": len(items),
         }
+
+    def _preview_default_ux(self, blueprint: ShowBlueprint) -> PodcastUxConfig:
+        """Fallback UX (settings defaults) used when previewing without a user."""
+        return PodcastUxConfig(
+            host_primary_name=self.settings.podcast_host_primary_name,
+            host_secondary_name=self.settings.podcast_host_secondary_name,
+            format=self.settings.podcast_format,
+            tone=self.settings.podcast_tone,
+            target_minutes=self.settings.podcast_target_minutes,
+            max_minutes=self.settings.podcast_max_minutes,
+            thin_day_minutes=self.settings.podcast_thin_day_minutes,
+            weather_summary=(
+                "San Francisco — 64°F and partly cloudy, high 70°F, low 58°F."
+                if blueprint.is_enabled("weather")
+                else None
+            ),
+            blueprint=blueprint,
+        )
+
+    def _resolve_preview_user(
+        self, user_id: Optional[str], email: Optional[str]
+    ) -> Optional[str]:
+        """Best-effort resolve a preview target to a user id; None -> sample mode."""
+        uid = (user_id or "").strip() or None
+        if uid:
+            return uid if self.repository.get_user(uid) is not None else None
+        cleaned = (email or "").strip().lower()
+        if not cleaned:
+            return None
+        matches = list(self.repository.list_users_by_email(cleaned))
+        return matches[0].id if matches else None
+
+    def _record_to_source_item(self, r: SourceItemRecord) -> SourceItem:
+        return SourceItem(
+            source_id=r.source_id,
+            source_name=r.source_name,
+            guid=r.guid,
+            link=r.link,
+            title=r.title,
+            summary=r.summary,
+            published_at=r.published_at,
+            dedupe_key=r.dedupe_key,
+            kind=r.kind,
+            audio_url=r.audio_url,
+            audio_duration_seconds=r.audio_duration_seconds,
+        )
+
+    def _preview_inputs_for_user(
+        self, uid: str, blueprint: ShowBlueprint
+    ) -> tuple[list[SourceItem], PodcastUxConfig, str]:
+        """Build the real items + UX for a preview of ``uid``'s pod: recent items
+        from their attached sources + their profile (tone/voices/weather). Reads
+        only — persists nothing. Falls back to sample items if their sources have
+        no recent stored content."""
+        user = self._require_user(uid)
+        profile = self._get_profile(uid)
+        schedule = self._get_schedule(uid)
+        local_date = datetime.now(timezone.utc).astimezone(ZoneInfo(schedule.timezone)).date()
+
+        sources = [s for s in self.repository.list_user_sources(uid) if s.enabled]
+        source_ids = [s.source_id for s in sources]
+        items: list[SourceItem] = []
+        if source_ids:
+            since = datetime.now(timezone.utc) - timedelta(days=14)
+            try:
+                records = self.repository.list_source_items_by_source_published_since(
+                    source_ids, since, limit=25
+                )
+                items = [self._record_to_source_item(r) for r in records]
+            except Exception:  # pragma: no cover — fall back to samples
+                logger.warning("Preview item fetch failed for user=%s", uid, exc_info=True)
+        if not items:
+            items = self._preview_sample_items()
+
+        try:
+            primary_voice_id, _secondary_voice_id, secondary_speaker_name = (
+                self._resolve_voice_pair(profile, local_date)
+            )
+        except Exception:  # pragma: no cover
+            primary_voice_id, secondary_speaker_name = "", None
+        weather_summary: Optional[str] = None
+        if profile.include_weather and profile.weather_location:
+            try:
+                weather_summary = fetch_weather_summary(
+                    profile.weather_location,
+                    lat=profile.weather_lat,
+                    lon=profile.weather_lon,
+                    country_code=profile.weather_country_code,
+                    today=local_date,
+                )
+            except Exception:  # pragma: no cover — weather is best-effort
+                weather_summary = None
+        ux = self._build_user_ux(
+            profile,
+            primary_voice_id,
+            secondary_speaker_name,
+            listener_name=user.display_name,
+            weather_summary=weather_summary,
+        )
+        try:
+            ux.listener_anchors = self._compute_listener_anchors(uid)
+        except Exception:  # pragma: no cover
+            pass
+        ux.blueprint = blueprint
+        return items, ux, (getattr(user, "email", None) or uid)
 
     def _build_show_notes(
         self,
