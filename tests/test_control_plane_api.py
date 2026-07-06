@@ -1902,6 +1902,67 @@ def test_process_user_generation_records_visible_cap(monkeypatch):
     assert "https://example.com/1" not in description
 
 
+def test_process_user_generation_uses_blueprint_override(monkeypatch):
+    """A candidate blueprint passed to process_user_generation ("regenerate with
+    these edits") is what the render sees on ux.blueprint — for THIS run only,
+    without persisting anything global. This is what makes the draft's segment
+    plan / de-lint / intro+outro music apply when you hear it for real."""
+    from newsletter_pod.blueprint import default_blueprint
+
+    container, client = _build_app()
+    container.control_plane.apple_identity_verifier = FakeAppleVerifier(
+        "apple-bp-override", "bpo@example.com"
+    )
+    auth = client.post("/v1/auth/apple", json={"identity_token": "apple-token"})
+    user_id = auth.json()["user"]["id"]
+    headers = {"Authorization": f"Bearer {auth.json()['session_token']}"}
+
+    catalog = client.get("/v1/sources/catalog").json()["sources"]
+    client.put(
+        "/v1/me/sources",
+        json={"sources": [{"source_id": catalog[0]["source_id"]}]},
+        headers=headers,
+    )
+
+    captured: dict = {}
+
+    class CapturingClient(FakePodcastClient):
+        def generate(self, *args, **kwargs):
+            captured.update(kwargs)
+            return super().generate(*args, **kwargs)
+
+    container.control_plane.podcast_client = CapturingClient()
+
+    def fake_fetch(self, sources):
+        return IngestionResult(
+            items=[
+                SourceItem(
+                    source_id="source-a", source_name="Source A", guid="1",
+                    link="https://example.com/1", title="Story One",
+                    summary="Summary one",
+                    published_at=datetime(2026, 6, 30, 8, 0, tzinfo=timezone.utc),
+                    dedupe_key="1",
+                ),
+            ],
+            cursor_updates={"source-a": datetime(2026, 6, 30, 8, 0, tzinfo=timezone.utc)},
+        )
+
+    monkeypatch.setattr(RSSIngestionService, "fetch_new_items", fake_fetch)
+
+    override = default_blueprint(container.settings)
+    override.closing.signoff_override = "Draft sign-off marker"
+
+    container.control_plane.process_user_generation(
+        user_id=user_id, force=True, blueprint_override=override
+    )
+
+    ux = captured.get("ux")
+    assert ux is not None
+    # Identity check: the exact draft object threads through, not the saved one.
+    assert ux.blueprint is override
+    assert ux.blueprint.closing.signoff_override == "Draft sign-off marker"
+
+
 def test_default_voice_episode_renames_hosts_and_discloses(monkeypatch):
     """Free/expired-trial users generate on the default (standard OpenAI) voice
     tier, which renders both hosts with the bundled voices. The hosts must be

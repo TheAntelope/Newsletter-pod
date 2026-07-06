@@ -2393,6 +2393,7 @@ class ControlPlaneService:
         now_utc: Optional[datetime] = None,
         force: bool = False,
         run_id: Optional[str] = None,
+        blueprint_override: Optional["ShowBlueprint"] = None,
     ) -> dict[str, Any]:
         now_utc = now_utc or utc_now()
         user = self._require_user(user_id)
@@ -2759,6 +2760,12 @@ class ControlPlaneService:
             weather_summary=weather_summary,
             primary_name_override=primary_name_override,
         )
+        # A candidate blueprint (Studio "regenerate with these edits") overrides
+        # the saved/global one for THIS run only — nothing is persisted globally.
+        # Placed before market hints / prompt build so the whole render (segment
+        # plan, de-lint, and intro/outro music splicing) uses the draft.
+        if blueprint_override is not None:
+            ux.blueprint = blueprint_override
         ux.listener_anchors = self._compute_listener_anchors(user_id)
         current_iso_week = iso_week_key(local_date)
         weekly_update_due = user.last_weekly_update_iso_week != current_iso_week
@@ -3099,10 +3106,20 @@ class ControlPlaneService:
         return run
 
     def run_user_generation_in_background(
-        self, *, run_id: str, user_id: str, force: bool = True
+        self,
+        *,
+        run_id: str,
+        user_id: str,
+        force: bool = True,
+        blueprint_override: Optional["ShowBlueprint"] = None,
     ) -> None:
         try:
-            self.process_user_generation(user_id=user_id, force=force, run_id=run_id)
+            self.process_user_generation(
+                user_id=user_id,
+                force=force,
+                run_id=run_id,
+                blueprint_override=blueprint_override,
+            )
         except Exception as exc:
             logger.exception("Background generation failed for run %s", run_id)
             self._record_failed_run(user_id, exc, run_id=run_id)

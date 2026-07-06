@@ -331,6 +331,11 @@ class GenerateUserPodRequest(BaseModel):
     # force bypasses the schedule/already-generated-today gates so an admin can
     # regenerate on demand to hear the current blueprint.
     force: bool = True
+    # Optional CANDIDATE blueprint to render this pod with instead of the saved
+    # global one — lets the Studio "regenerate with these edits" and hear a draft
+    # for REAL (audio, incl. intro/outro music) without saving it globally. None
+    # -> use the saved/global blueprint exactly like a normal run.
+    blueprint: Optional[dict[str, Any]] = None
 
 
 class BroadcastPasteFeedbackRequest(BaseModel):
@@ -1288,6 +1293,17 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         user_id = _resolve_target_user_id(
             container, request_payload.user_id, request_payload.email
         )
+        # A candidate blueprint (Studio "regenerate with these edits") is
+        # validated up front so a malformed draft fails fast with a 400 rather
+        # than blowing up the fire-and-forget background worker.
+        blueprint_override: ShowBlueprint | None = None
+        if request_payload.blueprint is not None:
+            try:
+                blueprint_override = ShowBlueprint.model_validate(request_payload.blueprint)
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                )
         try:
             result = container.control_plane.start_user_generation(
                 user_id=user_id, force=request_payload.force
@@ -1295,13 +1311,15 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
         # Only kick off the background worker when a fresh run was created; an
-        # already-in-flight run (started=False) is left to finish on its own.
+        # already-in-flight run (started=False) is left to finish on its own
+        # (with whatever blueprint it started under — we don't hijack it).
         if result.get("started"):
             background_tasks.add_task(
                 container.control_plane.run_user_generation_in_background,
                 run_id=result["run"]["id"],
                 user_id=user_id,
                 force=request_payload.force,
+                blueprint_override=blueprint_override,
             )
         return {"user_id": user_id, **result}
 
@@ -1358,6 +1376,9 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
                 "title": ep.title,
                 "published_at": ep.published_at.isoformat(),
                 "duration_seconds": ep.duration_seconds,
+                # Carry the aired script so the Studio transcript panel can show
+                # the text that matches this fallback pod's audio.
+                "transcript_text": ep.transcript_text,
             }
         try:
             payload["feed_url"] = container.control_plane.get_feed_details(uid)["feed_url"]
