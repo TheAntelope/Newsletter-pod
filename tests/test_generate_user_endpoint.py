@@ -179,6 +179,7 @@ def test_latest_returns_most_recent_episode_and_feed_url():
         title="Yesterday's Briefing",
         published_at=datetime(2026, 7, 4, 6, 0, tzinfo=timezone.utc),
         duration_seconds=350,
+        transcript_text="Vinnie: Good morning.",
     )
     cp.repository.list_recent_user_episodes = lambda user_id, limit: [ep]
     cp.get_feed_details = lambda user_id: {"feed_url": "http://x/feeds/tok.xml"}
@@ -186,6 +187,8 @@ def test_latest_returns_most_recent_episode_and_feed_url():
     b = client.get("/jobs/generate-user/latest", params={"user_id": "u1"}).json()
     assert b["episode"]["id"] == "ep-9"
     assert b["episode"]["title"] == "Yesterday's Briefing"
+    # Aired transcript rides along so the Studio panel can show text matching audio.
+    assert b["episode"]["transcript_text"] == "Vinnie: Good morning."
     assert b["feed_url"].endswith("tok.xml")
 
 
@@ -212,3 +215,54 @@ def test_latest_resolves_email():
 
     client.get("/jobs/generate-user/latest", params={"email": "ME@Example.com"})
     assert seen["uid"] == "u2"
+
+
+# --- draft-blueprint override ("regenerate with these edits") ------------------
+
+def test_start_threads_candidate_blueprint_to_background():
+    from newsletter_pod.blueprint import ShowBlueprint, default_blueprint
+
+    client, container = _build()
+    cp = container.control_plane
+    calls = {}
+    cp.start_user_generation = lambda user_id, force=False: {
+        "run": {"id": "r1", "status": "in_progress"},
+        "started": True,
+    }
+    cp.run_user_generation_in_background = lambda **kw: calls.update(kw)
+
+    bp = default_blueprint(container.settings).model_dump(mode="json")
+    resp = client.post(
+        "/jobs/generate-user/start", json={"user_id": "u1", "blueprint": bp}
+    )
+    assert resp.status_code == 200
+    # The validated draft reaches the worker as a ShowBlueprint, not a raw dict.
+    assert isinstance(calls.get("blueprint_override"), ShowBlueprint)
+
+
+def test_start_without_blueprint_passes_none_override():
+    client, container = _build()
+    cp = container.control_plane
+    calls = {}
+    cp.start_user_generation = lambda user_id, force=False: {
+        "run": {"id": "r1", "status": "in_progress"},
+        "started": True,
+    }
+    cp.run_user_generation_in_background = lambda **kw: calls.update(kw)
+
+    resp = client.post("/jobs/generate-user/start", json={"user_id": "u1"})
+    assert resp.status_code == 200
+    assert calls.get("blueprint_override") is None
+
+
+def test_start_rejects_malformed_blueprint_with_400():
+    client, container = _build()
+    container.control_plane.start_user_generation = lambda user_id, force=False: {
+        "run": {"id": "r1", "status": "in_progress"},
+        "started": True,
+    }
+    resp = client.post(
+        "/jobs/generate-user/start",
+        json={"user_id": "u1", "blueprint": {"sections": "not-a-list"}},
+    )
+    assert resp.status_code == 400
