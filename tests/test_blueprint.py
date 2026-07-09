@@ -15,6 +15,15 @@ def _sections(*kinds: str) -> list[SectionDef]:
     return [SectionDef(kind=k) for k in kinds]
 
 
+def test_text_model_defaults_none_and_round_trips():
+    bp = default_blueprint()
+    assert bp.text_model is None
+    # An explicit model survives validate/serialize (so a saved version keeps it).
+    bp2 = ShowBlueprint.model_validate({**bp.model_dump(), "text_model": "gpt-4o"})
+    assert bp2.text_model == "gpt-4o"
+    assert bp2.model_dump()["text_model"] == "gpt-4o"
+
+
 def test_default_blueprint_ends_with_closing_and_covers_core_sections():
     bp = default_blueprint()
     kinds = [s.kind for s in bp.enabled_sections()]
