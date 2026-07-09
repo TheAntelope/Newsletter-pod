@@ -118,6 +118,12 @@ class ShowBlueprint(BaseModel):
     predictions: PredictionMarketConfig = Field(default_factory=PredictionMarketConfig)
     music: MusicConfig = Field(default_factory=MusicConfig)
     closing: ClosingConfig = Field(default_factory=ClosingConfig)
+    # OpenAI model for script/closing/de-lint generation. None -> the deployed
+    # default (settings.podcast_text_model). Lets the Studio A/B models for
+    # transcript quality; saving a version makes the winner global. Any valid
+    # OpenAI Responses-API model id is accepted (an invalid one fails loudly at
+    # generate time, never silently).
+    text_model: Optional[str] = None
 
     @field_validator("sections")
     @classmethod

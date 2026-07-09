@@ -7,10 +7,13 @@ from newsletter_pod.podcast_api import PodcastApiClient
 
 
 class FakeResponse:
-    def __init__(self, *, status_code: int = 200, json_data=None, content: bytes = b"") -> None:
+    def __init__(
+        self, *, status_code: int = 200, json_data=None, content: bytes = b"", text: str = ""
+    ) -> None:
         self.status_code = status_code
         self._json_data = json_data
         self.content = content
+        self.text = text
 
     def json(self):
         return self._json_data
@@ -85,6 +88,90 @@ def test_openai_provider_generates_structured_script_and_chunked_speech(monkeypa
     assert calls[0][0].endswith("/v1/responses")
     assert calls[1][0].endswith("/v1/audio/speech")
     assert calls[2][0].endswith("/v1/audio/speech")
+
+
+def _openai_client(text_model: str = "gpt-5.4-mini") -> PodcastApiClient:
+    return PodcastApiClient(
+        enabled=True,
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="test-key",
+        timeout_seconds=60,
+        poll_seconds=5,
+        text_model=text_model,
+        tts_model="gpt-4o-mini-tts",
+        tts_voice="alloy",
+    )
+
+
+def test_effective_text_model_prefers_blueprint_override():
+    from types import SimpleNamespace
+
+    from newsletter_pod.blueprint import default_blueprint
+
+    client = _openai_client(text_model="default-model")
+    # No ux / no blueprint -> deployed default.
+    assert client.effective_text_model(None) == "default-model"
+    assert client.effective_text_model(SimpleNamespace(blueprint=default_blueprint())) == "default-model"
+    # A blueprint override wins.
+    bp = default_blueprint()
+    bp.text_model = "gpt-4o"
+    assert client.effective_text_model(SimpleNamespace(blueprint=bp)) == "gpt-4o"
+    # A blank/whitespace override falls through to the default (never sends "").
+    bp.text_model = "   "
+    assert client.effective_text_model(SimpleNamespace(blueprint=bp)) == "default-model"
+
+
+def test_generate_openai_script_sends_the_chosen_model(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    def fake_post(url, json, headers, timeout):
+        calls.append((url, json))
+        return FakeResponse(
+            json_data={
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": (
+                                    '{"episode_title":"t","show_notes":"n",'
+                                    '"audio_segments":[{"role":"primary","section":"closing","text":"Bye."}]}'
+                                ),
+                            }
+                        ]
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+    client = _openai_client(text_model="default-model")
+    # The resolved model (not self.text_model) is what hits the Responses API.
+    client._generate_openai_script(prompt="p", title="t", model="chosen-model")
+    assert calls[0][0].endswith("/v1/responses")
+    assert calls[0][1]["model"] == "chosen-model"
+
+
+def test_generate_openai_script_bad_model_raises_clear_error(monkeypatch):
+    import pytest
+
+    from newsletter_pod.podcast_api import PodcastApiError
+
+    def fake_post(url, json, headers, timeout):
+        # OpenAI 400 for an unknown model id.
+        return FakeResponse(
+            status_code=400,
+            text='{"error":{"message":"The model `bogus-model` does not exist"}}',
+        )
+
+    monkeypatch.setattr("newsletter_pod.podcast_api.requests.post", fake_post)
+    client = _openai_client()
+    # A bad model fails LOUDLY with the OpenAI body (not an opaque HTTPError/500,
+    # and never a silent fallback to another model).
+    with pytest.raises(PodcastApiError) as exc:
+        client._generate_openai_script(prompt="p", title="t", model="bogus-model")
+    assert "bogus-model" in str(exc.value)
 
 
 def test_lead_in_and_tail_framing_wraps_body_for_tts(monkeypatch):

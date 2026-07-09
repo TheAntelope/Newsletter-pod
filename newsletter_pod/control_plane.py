@@ -3865,6 +3865,10 @@ class ControlPlaneService:
             "text_only": text_only,
             "previewed_as": previewed_as,
             "source_item_count": len(items),
+            # The model that actually produced this script (draft override or the
+            # deployed default). Ask the client's own resolver on the same ux so
+            # the reported model is guaranteed to equal the one that ran.
+            "text_model": self.podcast_client.effective_text_model(ux),
         }
 
     def _preview_default_ux(self, blueprint: ShowBlueprint) -> PodcastUxConfig:

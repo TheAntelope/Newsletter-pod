@@ -173,7 +173,11 @@ class PodcastApiClient:
         if not self.api_key:
             raise PodcastApiUnavailable("OpenAI API key is not configured")
 
-        structured = self._generate_openai_script(prompt=prompt, title=title)
+        # One model choice drives the whole script render (main gen, stage-2
+        # closing, and de-lint rewrites) so the transcript is coherent: a
+        # blueprint text_model override wins, else the deployed default.
+        model = self.effective_text_model(ux)
+        structured = self._generate_openai_script(prompt=prompt, title=title, model=model)
         episode_title = (structured.get("episode_title") or title).strip()
         show_notes = structured.get("show_notes", "").strip()
         audio_segments = self._parse_audio_segments(
@@ -196,6 +200,7 @@ class PodcastApiClient:
                 body_transcript=body_transcript,
                 ux=ux,
                 primary_display=primary_display,
+                model=model,
             )
             audio_segments.append(closing_segment)
 
@@ -203,7 +208,7 @@ class PodcastApiClient:
         # TTS so we never synthesize a segment we then replace. No-op unless a
         # blueprint with style.lint_enabled drives the episode and the env
         # kill-switch is on.
-        audio_segments = self._delint_segments(audio_segments, ux)
+        audio_segments = self._delint_segments(audio_segments, ux, model=model)
 
         speech_max_chars = self._speech_max_chars(tts_provider)
         for segment in audio_segments:
@@ -292,9 +297,20 @@ class PodcastApiClient:
             duration_seconds=duration_seconds,
         )
 
-    def _generate_openai_script(self, prompt: str, title: str) -> dict[str, Any]:
+    def effective_text_model(self, ux: Optional[PodcastUxConfig]) -> str:
+        """The OpenAI text model for this render: a blueprint ``text_model``
+        override when set, else the deployed default. Blank/whitespace overrides
+        fall through to the default. Public so callers (e.g. the Studio preview)
+        can report the exact model that will run — one source of truth."""
+        if ux is not None and ux.blueprint is not None:
+            override = (ux.blueprint.text_model or "").strip()
+            if override:
+                return override
+        return self.text_model
+
+    def _generate_openai_script(self, prompt: str, title: str, model: str) -> dict[str, Any]:
         payload = {
-            "model": self.text_model,
+            "model": model,
             "input": [
                 {
                     "role": "system",
@@ -375,7 +391,16 @@ class PodcastApiClient:
             timeout=60,
         )
         self._raise_for_availability(response)
-        response.raise_for_status()
+        if response.status_code >= 400:
+            # Surface the OpenAI error body (e.g. an invalid `model` id -> 400) as
+            # a clear PodcastApiError instead of an opaque HTTPError/500, so the
+            # Studio's model selector reports WHY a chosen model failed rather
+            # than a generic 500. Still fails loudly — never a silent fallback.
+            body = (response.text or "").strip()
+            raise PodcastApiError(
+                f"Script generation failed (HTTP {response.status_code})"
+                + (f": {body[:500]}" if body else "")
+            )
 
         output_text = _extract_output_text(response.json())
         try:
@@ -392,6 +417,7 @@ class PodcastApiClient:
         body_transcript: str,
         ux: PodcastUxConfig,
         primary_display: str,
+        model: str,
     ) -> AudioSegment:
         """Stage-2: generate a dedicated closing segment.
 
@@ -399,7 +425,9 @@ class PodcastApiClient:
         reason so episodes always end with a wrap.
         """
         try:
-            text = self._generate_closing_text(body_transcript=body_transcript, ux=ux)
+            text = self._generate_closing_text(
+                body_transcript=body_transcript, ux=ux, model=model
+            )
         except Exception as exc:  # noqa: BLE001 — closing must never block publish
             logger.warning("Stage-2 closing call failed, using fallback: %s", exc)
             text = fallback_closing_text()
@@ -410,12 +438,14 @@ class PodcastApiClient:
             role="primary", speaker=primary_display, text=text, section="closing"
         )
 
-    def _generate_closing_text(self, body_transcript: str, ux: PodcastUxConfig) -> str:
+    def _generate_closing_text(
+        self, body_transcript: str, ux: PodcastUxConfig, model: str
+    ) -> str:
         if not self.api_key:
             raise PodcastApiUnavailable("OpenAI API key is not configured")
         user_prompt = build_closing_prompt(body_transcript=body_transcript, ux=ux)
         payload = {
-            "model": self.text_model,
+            "model": model,
             "input": [
                 {
                     "role": "system",
@@ -473,7 +503,7 @@ class PodcastApiClient:
         return data["text"]
 
     def _delint_segments(
-        self, segments: list[AudioSegment], ux: Optional[PodcastUxConfig]
+        self, segments: list[AudioSegment], ux: Optional[PodcastUxConfig], model: str
     ) -> list[AudioSegment]:
         """Rewrite the segments that contain banned style tics, bounded by the
         blueprint's ``max_rewrite_segments``. Best-effort: a failed or
@@ -505,7 +535,7 @@ class PodcastApiClient:
             attempts += 1
             original = segments[hit.segment_index]
             try:
-                new_text = self._rewrite_segment_text(original.text, hit.matched)
+                new_text = self._rewrite_segment_text(original.text, hit.matched, model=model)
             except Exception as exc:  # noqa: BLE001 — de-lint must never block publish
                 logger.warning(
                     "De-lint rewrite failed for segment %d, keeping original: %s",
@@ -529,7 +559,7 @@ class PodcastApiClient:
                 )
         return segments
 
-    def _rewrite_segment_text(self, text: str, tics: list[str]) -> str:
+    def _rewrite_segment_text(self, text: str, tics: list[str], model: str) -> str:
         if not self.api_key:
             raise PodcastApiUnavailable("OpenAI API key is not configured")
         tic_list = "; ".join(t for t in tics if t) or "clichéd AI-sounding phrasing"
@@ -541,7 +571,7 @@ class PodcastApiClient:
             f"Segment:\n{text}"
         )
         payload = {
-            "model": self.text_model,
+            "model": model,
             "input": [
                 {
                     "role": "system",
