@@ -30,6 +30,11 @@ class PodcastAddict {
   /// bounce the user to the Play Store, cleared once the deep link succeeds).
   static String? _pendingFeedUrl;
 
+  /// Seam for tests: performs the actual external launch. Defaults to
+  /// url_launcher; tests replace it to observe which URIs we try.
+  @visibleForTesting
+  static Future<bool> Function(Uri uri) launcher = _launchExternal;
+
   /// Build the Podcast Addict subscribe deep link from a feed URL by dropping
   /// the `http(s)://` prefix: `podcastaddict://api.host/feeds/abc.xml`.
   static Uri deepLinkFor(String feedUrl) {
@@ -48,8 +53,8 @@ class PodcastAddict {
 
     // Not installed (or no handler): remember the feed and send them to install.
     _pendingFeedUrl = feedUrl;
-    final opened = await _launchExternal(_playStoreUri) ||
-        await _launchExternal(_playStoreWebUri);
+    final opened =
+        await launcher(_playStoreUri) || await launcher(_playStoreWebUri);
     messenger.showSnackBar(
       SnackBar(
         content: Text(opened
@@ -63,6 +68,12 @@ class PodcastAddict {
     return false;
   }
 
+  /// Context-free open for the notification-tap path: just the subscribe deep
+  /// link (Podcast Addict lands on the show page when the feed is already
+  /// added), with no Play-Store bounce or snackbar — if Podcast Addict isn't
+  /// installed the tap simply stays in ClawCast. Returns true if it opened.
+  static Future<bool> openPlayer(String feedUrl) => _launchDeepLink(feedUrl);
+
   /// Call from the app's lifecycle observer on resume. If we previously sent the
   /// user to the Play Store, retry the subscribe deep link now that they're
   /// back — by which point Podcast Addict is (hopefully) installed.
@@ -75,7 +86,7 @@ class PodcastAddict {
   }
 
   static Future<bool> _launchDeepLink(String feedUrl) =>
-      _launchExternal(deepLinkFor(feedUrl));
+      launcher(deepLinkFor(feedUrl));
 
   /// Launch a URI in its external app, treating both a `false` result and a
   /// "no Activity found" platform exception as "no handler installed".

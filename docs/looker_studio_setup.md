@@ -45,6 +45,7 @@ work:
 | `episode_completion`  | `SELECT * FROM \`analytics.vw_episode_completion\`` |
 | `churn_risk_users`    | `SELECT * FROM \`analytics.vw_churn_risk_users\`` |
 | `activity_windows`    | `SELECT * FROM \`analytics.vw_activity_windows\`` |
+| `push_opens`          | `SELECT * FROM \`analytics.vw_push_opens\``      |
 
 For every source, set **Data freshness** to **15 minutes** (the
 `events_raw` partition is updated continuously by the log sink, so

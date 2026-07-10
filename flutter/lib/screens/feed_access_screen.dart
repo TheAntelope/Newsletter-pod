@@ -83,8 +83,10 @@ class _FeedAccessScreenState extends State<FeedAccessScreen> {
                           ? 'Open in Apple Podcasts'
                           : 'Open in Podcast Addict',
                       icon: isIOS ? Icons.play_arrow : Icons.podcasts,
+                      // addFeed (not open): this screen is the explicit "add
+                      // my feed" step, so always run the follow flow here.
                       onPressed: () => isIOS
-                          ? ApplePodcasts.open(context, feed.feedUrl)
+                          ? ApplePodcasts.addFeed(context, feed.feedUrl)
                           : PodcastAddict.subscribe(context, feed.feedUrl),
                     ),
                   ],

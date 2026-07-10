@@ -474,6 +474,13 @@ class ApiClient {
         'transport': transport,
       }));
 
+  /// Analytics: the user tapped a push notification of the given `type`
+  /// (pod_ready, trial_gift, …). Fire-and-forget from the tap handler.
+  Future<void> reportPushOpened(String token, {required String pushType}) async {
+    await _send('/v1/me/push-opened',
+        method: 'POST', token: token, body: {'push_type': pushType});
+  }
+
   Future<VerifySubscriptionEnvelope> verifySubscription(
     String token,
     String signedTransactionInfo,

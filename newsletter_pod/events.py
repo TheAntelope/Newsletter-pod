@@ -174,6 +174,7 @@ class EventName(str, Enum):
     SHARED_ITEM_RECEIVED = "shared_item_received"
     INBOUND_EMAIL_RECEIVED = "inbound_email_received"
     ACQUISITION_SOURCE_SELECTED = "acquisition_source_selected"
+    PUSH_OPENED = "push_opened"
 
 
 # Property keys we refuse to log. These are the fields most likely to

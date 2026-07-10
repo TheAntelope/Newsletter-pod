@@ -150,6 +150,24 @@ void main() {
       expect(probe.pubHost, 'x.substack.com');
     });
 
+    test('reportPushOpened posts the push type with the bearer token',
+        () async {
+      late http.Request captured;
+      final mock = MockClient((req) async {
+        captured = req;
+        return http.Response(jsonEncode({'ok': true}), 200);
+      });
+      final api = ApiClient(baseUrl: 'https://api.test', client: mock);
+
+      await api.reportPushOpened('tok', pushType: 'pod_ready');
+
+      expect(captured.method, 'POST');
+      expect(captured.url.path, '/v1/me/push-opened');
+      expect(_authHeader(captured), 'Bearer tok');
+      final body = jsonDecode(captured.body) as Map<String, dynamic>;
+      expect(body['push_type'], 'pod_ready');
+    });
+
     test('maps non-2xx to ApiException with the backend detail', () async {
       final mock = MockClient(
         (req) async => http.Response(jsonEncode({'detail': 'nope'}), 400),
