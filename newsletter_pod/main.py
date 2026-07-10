@@ -149,6 +149,17 @@ class RedeemPromoCodeRequest(BaseModel):
     code: str
 
 
+# Shape of a push `type` the client may report as opened (pod_ready,
+# trial_gift, …). A pattern rather than an allowlist so a new push kind is
+# tracked the moment it ships, while still bounding what lands in analytics.
+PUSH_TYPE_PATTERN = re.compile(r"^[a-z0-9_]{1,32}$")
+
+
+class PushOpenedRequest(BaseModel):
+    # The tapped notification's top-level `type` from its data payload.
+    push_type: str
+
+
 class ReplaceSourcesRequest(BaseModel):
     sources: list[dict]
 
@@ -1503,6 +1514,25 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
             )
         except ControlPlaneError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    @app.post("/v1/me/push-opened")
+    def post_push_opened(
+        request_payload: PushOpenedRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        """Record that the calling user tapped a push notification. Analytics
+        only (a PUSH_OPENED app_event carrying the push type; platform comes
+        from the X-Client-Platform header) — no user state changes, so the
+        client can fire-and-forget it from the tap handler."""
+        user = _require_session_user(container, authorization)
+        push_type = (request_payload.push_type or "").strip().lower()
+        if not PUSH_TYPE_PATTERN.fullmatch(push_type):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid push_type",
+            )
+        log_event(EventName.PUSH_OPENED, user.id, push_type=push_type)
+        return {"ok": True}
 
     @app.get("/v1/sources/catalog")
     def get_source_catalog() -> dict:

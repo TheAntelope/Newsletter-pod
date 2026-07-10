@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/widgets.dart';
 
 import '../api/api_client.dart';
@@ -7,8 +8,10 @@ import '../api/models.dart';
 import '../config.dart';
 import '../data/api_app_repository.dart';
 import '../data/app_repository.dart';
+import '../services/apple_podcasts.dart';
 import '../services/auth_controller.dart';
 import '../services/messaging_controller.dart';
+import '../services/podcast_addict.dart';
 import '../services/purchases_controller.dart';
 import '../services/share_tip_store.dart';
 
@@ -35,6 +38,12 @@ class AppState extends ChangeNotifier {
   /// Present only in the real-auth build (passed from `main`); used to build the
   /// live repository on sign-in. Null in the demo build and widget tests.
   final ApiClient? _apiClient;
+
+  /// One controller for the app's lifetime (created lazily on the first real
+  /// sign-in; stays null in the demo build / widget tests where Firebase
+  /// isn't initialized). See [_registerForPush] for why it must not be
+  /// re-created per sign-in.
+  MessagingController? _messaging;
 
   String? _sessionToken;
   String? get sessionToken => _sessionToken;
@@ -312,11 +321,14 @@ class AppState extends ChangeNotifier {
       // Constructed inside the try because the constructor itself touches
       // FirebaseMessaging.instance, which throws when Firebase isn't
       // initialized (demo build / unit tests) — messaging init must never
-      // surface into the sign-in flow.
-      final messaging = MessagingController();
+      // surface into the sign-in flow. ??= (not a fresh instance per sign-in):
+      // configure()'s idempotence lives on the instance, and a second
+      // controller would add a second FCM tap listener — every tap would then
+      // double-report push_opened and double-launch the player.
+      final messaging = _messaging ??= MessagingController();
       // Wire foreground display + tap handling once; a tap on a "pod ready"
       // push refreshes the signed-in snapshot so the new episode shows up.
-      await messaging.configure(onOpened: _handlePushOpened);
+      await messaging.configure(onOpened: handlePushOpened);
       final fcmToken = await messaging.requestPermissionAndToken();
       if (fcmToken == null || fcmToken.isEmpty) return;
       await client.registerDeviceToken(
@@ -332,16 +344,57 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Handles a notification tap. For a "pod ready" push we just reload `me` so
-  /// the freshly-published episode surfaces; the data map also carries
-  /// `episode_id` / `feed_url` for future deep-linking.
-  void _handlePushOpened(Map<String, dynamic> data) {
-    if (data['type'] == 'pod_ready') {
+  /// Handles a notification tap. Every tap is reported for analytics (fire and
+  /// forget). A "pod ready" tap reloads `me` AND hands the user straight to
+  /// their podcast player — the new episode lives there, not in ClawCast.
+  /// Public only so tests can drive it; production wiring goes through
+  /// [MessagingController.configure].
+  @visibleForTesting
+  void handlePushOpened(Map<String, dynamic> data) {
+    final type = (data['type'] ?? '').toString();
+    if (type.isNotEmpty) unawaited(_reportPushOpened(type));
+    if (type == 'pod_ready') {
       unawaited(loadMe());
-    } else if (data['type'] == 'trial_gift') {
+      unawaited(_openPlayerFromPush(data['feed_url']?.toString()));
+    } else if (type == 'trial_gift') {
       // Refresh so `trial_gift_pending` is fresh and the gift card surfaces on
       // the home screen.
       unawaited(loadMe());
+    }
+  }
+
+  /// Tell the backend a push was tapped (a PUSH_OPENED app_event keyed to this
+  /// user). Analytics only — a failure must never surface into the tap flow.
+  Future<void> _reportPushOpened(String pushType) async {
+    final client = _apiClient;
+    final session = _sessionToken;
+    if (client == null || session == null) return;
+    try {
+      await client.reportPushOpened(session, pushType: pushType);
+    } catch (_) {
+      // Best-effort.
+    }
+  }
+
+  /// Open the platform's podcast player on the user's feed: Apple Podcasts on
+  /// iOS, Podcast Addict on Android. Prefers the `feed_url` riding in the push
+  /// payload; falls back to fetching the feed. Best-effort — if no player can
+  /// open (e.g. not installed), the tap still lands on Home as before.
+  /// `defaultTargetPlatform` (not dart:io) so tests can override the platform.
+  Future<void> _openPlayerFromPush(String? feedUrl) async {
+    if (kIsWeb) return;
+    try {
+      var url = feedUrl;
+      if (url == null || url.isEmpty) {
+        url = (await _repository.fetchFeed()).feedUrl;
+      }
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        await ApplePodcasts.openPlayer(url);
+      } else if (defaultTargetPlatform == TargetPlatform.android) {
+        await PodcastAddict.openPlayer(url);
+      }
+    } catch (_) {
+      // Best-effort.
     }
   }
 

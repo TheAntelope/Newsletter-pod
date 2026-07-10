@@ -424,6 +424,39 @@ GROUP BY l.source, t.total_users, t.answered_users
 ORDER BY user_count DESC;
 
 
+CREATE OR REPLACE VIEW `analytics.vw_push_opens` AS
+-- Who taps push notifications, per user and push kind. Backed by the
+-- PUSH_OPENED app_event the app reports when a notification is tapped
+-- (POST /v1/me/push-opened), so `push_type` mirrors the push payload's
+-- `type` (pod_ready / trial_gift / share_tip / substack_verification) and
+-- `platform` is stamped from the X-Client-Platform header. One row per
+-- user × push_type over the last 30 days; `opens_7d` rides the same scan.
+WITH events AS (
+  SELECT
+    SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*S%Ez',
+      JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.ts')) AS ts,
+    JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.user_id') AS user_id,
+    LOWER(JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.platform')) AS platform,
+    JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.properties.push_type')
+      AS push_type
+  FROM `analytics.events_raw`
+  WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+    AND JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.event_name') = 'push_opened'
+    AND JSON_VALUE(TO_JSON_STRING(jsonPayload), '$.user_id') IS NOT NULL
+)
+SELECT
+  user_id,
+  push_type,
+  ANY_VALUE(platform) AS platform,
+  COUNTIF(ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)) AS opens_7d,
+  COUNT(*) AS opens_30d,
+  MAX(ts) AS last_opened_at
+FROM events
+WHERE ts IS NOT NULL
+GROUP BY user_id, push_type
+ORDER BY opens_30d DESC, last_opened_at DESC;
+
+
 CREATE OR REPLACE VIEW `analytics.vw_activity_windows` AS
 -- Feature-usage counts over rolling 7d / 30d windows, one row per tracked
 -- event. Backs the operator dashboard's activity tiles: listeners
