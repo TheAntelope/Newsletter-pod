@@ -60,6 +60,52 @@ def test_weather_section_needs_both_section_and_user_gate():
     assert "section=weather" not in prompt
 
 
+def test_blueprint_weather_section_does_not_duplicate_open_the_show_line():
+    bp = default_blueprint()  # weather section enabled
+    prompt = build_digest_prompt(
+        _items(),
+        run_date=date(2026, 7, 1),
+        ux=_ux(bp, weather="Oslo — 12°C and overcast."),
+        skip_closing=True,
+    )
+    # The dedicated weather section owns weather on the blueprint path...
+    assert "section=weather" in prompt
+    # ...so the legacy listener-preference open-the-show line must NOT also fire,
+    # or the model reads weather twice.
+    assert "Open the show with a brief mention of today's weather" not in prompt
+    # And the summary itself is only injected once (by the weather section).
+    assert prompt.count("12°C and overcast") == 1
+
+
+def test_legacy_path_still_gets_open_the_show_weather_line():
+    # No blueprint -> no weather section, so the open-the-show line is the only
+    # thing that voices weather and must still be present.
+    prompt = build_digest_prompt(
+        _items(),
+        run_date=date(2026, 7, 1),
+        ux=_ux(None, weather="Oslo — 12°C and overcast."),
+    )
+    assert "Open the show with a brief mention of today's weather" in prompt
+    assert prompt.count("12°C and overcast") == 1
+
+
+def test_blueprint_with_weather_disabled_uses_open_the_show_line():
+    bp = default_blueprint()
+    for s in bp.sections:
+        if s.kind == "weather":
+            s.enabled = False
+    prompt = build_digest_prompt(
+        _items(),
+        run_date=date(2026, 7, 1),
+        ux=_ux(bp, weather="Oslo — 12°C and overcast."),
+        skip_closing=True,
+    )
+    assert "section=weather" not in prompt
+    # Weather is still wanted, so the fallback open-the-show line carries it once.
+    assert "Open the show with a brief mention of today's weather" in prompt
+    assert prompt.count("12°C and overcast") == 1
+
+
 def test_announcements_only_when_text_present():
     bp = default_blueprint()
     for s in bp.sections:

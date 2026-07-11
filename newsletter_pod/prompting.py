@@ -205,7 +205,12 @@ def build_digest_prompt(
         )
 
     listener_prefs: list[str] = []
-    if ux.weather_summary:
+    # Weather is voiced by the blueprint's dedicated `weather` section when the
+    # blueprint carries one enabled. Only fall back to this open-the-show line on
+    # the legacy/freeform path (or a blueprint with weather off), otherwise the
+    # model is told to cover weather twice and reads it twice.
+    blueprint_owns_weather = ux.blueprint is not None and ux.blueprint.is_enabled("weather")
+    if ux.weather_summary and not blueprint_owns_weather:
         listener_prefs.append(
             f"- Open the show with a brief mention of today's weather: {ux.weather_summary}"
         )
