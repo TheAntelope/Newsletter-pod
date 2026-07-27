@@ -80,6 +80,8 @@ class OpeningConfig(BaseModel):
 class StyleGuardrails(BaseModel):
     # Extends text_lint.DEFAULT_BANNED_PHRASES; substring or regex tics to avoid.
     banned_phrases: list[str] = Field(default_factory=list)
+    # Injected verbatim into the script + closing prompts, after the built-in
+    # anti-slop rules (prompting._STYLE_RULES).
     positive_guidance: Optional[str] = None
     lint_enabled: bool = True
     # Hard cap on how many offending segments the post-gen rewrite pass touches.

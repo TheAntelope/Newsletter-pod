@@ -143,6 +143,39 @@ def test_custom_section_instructions_and_signoff_thread_through():
     assert "Stay curious — that's ClawCast." in closing_prompt
 
 
+def test_style_rules_present_even_without_blueprint():
+    # The anti-slop base rules are always on, including the legacy no-blueprint
+    # path — only the producer extension needs a blueprint.
+    prompt = build_digest_prompt(_items(), run_date=date(2026, 7, 1), ux=_ux(None))
+    assert "Voice and style rules" in prompt
+    assert '"experts agree"' in prompt
+    assert "Producer style guidance" not in prompt
+
+
+def test_positive_guidance_threads_into_both_prompts():
+    bp = default_blueprint()
+    bp.style.positive_guidance = "  Keep sentences under 20 words.  "
+    ux = _ux(bp)
+
+    prompt = build_digest_prompt(
+        _items(), run_date=date(2026, 7, 1), ux=ux, skip_closing=True
+    )
+    assert "Producer style guidance: Keep sentences under 20 words." in prompt
+
+    closing = build_closing_prompt("body transcript", ux)
+    assert "Producer style guidance: Keep sentences under 20 words." in closing
+    assert "no fake-profound final" in closing
+
+
+def test_blank_positive_guidance_adds_no_line():
+    bp = default_blueprint()
+    bp.style.positive_guidance = "   "
+    prompt = build_digest_prompt(
+        _items(), run_date=date(2026, 7, 1), ux=_ux(bp), skip_closing=True
+    )
+    assert "Producer style guidance" not in prompt
+
+
 def _client() -> PodcastApiClient:
     return PodcastApiClient(
         enabled=True,

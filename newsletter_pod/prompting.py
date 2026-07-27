@@ -121,6 +121,49 @@ def _segment_plan_lines(
     ]
 
 
+# Anti-slop rules distilled from the "no-ai-slop" editing framework
+# (github.com/petergyang/no-ai-slop), rephrased for spoken scripts — its
+# formatting rules (headers, bold, bullets) don't apply to audio. This is the
+# prevention half of the de-slop pipeline; text_lint.py + the post-gen de-lint
+# rewrite pass are the detection half, so keep the two lists roughly in sync.
+_STYLE_RULES: tuple[str, ...] = (
+    "- Talk like a person, not a press release: plain, direct sentences a "
+    "host would actually say out loud.",
+    '- State claims directly. No "it\'s not X, it\'s Y" contrasts and no '
+    '"not just X but also Y".',
+    '- No throat-clearing or faux-insight setups: "here\'s the thing", '
+    '"let me be clear", "what most people miss", "what nobody tells you".',
+    '- No rhetorical stunts: "what if I told you", "plot twist", dramatic '
+    "pause-and-reveal phrasing.",
+    '- No importance puffery ("pivotal moment", "vital role", "crucial '
+    'reminder") — give the fact and let it carry its own weight.',
+    '- Attribute claims to the named source; never a vague "experts agree" '
+    'or "studies show".',
+    "- Prefer numbers, names, and dates over abstractions whenever the "
+    "material provides them.",
+    "- Never use: delve, tapestry, leverage, robust, foster, utilize, "
+    "harness, elevate, transformative, paradigm shift, cutting-edge, "
+    "ever-evolving, game-changer.",
+    "- End each story on something concrete, not a fake-profound one-liner.",
+    "- Call things by the same natural name throughout; don't cycle "
+    "synonyms to sound varied.",
+)
+
+
+def _style_rules_lines(ux: PodcastUxConfig) -> list[str]:
+    """The anti-slop block injected into every script prompt. The base rules
+    are always on; the blueprint's ``style.positive_guidance`` extends them
+    from the Studio without a redeploy, mirroring how ``style.banned_phrases``
+    extends the lint defaults.
+    """
+    lines = ["Voice and style rules (apply to every segment):", *_STYLE_RULES]
+    if ux.blueprint is not None and ux.blueprint.style.positive_guidance:
+        guidance = ux.blueprint.style.positive_guidance.strip()
+        if guidance:
+            lines.append(f"- Producer style guidance: {guidance}")
+    return lines
+
+
 def build_digest_prompt(
     items: list[SourceItem],
     run_date: date,
@@ -365,6 +408,7 @@ def build_digest_prompt(
                 lines.append(f"- {cleaned}")
         lines.append("")
     lines += [
+        *_style_rules_lines(ux),
         "Attribution requirements:",
         "- Keep spoken attribution light and natural by source name when relevant.",
         *(
@@ -440,6 +484,12 @@ def build_closing_prompt(body_transcript: str, ux: PodcastUxConfig) -> str:
             f"today — see you next time on {SHOW_NAME}.\""
         )
 
+    style_extra: list[str] = []
+    if ux.blueprint is not None and ux.blueprint.style.positive_guidance:
+        guidance = ux.blueprint.style.positive_guidance.strip()
+        if guidance:
+            style_extra.append(f"- Producer style guidance: {guidance}")
+
     lines = [
         "You are writing the closing segment for a podcast episode whose body "
         "has already been recorded. The body transcript is below. Write the "
@@ -451,6 +501,9 @@ def build_closing_prompt(body_transcript: str, ux: PodcastUxConfig) -> str:
         "speaker labels in the output.",
         "- Reference content that actually appeared in the body — do not "
         "invent new stories.",
+        "- Talk like a person: no clichéd AI phrasing, no fake-profound final "
+        'line, no "in conclusion" recap before the sign-off.',
+        *style_extra,
         "- Keep total length under 700 words.",
         "- The very last words MUST be the sign-off.",
         "",
