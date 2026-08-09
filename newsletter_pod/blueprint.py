@@ -138,7 +138,25 @@ class ShowBlueprint(BaseModel):
         return sections
 
     def enabled_sections(self) -> list[SectionDef]:
-        return [s for s in self.sections if s.enabled]
+        """The running order for an episode: enabled sections, with weather
+        pinned to the top of the show.
+
+        Weather is a top-of-show beat — it belongs immediately after the greeting
+        in the cold open and before the news, not buried mid-episode. That's a
+        product rule rather than an editorial choice, so it is enforced here
+        (where both the segment plan and the section-drift check read the order)
+        instead of relying on every saved blueprint carrying the right position.
+        `sections` keeps whatever order was persisted; only the running order is
+        normalised.
+        """
+        enabled = [s for s in self.sections if s.enabled]
+        weather = next((s for s in enabled if s.kind == "weather"), None)
+        if weather is None:
+            return enabled
+        rest = [s for s in enabled if s is not weather]
+        # Straight after the cold open when there is one, otherwise first.
+        insert_at = 1 if rest and rest[0].kind == "cold_open" else 0
+        return [*rest[:insert_at], weather, *rest[insert_at:]]
 
     def section(self, kind: SectionKind) -> Optional[SectionDef]:
         for s in self.sections:
@@ -153,7 +171,7 @@ class ShowBlueprint(BaseModel):
 
 def default_blueprint(settings: Optional["Settings"] = None) -> ShowBlueprint:
     """The v1 seed blueprint, mirroring today's freeform behaviour: a cold open,
-    a quick headlines pass, weather (subject to the per-user gate), 2-4 story
+    weather (subject to the per-user gate), a quick headlines pass, 2-4 story
     blocks, then the closing. Announcements/market/music are present but off.
 
     `settings` is accepted for forward compatibility but not currently read —
@@ -165,8 +183,8 @@ def default_blueprint(settings: Optional["Settings"] = None) -> ShowBlueprint:
     return ShowBlueprint(
         sections=[
             SectionDef(kind="cold_open", detail_level="shallow"),
-            SectionDef(kind="headlines", detail_level="headline"),
             SectionDef(kind="weather", detail_level="headline"),
+            SectionDef(kind="headlines", detail_level="headline"),
             SectionDef(kind="story_block", detail_level="standard", max_blocks=4),
             SectionDef(kind="announcements", enabled=False, detail_level="headline"),
             SectionDef(kind="closing", detail_level="shallow"),

@@ -86,8 +86,9 @@ def _segment_plan_lines(
             )
         elif kind == "weather":
             detail = (
-                f"section=weather — about {words} spoken words. Work in today's weather: "
-                f"{ux.weather_summary}"
+                f"section=weather — about {words} spoken words. Today's weather, read "
+                f"at the top of the show straight after the greeting and before any "
+                f"news: {ux.weather_summary}"
             )
         elif kind == "market":
             detail = (
@@ -255,7 +256,8 @@ def build_digest_prompt(
     blueprint_owns_weather = ux.blueprint is not None and ux.blueprint.is_enabled("weather")
     if ux.weather_summary and not blueprint_owns_weather:
         listener_prefs.append(
-            f"- Open the show with a brief mention of today's weather: {ux.weather_summary}"
+            "- Open the show with a brief mention of today's weather, straight after "
+            f"the greeting and before any news: {ux.weather_summary}"
         )
     if ux.humor_style == "dad_jokes":
         listener_prefs.append(

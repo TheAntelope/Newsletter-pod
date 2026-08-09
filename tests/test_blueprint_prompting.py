@@ -51,6 +51,41 @@ def test_blueprint_prompt_emits_ordered_segment_plan():
     assert "section=closing" not in prompt
 
 
+def test_weather_leads_the_segment_plan_right_after_the_cold_open():
+    bp = default_blueprint()
+    prompt = build_digest_prompt(
+        _items(),
+        run_date=date(2026, 7, 1),
+        ux=_ux(bp, weather="Oslo — 12°C and overcast."),
+        skip_closing=True,
+    )
+    assert prompt.index("section=cold_open") < prompt.index("section=weather")
+    assert prompt.index("section=weather") < prompt.index("section=headlines")
+    assert prompt.index("section=weather") < prompt.index("section=story_block")
+
+
+def test_saved_blueprint_with_late_weather_still_plans_it_up_top():
+    # A blueprint persisted with weather buried mid-show is normalised on the
+    # read path, so live episodes get the fix without an admin re-save.
+    bp = ShowBlueprint(
+        sections=[
+            SectionDef(kind="cold_open"),
+            SectionDef(kind="headlines"),
+            SectionDef(kind="story_block"),
+            SectionDef(kind="weather"),
+            SectionDef(kind="closing"),
+        ]
+    )
+    prompt = build_digest_prompt(
+        _items(),
+        run_date=date(2026, 7, 1),
+        ux=_ux(bp, weather="Oslo — 12°C and overcast."),
+        skip_closing=True,
+    )
+    assert prompt.index("section=cold_open") < prompt.index("section=weather")
+    assert prompt.index("section=weather") < prompt.index("section=headlines")
+
+
 def test_weather_section_needs_both_section_and_user_gate():
     bp = default_blueprint()  # weather section enabled
     # No weather_summary (user gate off) -> weather omitted from the plan.
