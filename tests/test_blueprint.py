@@ -38,6 +38,45 @@ def test_default_blueprint_ends_with_closing_and_covers_core_sections():
     assert bp.opening.intro_music_enabled is False
 
 
+def test_default_blueprint_runs_weather_straight_after_the_cold_open():
+    kinds = [s.kind for s in default_blueprint().enabled_sections()]
+    assert kinds[:2] == ["cold_open", "weather"]
+
+
+def test_enabled_sections_hoists_weather_to_the_top_of_the_show():
+    # A blueprint saved before weather was pinned to the top still runs weather
+    # straight after the cold open.
+    bp = ShowBlueprint(
+        sections=_sections("cold_open", "headlines", "story_block", "weather", "closing")
+    )
+    assert [s.kind for s in bp.enabled_sections()] == [
+        "cold_open",
+        "weather",
+        "headlines",
+        "story_block",
+        "closing",
+    ]
+    # The stored order is left untouched — only the running order is normalised.
+    assert [s.kind for s in bp.sections][3] == "weather"
+
+
+def test_weather_leads_when_there_is_no_cold_open():
+    bp = ShowBlueprint(sections=_sections("headlines", "weather", "closing"))
+    assert [s.kind for s in bp.enabled_sections()] == ["weather", "headlines", "closing"]
+
+
+def test_disabled_cold_open_does_not_hold_weather_back():
+    bp = ShowBlueprint(
+        sections=[
+            SectionDef(kind="cold_open", enabled=False),
+            SectionDef(kind="headlines"),
+            SectionDef(kind="weather"),
+            SectionDef(kind="closing"),
+        ]
+    )
+    assert [s.kind for s in bp.enabled_sections()] == ["weather", "headlines", "closing"]
+
+
 def test_last_enabled_section_must_be_closing():
     with pytest.raises(ValidationError):
         ShowBlueprint(sections=_sections("cold_open", "story_block"))
